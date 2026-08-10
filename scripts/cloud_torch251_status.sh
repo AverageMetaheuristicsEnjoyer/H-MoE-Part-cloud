@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -eu
+set -u
 
 venv=/home/jovyan/hmoe-cloud/torch251-cu121
 du -sh "$venv" 2>/dev/null || true
@@ -11,3 +11,4 @@ print("torch=", torch.__version__)
 print("torch_cuda=", torch.version.cuda)
 PY
 fi
+exit 0
