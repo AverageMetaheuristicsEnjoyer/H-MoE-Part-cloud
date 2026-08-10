@@ -24,4 +24,4 @@ code=$?
 echo "EXIT=$code"
 echo "LOG=$log"
 tail -n 240 "$log"
-exit 0
+exit "$code"
