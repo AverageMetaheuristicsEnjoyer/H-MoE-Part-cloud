@@ -1,0 +1,16 @@
+.agents/
+.claude/
+.codex/
+.singularity-cache/
+.venv/
+.venv-data/
+containers/
+data/
+logs/
+runtime-tmp/
+third_party/
+tmp/
+__pycache__/
+*.py[cod]
+checkpoints/
+wandb/

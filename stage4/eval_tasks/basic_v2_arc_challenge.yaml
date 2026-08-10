@@ -1,0 +1,22 @@
+task: basic_v2_arc_challenge
+dataset_path: allenai/ai2_arc
+dataset_name: ARC-Challenge
+output_type: multiple_choice
+training_split: train
+validation_split: validation
+test_split: test
+doc_to_text: !function utils.arc_doc_to_text
+doc_to_target: !function utils.arc_doc_to_target
+doc_to_choice: !function utils.arc_doc_to_choice
+target_delimiter: ""
+process_results: !function metrics.process_len_norm_v2
+metric_list:
+  - metric: len_norm_v2
+    aggregation: mean
+    higher_is_better: true
+  - metric: bpb_v2
+    aggregation: mean
+    higher_is_better: false
+metadata:
+  version: 1.0
+  prompt: olmo_basic_v2

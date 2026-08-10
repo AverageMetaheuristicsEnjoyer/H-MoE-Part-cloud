@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "primary": {
+    "provider": "lm-eval",
+    "version": "0.4.11",
+    "include_path": "stage4/eval_tasks",
+    "task_group": "basic_v2",
+    "tasks": [
+      "basic_v2_hellaswag",
+      "basic_v2_arc_easy",
+      "basic_v2_arc_challenge",
+      "basic_v2_piqa",
+      "basic_v2_gsm8k_gold_bpb_5shot"
+    ],
+    "log_samples": true,
+    "preserve_per_example_outputs": true,
+    "metrics": [
+      "acc_v2",
+      "len_norm_v2",
+      "bpb_v2"
+    ]
+  },
+  "secondary": {
+    "provider": "lm-eval",
+    "version": "0.4.11",
+    "tasks": [
+      {
+        "name": "wikitext",
+        "num_fewshot": 0,
+        "type": "loglikelihood_rolling"
+      },
+      {
+        "name": "c4",
+        "num_fewshot": 0,
+        "type": "loglikelihood_rolling"
+      },
+      {
+        "name": "winogrande",
+        "num_fewshot": 5,
+        "type": "multiple_choice"
+      },
+      {
+        "name": "openbookqa",
+        "num_fewshot": 5,
+        "type": "multiple_choice"
+      },
+      {
+        "name": "mmlu",
+        "num_fewshot": 5,
+        "type": "multiple_choice"
+      }
+    ],
+    "log_samples": true,
+    "preserve_per_example_outputs": true
+  },
+  "comparison": {
+    "pair_key": "task_and_doc_id",
+    "bootstrap_confidence": 0.95,
+    "accuracy_test": "mcnemar_secondary",
+    "continuous_metrics": "paired_bootstrap"
+  }
+}
