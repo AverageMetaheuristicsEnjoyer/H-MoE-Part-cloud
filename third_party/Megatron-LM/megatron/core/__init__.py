@@ -2,9 +2,10 @@
 
 import torch
 from typing import Any
+from torch.optim import optimizer as torch_optimizer
 
-if not hasattr(torch.optim.optimizer, "ParamsT"):
-    torch.optim.optimizer.ParamsT = Any
+if not hasattr(torch_optimizer, "ParamsT"):
+    torch_optimizer.ParamsT = Any
 
 import megatron.core.tensor_parallel
 import megatron.core.utils
