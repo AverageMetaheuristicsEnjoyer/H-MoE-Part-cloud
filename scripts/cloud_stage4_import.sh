@@ -10,7 +10,7 @@ mkdir -p "$log_dir"
     set -eu
     export PYTHONNOUSERSITE=1
     export PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root"
-    /home/user/conda/bin/python - <<'PY'
+    python - <<'PY'
 import torch
 import megatron.core.optimizer.emerging_optimizers
 import megatron.training.arguments
