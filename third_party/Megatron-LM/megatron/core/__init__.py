@@ -1,6 +1,10 @@
 # Copyright (c) 2024, NVIDIA CORPORATION. All rights reserved.
 
 import torch
+from typing import Any
+
+if not hasattr(torch.optim.optimizer, "ParamsT"):
+    torch.optim.optimizer.ParamsT = Any
 
 import megatron.core.tensor_parallel
 import megatron.core.utils
