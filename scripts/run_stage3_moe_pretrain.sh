@@ -206,6 +206,8 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   "${optimizer_args[@]}" \
   "${compute[@]}" \
   "${fusion_args[@]}" \
+  "${save_args[@]}" \
+  "${load_args[@]}" \
   >"$train_log" 2>&1
 code=$?
 set -e
