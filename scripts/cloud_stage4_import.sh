@@ -34,7 +34,20 @@ print("te=", transformer_engine.__version__)
 print("cublaslt=", transformer_engine_torch.get_cublasLt_version())
 import megatron.core.optimizer.emerging_optimizers
 import megatron.training.arguments
-import stage4.fp8_optimizer_states
+from stage4.fp8_optimizer_states import (
+    dequantize_fp8_state,
+    init_fp8_state,
+    quantize_fp8_state_,
+)
+
+value = torch.linspace(-4, 4, 383, device="cuda")
+state = {}
+init_fp8_state(state, "moment", value, group_size=128)
+quantize_fp8_state_(state, "moment", value, signed=True, group_size=128)
+restored = dequantize_fp8_state(state, "moment", signed=True, group_size=128)
+assert torch.isfinite(restored).all()
+assert (restored - value).abs().mean() / value.abs().mean() < 0.05
+print("fp8_optimizer_state_roundtrip=PASS")
 print("stage4_source_import=PASS")
 PY
 ) >"$log" 2>&1
