@@ -48,6 +48,15 @@ def _role(raw):
     return "adamw_fallback"
 
 
+def _moe_routers(model_chunks):
+    """MCore registers `local_tokens_per_expert` on every router when expert bias is on."""
+    for chunk_index, chunk in enumerate(model_chunks):
+        for name, module in chunk.named_modules():
+            counts = getattr(module, "local_tokens_per_expert", None)
+            if torch.is_tensor(counts):
+                yield f"model_chunk{chunk_index}.{name}", module
+
+
 def _storage_key(tensor):
     storage = tensor.untyped_storage()
     return (tensor.device.type, tensor.device.index, storage.data_ptr(), storage.nbytes())
@@ -336,10 +345,80 @@ class Probe:
         self.optimizer = None
         self.parameter_names = {}
         self.written = False
+        self.model_chunks = []
+        self.routing_snapshot = {}
 
     def reset(self):
         torch.cuda.synchronize()
         torch.cuda.reset_peak_memory_stats()
+        # `local_tokens_per_expert` accumulates for the life of the process, so record the
+        # warm-up total here and report only the delta over the measured window.
+        self.routing_snapshot = {
+            name: module.local_tokens_per_expert.detach().clone()
+            for name, module in _moe_routers(self.model_chunks)
+        }
+
+    def routing_metrics(self):
+        empty = {
+            "scope": "global_unpadded",
+            "tokens_per_expert_artifact_sha256": None,
+            "minimum_to_mean": None,
+            "maximum_to_mean": None,
+            "coefficient_of_variation": None,
+            "dropped_tokens": None,
+        }
+        names, rows = [], []
+        for name, module in _moe_routers(self.model_chunks):
+            counts = module.local_tokens_per_expert.detach().to(torch.float64)
+            baseline = self.routing_snapshot.get(name)
+            names.append(name)
+            rows.append(counts - baseline if baseline is not None else counts)
+        if not rows:
+            return empty
+        matrix = torch.stack(rows)
+        if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
+            # Each rank tallies its own tokens across all experts; these probes pin TP=CP=1,
+            # so summing over ranks yields the global count.
+            torch.distributed.all_reduce(matrix, op=torch.distributed.ReduceOp.SUM)
+        matrix = matrix.cpu()
+        if float(matrix.sum()) <= 0:
+            return empty
+
+        from megatron.training import get_args
+
+        capacity_factor = get_args().moe_expert_capacity_factor
+        artifact = self.result_path.parent / "tokens_per_expert.json"
+        artifact.write_text(
+            json.dumps(
+                {
+                    "scope": "global_unpadded",
+                    "window": "measured_steps_only",
+                    "layers": names,
+                    "tokens_per_expert": matrix.tolist(),
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        # design.md requires every layer to satisfy the thresholds, so report the worst layer.
+        means = matrix.mean(dim=1)
+        live = means > 0
+        if not bool(live.any()):
+            return empty
+        minimum_to_mean = float((matrix.min(dim=1).values[live] / means[live]).min())
+        maximum_to_mean = float((matrix.max(dim=1).values[live] / means[live]).max())
+        coefficient = float((matrix.std(dim=1, unbiased=False)[live] / means[live]).max())
+        return {
+            "scope": "global_unpadded",
+            "tokens_per_expert_artifact_sha256": hashlib.sha256(
+                artifact.read_bytes()
+            ).hexdigest(),
+            "minimum_to_mean": minimum_to_mean,
+            "maximum_to_mean": maximum_to_mean,
+            "coefficient_of_variation": coefficient,
+            # dropless MoE: no capacity factor means no token can be dropped.
+            "dropped_tokens": 0 if capacity_factor is None else None,
+        }
 
     def after_step(self, elapsed, result):
         self.step += 1
@@ -423,14 +502,7 @@ class Probe:
                         "training": statistics.mean(self.losses) if self.losses else None,
                         "validation": None,
                     },
-                    "routing": {
-                        "scope": "global_unpadded",
-                        "tokens_per_expert_artifact_sha256": None,
-                        "minimum_to_mean": None,
-                        "maximum_to_mean": None,
-                        "coefficient_of_variation": None,
-                        "dropped_tokens": None,
-                    },
+                    "routing": self.routing_metrics(),
                     "downstream": [],
                     "inference": None,
                 },
@@ -460,6 +532,7 @@ def install_probe(*, arm, result_path, warmup_steps, measured_steps, program_sta
         model, optimizer, scheduler = original_setup(*args, **kwargs)
         if probe.arm.endswith("_state_fp8"):
             assert_fp8_adam_bootstrap(optimizer)
+        probe.model_chunks = list(model)
         for chunk_index, chunk in enumerate(model):
             for name, parameter in chunk.named_parameters():
                 stable_name = f"model_chunk{chunk_index}.{name}"
