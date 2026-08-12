@@ -330,7 +330,7 @@ def _batched_dequantize(entries, signed):
     _batched_dequantize_kernel[(triton.cdiv(total_groups, GROUPS_PER_BLOCK),)](
         tables["data"], tables["value"], tables["scale"], tables["expand"], tables["sqrt"],
         tables["ends"], tables["numels"], total_groups, len(entries), SIGNED=signed,
-        GROUP_SIZE=128, ROWS=GROUPS_PER_BLOCK, num_warps=NUM_WARPS, enable_reflect_ftz=False,
+        GROUP_SIZE=128, ROWS=GROUPS_PER_BLOCK, num_warps=NUM_WARPS,
     )
 
 
@@ -340,7 +340,7 @@ def _batched_quantize(entries, signed):
         tables["value"], tables["data"], tables["scale"], tables["expand"], tables["sqrt"],
         tables["ends"], tables["numels"], total_groups, len(entries), 448.0,
         448.0 * 448.0 / 2.0, FLOAT32_MAX, SIGNED=signed, GROUP_SIZE=128,
-        ROWS=GROUPS_PER_BLOCK, num_warps=NUM_WARPS, enable_reflect_ftz=False,
+        ROWS=GROUPS_PER_BLOCK, num_warps=NUM_WARPS,
     )
 
 
@@ -387,7 +387,6 @@ def dequantize_fp8_state(
         GROUP_SIZE=group_size,
         ROWS=GROUPS_PER_BLOCK,
         num_warps=NUM_WARPS,
-        enable_reflect_ftz=False,
     )
     return restored
 
@@ -419,7 +418,6 @@ def quantize_fp8_state_(
         GROUP_SIZE=group_size,
         ROWS=GROUPS_PER_BLOCK,
         num_warps=NUM_WARPS,
-        enable_reflect_ftz=False,
     )
 
 
