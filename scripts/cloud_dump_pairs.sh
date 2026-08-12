@@ -19,7 +19,16 @@ root, filter_ = Path(sys.argv[1]), sys.argv[2]
 files = sorted(p for p in root.glob("*/results.jsonl") if filter_ in str(p))
 print(f"MATCHED {len(files)} result files for filter={filter_!r}")
 for p in files:
-    print("  ", p.parent.name)
+    record = json.loads(p.read_text().splitlines()[0])
+    m = record["measurement"]
+    r = m["routing"]
+    print(f"   {p.parent.name}")
+    print(f"     kind={m['protocol']['kind']} warmup={m['protocol']['warmup_steps']}"
+          f" measured={m['protocol']['measured_steps']}"
+          f" inference={'set' if m['inference'] else 'null'}")
+    print(f"     routing min/mean={r['minimum_to_mean']} max/mean={r['maximum_to_mean']}"
+          f" cv={r['coefficient_of_variation']} dropped={r['dropped_tokens']}"
+          f" artifact={(r['tokens_per_expert_artifact_sha256'] or 'null')[:12]}")
 
 for a, b in permutations(files, 2):
     out = subprocess.run([sys.executable, "-m", "stage3_moe.pair_results", str(a), str(b)],
