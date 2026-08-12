@@ -8,7 +8,17 @@ mkdir -p "$log_dir"
 
 (
     set -eu
-    export PYTHONNOUSERSITE=1
+    if [[ ${MLSUB_IMAGE:-} == torch28 ]]; then
+        unset PYTHONNOUSERSITE
+        nvidia_lib_path=$(find /home/user/conda/lib/python3.12/site-packages/nvidia \
+            -mindepth 2 -maxdepth 2 -type d -name lib -print | paste -sd: -)
+        export LD_LIBRARY_PATH=${nvidia_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+        export CUDNN_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cudnn
+        export CURAND_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/curand
+        export NVRTC_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cuda_nvrtc
+    else
+        export PYTHONNOUSERSITE=1
+    fi
     export PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root"
     python - <<'PY'
 import torch
