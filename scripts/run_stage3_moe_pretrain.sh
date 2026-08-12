@@ -38,6 +38,8 @@ case "$arm" in
   muon_fp8gemm_state_fp32)  optimizer=muon; state_precision=fp32; compute=(--fp8-format hybrid --fp8-recipe delayed) ;;
   *) echo "unknown arm: $arm" >&2; exit 2 ;;
 esac
+probe_warmup=20
+probe_measure=100
 optimizer_args=()
 [[ $optimizer == muon ]] && optimizer_args=("${STAGE3_MOE_MUON_ARGS[@]}")
 
@@ -81,6 +83,8 @@ case "$mode" in
     smoke_dir="$ckpt_root/smoke/$arm"
     save_args=(--save "$smoke_dir" --save-interval 10)
     load_args=(--load "$smoke_dir")
+    probe_warmup=5
+    probe_measure=10
     ;;
   *) echo "unknown mode: $mode" >&2; exit 2 ;;
 esac
@@ -102,12 +106,15 @@ echo "ARM=$arm MODE=$mode GPUS=$gpu_count micro_batch=$micro_batch global_batch=
 echo "SCHEDULE target_iters=$target_iters decay_iters=$decay_iters warmup=$warmup_iters train_iters=$train_iters"
 echo "CKPT save=${save_args[*]} load=${load_args[*]}"
 
-exec python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
+train_log="$log_root/$run_id/train-$(date -u +%Y%m%dT%H%M%SZ).log"
+echo "TRAIN_LOG=$train_log"
+set +e
+python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   stage3_moe/pretrain_gpt.py \
   --stage3-arm "$arm" \
   --stage3-result-path "$log_root/$run_id/results.jsonl" \
-  --stage3-warmup-steps 20 \
-  --stage3-measure-steps 100 \
+  --stage3-warmup-steps "$probe_warmup" \
+  --stage3-measure-steps "$probe_measure" \
   --optimizer-state-precision "$state_precision" \
   "${STAGE3_MOE_MODEL_ARGS[@]}" \
   "${STAGE3_MOE_ROUTER_ARGS[@]}" \
@@ -152,4 +159,10 @@ exec python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" 
   --wandb-save-dir "$log_root/$run_id" \
   --optimizer "$optimizer" \
   "${optimizer_args[@]}" \
-  "${compute[@]}"
+  "${compute[@]}" \
+  >"$train_log" 2>&1
+code=$?
+set -e
+echo "TRAIN_EXIT=$code"
+tail -n 150 "$train_log"
+exit 0
