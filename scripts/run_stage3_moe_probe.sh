@@ -272,7 +272,7 @@ echo "STAGE3_MOE_SITE=$stage3_site STAGE3_MOE_IMAGE=$stage3_image"
 echo "MCORE_COMMIT=$STAGE3_MOE_MCORE_COMMIT STATUS=$mcore_commit_status"
 echo "EO_COMMIT=$STAGE3_MOE_EO_COMMIT STATUS=$eo_commit_status"
 echo "ARM=$arm DATA=$data_mode PROTOCOL=$protocol WARMUP_STEPS=$warmup_steps MEASURE_STEPS=$measure_steps TRAIN_ITERS=$train_iters"
-echo "DENOMINATORS gpu=1 micro_batch=1 global_batch=1 sequence_length=2048 total_parameters=$STAGE3_MOE_TOTAL_PARAMETERS active_parameters=$STAGE3_MOE_ACTIVE_PARAMETERS"
+echo "DENOMINATORS gpu=1 micro_batch=${STAGE3_MOE_MICRO_BATCH:-1} global_batch=${STAGE3_MOE_GLOBAL_BATCH:-1} sequence_length=2048 total_parameters=$STAGE3_MOE_TOTAL_PARAMETERS active_parameters=$STAGE3_MOE_ACTIVE_PARAMETERS"
 echo "GRADIENT_ACCUMULATION_FUSION=$grad_accum_fusion"
 
 cd "$root"

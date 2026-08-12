@@ -15,6 +15,14 @@ protocol=${1:-smoke}
 shift || true
 arms=("$@")
 
+# Optional bounded-timing overrides, supplied with `mlsub run --env`.
+step_args=()
+if [[ -n ${STAGE3_MOE_WARMUP_STEPS:-} && -n ${STAGE3_MOE_MEASURE_STEPS:-} ]]; then
+  step_args=(--warmup-steps "$STAGE3_MOE_WARMUP_STEPS" --measure-steps "$STAGE3_MOE_MEASURE_STEPS")
+fi
+batch_tag="mb${STAGE3_MOE_MICRO_BATCH:-1}gb${STAGE3_MOE_GLOBAL_BATCH:-1}"
+echo "BATCH micro=${STAGE3_MOE_MICRO_BATCH:-1} global=${STAGE3_MOE_GLOBAL_BATCH:-1} steps=${step_args[*]:-default}"
+
 echo "=== PRE-EXISTING ARTIFACTS ==="
 if [[ -d $persist/artifacts/stage3-moe-probes ]]; then
   find $persist/artifacts/stage3-moe-probes -name results.jsonl -print | sort | while read -r f; do
@@ -69,12 +77,12 @@ for arm in "${arms[@]}"; do
     continue
   fi
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
-  run_id="$stamp-$arm-mock-$protocol"
+  run_id="$stamp-$arm-mock-$protocol-$batch_tag"
   result_path="$persist/artifacts/stage3-moe-probes/$run_id/results.jsonl"
   arm_log="$log_dir/stage3-$run_id.log"
   echo "=== ARM $arm protocol=$protocol run_id=$run_id ==="
   STAGE3_MOE_RUN_ID="$run_id" STAGE3_MOE_RESULTS_JSONL="$result_path" \
-    "$root/scripts/run_stage3_moe_probe.sh" "$arm" mock --protocol "$protocol" \
+    "$root/scripts/run_stage3_moe_probe.sh" "$arm" mock --protocol "$protocol" "${step_args[@]}" \
     >"$arm_log" 2>&1
   code=$?
   echo "ARM_EXIT=$code arm=$arm log=$arm_log"

@@ -70,8 +70,8 @@ STAGE3_MOE_TRAINING_ARGS=(
   --lr-decay-style constant
   --weight-decay 0.1
   --clip-grad 1
-  --micro-batch-size 1
-  --global-batch-size 1
+  --micro-batch-size ${STAGE3_MOE_MICRO_BATCH:-1}
+  --global-batch-size ${STAGE3_MOE_GLOBAL_BATCH:-1}
   --eval-iters 0
   --eval-interval 1000000
   --tokenizer-type NullTokenizer
