@@ -147,6 +147,9 @@ export STAGE3_MOE_MCORE_COMMIT="$STAGE3_MOE_MCORE_COMMIT"
 export STAGE3_MOE_EO_COMMIT="$STAGE3_MOE_EO_COMMIT"
 export STAGE3_MOE_GPU_UUID=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | paste -sd, -)
 export STAGE3_MOE_DRIVER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1 | tr -d ' ')
+# Ask TE for the cuBLASLt version; the writer's ctypes fallback cannot find the
+# shared object in this image.
+export STAGE3_MOE_CUBLASLT=$(python -c 'import transformer_engine_torch as t; print(t.get_cublasLt_version())' 2>/dev/null || echo unknown)
 export STAGE3_MOE_GPU_CLEAN_BEFORE=1 STAGE3_MOE_GPU_CLEAN_DURING=1 STAGE3_MOE_GPU_CLEAN_AFTER=1
 echo "ARM=$arm MODE=$mode GPUS=$gpu_count micro_batch=$micro_batch global_batch=$global_batch"
 echo "SCHEDULE target_iters=$target_iters decay_iters=$decay_iters warmup=$warmup_iters train_iters=$train_iters"
