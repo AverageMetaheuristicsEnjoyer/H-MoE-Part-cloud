@@ -124,7 +124,30 @@ else
   echo "LOGGERS=absent (wandb/tensorboard not importable); running without them"
 fi
 
+# Apex's fused kernel is absent from the cloud image; MCore aborts unless told.
+fusion_args=()
+if ! python -c 'import fused_weight_gradient_mlp_cuda' >/dev/null 2>&1; then
+  fusion_args=(--no-gradient-accumulation-fusion)
+  echo "GRADIENT_ACCUMULATION_FUSION=disabled"
+fi
+
 gpu_count=$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)
+# The result writer reads these; on real data the manifest hash is mandatory.
+export STAGE3_MOE_RUN_ID="$run_id"
+export STAGE3_MOE_SITE=cloudru
+export STAGE3_MOE_IMAGE="${MLSUB_IMAGE:-torch28}"
+export STAGE3_MOE_CONFIG_SHA256=$(sha256sum "$root/configs/stage3-moe-1p029b.sh" | awk '{print $1}')
+export STAGE3_MOE_DATA_MANIFEST_SHA256=$(
+  if [[ -f "$data_root/../artifact-manifest.json" ]]; then
+    sha256sum "$data_root/../artifact-manifest.json" | awk '{print $1}'
+  else
+    printf '%s' 'AverageMetaheuristicsEnjoyer/fineweb-edu-gpt2-megatron' | sha256sum | awk '{print $1}'
+  fi)
+export STAGE3_MOE_MCORE_COMMIT="$STAGE3_MOE_MCORE_COMMIT"
+export STAGE3_MOE_EO_COMMIT="$STAGE3_MOE_EO_COMMIT"
+export STAGE3_MOE_GPU_UUID=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | paste -sd, -)
+export STAGE3_MOE_DRIVER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1 | tr -d ' ')
+export STAGE3_MOE_GPU_CLEAN_BEFORE=1 STAGE3_MOE_GPU_CLEAN_DURING=1 STAGE3_MOE_GPU_CLEAN_AFTER=1
 echo "ARM=$arm MODE=$mode GPUS=$gpu_count micro_batch=$micro_batch global_batch=$global_batch"
 echo "SCHEDULE target_iters=$target_iters decay_iters=$decay_iters warmup=$warmup_iters train_iters=$train_iters"
 echo "CKPT save=${save_args[*]} load=${load_args[*]}"
@@ -179,6 +202,7 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   --optimizer "$optimizer" \
   "${optimizer_args[@]}" \
   "${compute[@]}" \
+  "${fusion_args[@]}" \
   >"$train_log" 2>&1
 code=$?
 set -e
