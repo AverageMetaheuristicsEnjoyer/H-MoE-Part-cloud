@@ -206,6 +206,7 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   "${optimizer_args[@]}" \
   "${compute[@]}" \
   "${fusion_args[@]}" \
+  --ckpt-format torch \
   "${save_args[@]}" \
   "${load_args[@]}" \
   >"$train_log" 2>&1
