@@ -110,6 +110,20 @@ else
   echo "WANDB=offline (no /home/jovyan/.wandb-key); sync later with 'wandb sync'"
 fi
 
+# A missing logger must not kill a multi-hour run: drop the loggers instead.
+logger_args=()
+if python -c 'import wandb, torch.utils.tensorboard' >/dev/null 2>&1; then
+  logger_args=(
+    --tensorboard-dir "$log_root/$run_id/tensorboard"
+    --tensorboard-log-interval 10
+    --wandb-project "${STAGE3_MOE_WANDB_PROJECT:-hmoe-stage3}"
+    --wandb-exp-name "$run_id"
+    --wandb-save-dir "$log_root/$run_id"
+  )
+else
+  echo "LOGGERS=absent (wandb/tensorboard not importable); running without them"
+fi
+
 gpu_count=$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)
 echo "ARM=$arm MODE=$mode GPUS=$gpu_count micro_batch=$micro_batch global_batch=$global_batch"
 echo "SCHEDULE target_iters=$target_iters decay_iters=$decay_iters warmup=$warmup_iters train_iters=$train_iters"
@@ -161,11 +175,7 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   --log-interval 10 \
   --log-throughput \
   --timing-log-level 1 \
-  --tensorboard-dir "$log_root/$run_id/tensorboard" \
-  --tensorboard-log-interval 10 \
-  --wandb-project "${STAGE3_MOE_WANDB_PROJECT:-hmoe-stage3}" \
-  --wandb-exp-name "$run_id" \
-  --wandb-save-dir "$log_root/$run_id" \
+  "${logger_args[@]}" \
   --optimizer "$optimizer" \
   "${optimizer_args[@]}" \
   "${compute[@]}" \
