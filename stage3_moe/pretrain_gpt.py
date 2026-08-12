@@ -38,8 +38,10 @@ def validate_axis(arm, state_precision, argv, warmup_steps, measure_steps):
     optimizer = "muon" if arm.startswith("muon_") else "adam"
     if option_value(argv, "--optimizer") != optimizer:
         raise ValueError(f"{arm} requires --optimizer {optimizer}")
-    if int(option_value(argv, "--train-iters")) != warmup_steps + measure_steps:
-        raise ValueError("--train-iters must equal warmup plus measured steps")
+    # A bounded probe measures the whole run; a pretraining run measures its first
+    # window and then keeps going, so the budget only has to cover that window.
+    if int(option_value(argv, "--train-iters")) < warmup_steps + measure_steps:
+        raise ValueError("--train-iters must cover warmup plus measured steps")
     expected_state_precision = "fp8" if arm.endswith("_state_fp8") else "fp32"
     if state_precision != expected_state_precision:
         raise ValueError(
