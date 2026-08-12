@@ -16,7 +16,22 @@ for d in "$lg"/*/; do
   [ -d "$d" ] || continue
   echo "--- $d"
   ls -la "$d" | head -8
-  if [ -f "$d/results.jsonl" ]; then echo "  RESULT:"; cat "$d/results.jsonl"; fi
+  if [ -f "$d/results.jsonl" ]; then
+    python - "$d/results.jsonl" <<'PYX'
+import json, sys
+for line in open(sys.argv[1]):
+    line = line.strip()
+    if not line:
+        continue
+    d = json.loads(line)
+    m, n = d["measurement"], d["denominators"]
+    print(f"  SUMMARY {d['arm_id']} mb={n['micro_batch_sequences_per_gpu']}"
+          f" gb={n['global_batch_sequences']}"
+          f" max_alloc={m['memory']['max_allocated_bytes']}"
+          f" persistent={d['optimizer_state']['persistent_total_bytes']}"
+          f" tok_s={m['timing']['tokens_per_second']:.0f}")
+PYX
+  fi
 done
 echo "EXIT=0"
 exit 0
