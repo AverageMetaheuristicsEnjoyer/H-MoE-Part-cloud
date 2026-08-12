@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
-# What is filling the persistent volume? Read-only.
+# Where can we write, and how much room is there? Read-only except for one probe file.
 set -u
-echo "=== df ==="
-df -h /home/jovyan | tail -1
+echo "=== ALL MOUNTS ==="
+df -hT | grep -vE "^(tmpfs|devtmpfs|overlay .*/var/lib)" | head -30
 echo
-echo "=== top level ==="
-du -sh /home/jovyan/* /home/jovyan/.[!.]* 2>/dev/null | sort -rh | head -25
+echo "=== CANDIDATE ROOTS ==="
+for d in /home/jovyan /home/jovyan/shares /home/jovyan/shares/SR006.nfs2 \
+         /home/jovyan/shares/SR006.nfs2/"$MLSUB_STUDENT" /workspace /data /mnt /shares; do
+  [ -e "$d" ] || continue
+  printf '%-52s ' "$d"
+  df -h "$d" 2>/dev/null | tail -1 | awk '{printf "size=%s used=%s avail=%s (%s)  ", $2,$3,$4,$5}'
+  probe="$d/.write-probe-$$"
+  if touch "$probe" 2>/dev/null; then echo "WRITABLE"; rm -f "$probe"; else echo "read-only"; fi
+done
 echo
-echo "=== largest 25 files ==="
-find /home/jovyan -type f -size +100M -printf '%10s %p\n' 2>/dev/null | sort -rn | head -25
+echo "=== jovyan top level ==="
+du -sh /home/jovyan/* 2>/dev/null | sort -rh | head -12
 echo
-echo "=== stage3 artifacts ==="
-du -sh /home/jovyan/hmoe-cloud 2>/dev/null
-find /home/jovyan/hmoe-cloud -name results.jsonl 2>/dev/null | wc -l
+echo "=== shares namespace (ours only) ==="
+ls -la /home/jovyan/shares/SR006.nfs2/ 2>/dev/null | head -15
 echo "EXIT=0"
 exit 0
