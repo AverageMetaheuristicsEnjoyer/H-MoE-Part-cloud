@@ -1,0 +1,521 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/AverageMetaheuristicsEnjoyer/H-MoE-Part-cloud/stage3_moe/result.schema.json",
+  "title": "Stage 3 matched MoE probe records",
+  "oneOf": [
+    { "$ref": "#/$defs/run" },
+    { "$ref": "#/$defs/pair" }
+  ],
+  "$defs": {
+    "nullableNumber": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "optimizer",
+        "gemm_mode",
+        "optimizer_state_mode",
+        "match_key_sha256"
+      ],
+      "properties": {
+        "optimizer": { "enum": ["adamw", "muon"] },
+        "gemm_mode": { "enum": ["bf16", "fp8_delayed_hybrid"] },
+        "optimizer_state_mode": { "enum": ["fp32", "fp8_hybrid"] },
+        "match_key_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "denominators": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "micro_batch_sequences_per_gpu",
+        "global_batch_sequences",
+        "sequence_length",
+        "loss_tokens_per_step",
+        "gpu_count",
+        "total_parameters",
+        "active_parameters_per_token",
+        "dp",
+        "tp",
+        "pp",
+        "cp",
+        "ep",
+        "etp"
+      ],
+      "properties": {
+        "micro_batch_sequences_per_gpu": { "type": "integer", "minimum": 1 },
+        "global_batch_sequences": { "type": "integer", "minimum": 1 },
+        "sequence_length": { "type": "integer", "minimum": 1 },
+        "loss_tokens_per_step": { "type": "integer", "minimum": 1 },
+        "gpu_count": { "type": "integer", "minimum": 1 },
+        "total_parameters": { "type": "integer", "minimum": 1000000000 },
+        "active_parameters_per_token": { "type": "integer", "minimum": 1 },
+        "dp": { "type": "integer", "minimum": 1 },
+        "tp": { "type": "integer", "minimum": 1 },
+        "pp": { "type": "integer", "minimum": 1 },
+        "cp": { "type": "integer", "minimum": 1 },
+        "ep": { "type": "integer", "minimum": 1 },
+        "etp": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "git_commit",
+        "git_dirty",
+        "git_diff_sha256",
+        "config_sha256",
+        "data_manifest_sha256",
+        "argv_scope",
+        "argv"
+      ],
+      "properties": {
+        "git_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "git_dirty": { "type": "boolean" },
+        "git_diff_sha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "config_sha256": { "$ref": "#/$defs/sha256" },
+        "data_manifest_sha256": { "$ref": "#/$defs/sha256" },
+        "argv_scope": { "const": "effective_mcore_argv" },
+        "argv": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "site",
+        "host",
+        "scheduler_job_id",
+        "image",
+        "python",
+        "torch",
+        "cuda_runtime",
+        "driver",
+        "cublaslt",
+        "triton",
+        "transformer_engine",
+        "megatron_core",
+        "emerging_optimizers",
+        "nccl",
+        "gpus",
+        "gpu_clean"
+      ],
+      "properties": {
+        "site": { "type": "string", "minLength": 1 },
+        "host": { "type": "string", "minLength": 1 },
+        "scheduler_job_id": { "type": ["string", "null"] },
+        "image": { "type": "string", "minLength": 1 },
+        "python": { "type": "string", "minLength": 1 },
+        "torch": { "type": "string", "minLength": 1 },
+        "cuda_runtime": { "type": "string", "minLength": 1 },
+        "driver": { "type": "string", "minLength": 1 },
+        "cublaslt": { "type": "string", "minLength": 1 },
+        "triton": { "type": "string", "minLength": 1 },
+        "transformer_engine": { "type": "string", "minLength": 1 },
+        "megatron_core": { "type": "string", "minLength": 1 },
+        "emerging_optimizers": { "type": "string", "minLength": 1 },
+        "nccl": { "type": "string", "minLength": 1 },
+        "gpus": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["uuid", "name"],
+            "properties": {
+              "uuid": { "type": "string", "minLength": 1 },
+              "name": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "gpu_clean": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["before", "during", "after"],
+          "properties": {
+            "before": { "type": "boolean" },
+            "during": { "type": "boolean" },
+            "after": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "parameterGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "parameters",
+        "active_parameters_per_token",
+        "named_parameter_manifest_sha256"
+      ],
+      "properties": {
+        "role": { "enum": ["adamw_all", "muon_matrix", "adamw_fallback"] },
+        "parameters": { "type": "integer", "minimum": 0 },
+        "active_parameters_per_token": { "type": "integer", "minimum": 0 },
+        "named_parameter_manifest_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "stateTensor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["group_role", "state_key", "dtype", "quantized", "numel", "bytes"],
+      "properties": {
+        "group_role": { "enum": ["adamw_all", "muon_matrix", "adamw_fallback"] },
+        "state_key": { "enum": ["exp_avg", "exp_avg_sq", "momentum_buffer", "metadata", "step"] },
+        "dtype": { "type": "string", "minLength": 1 },
+        "quantized": { "type": "boolean" },
+        "numel": { "type": "integer", "minimum": 0 },
+        "bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "downstream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task", "metric", "higher_is_better", "value", "per_example_artifact_sha256"],
+      "properties": {
+        "task": { "type": "string", "minLength": 1 },
+        "metric": { "type": "string", "minLength": 1 },
+        "higher_is_better": { "type": "boolean" },
+        "value": { "type": "number" },
+        "per_example_artifact_sha256": {
+          "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+        }
+      }
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "memory", "timing", "loss", "routing", "downstream", "inference"],
+      "properties": {
+        "protocol": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "warmup_steps", "measured_steps", "e2e_train_steps"],
+          "properties": {
+            "kind": { "enum": ["smoke", "formal_timing", "long_training", "evaluation"] },
+            "warmup_steps": { "type": "integer", "minimum": 0 },
+            "measured_steps": { "type": "integer", "minimum": 0 },
+            "e2e_train_steps": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "memory": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["max_allocated_bytes", "max_reserved_bytes"],
+          "properties": {
+            "max_allocated_bytes": { "type": ["integer", "null"], "minimum": 1 },
+            "max_reserved_bytes": { "type": ["integer", "null"], "minimum": 1 }
+          }
+        },
+        "timing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tokens_per_second",
+            "optimizer_step_seconds",
+            "full_step_seconds",
+            "e2e_wct_seconds",
+            "e2e_wct_scope",
+            "optimizer_step_samples_seconds",
+            "full_step_samples_seconds"
+          ],
+          "properties": {
+            "tokens_per_second": { "$ref": "#/$defs/nullableNumber" },
+            "optimizer_step_seconds": { "$ref": "#/$defs/nullableNumber" },
+            "full_step_seconds": { "$ref": "#/$defs/nullableNumber" },
+            "e2e_wct_seconds": { "$ref": "#/$defs/nullableNumber" },
+            "e2e_wct_scope": {
+              "enum": [
+                "process_start_to_result_write",
+                "launcher_start_to_process_exit"
+              ]
+            },
+            "optimizer_step_samples_seconds": {
+              "type": "array",
+              "items": { "type": "number", "exclusiveMinimum": 0 }
+            },
+            "full_step_samples_seconds": {
+              "type": "array",
+              "items": { "type": "number", "exclusiveMinimum": 0 }
+            }
+          }
+        },
+        "loss": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["training", "validation"],
+          "properties": {
+            "training": { "$ref": "#/$defs/nullableNumber" },
+            "validation": { "$ref": "#/$defs/nullableNumber" }
+          }
+        },
+        "routing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scope",
+            "tokens_per_expert_artifact_sha256",
+            "minimum_to_mean",
+            "maximum_to_mean",
+            "coefficient_of_variation",
+            "dropped_tokens"
+          ],
+          "properties": {
+            "scope": { "const": "global_unpadded" },
+            "tokens_per_expert_artifact_sha256": {
+              "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+            },
+            "minimum_to_mean": { "$ref": "#/$defs/nullableNumber" },
+            "maximum_to_mean": { "$ref": "#/$defs/nullableNumber" },
+            "coefficient_of_variation": { "$ref": "#/$defs/nullableNumber" },
+            "dropped_tokens": { "type": ["integer", "null"], "minimum": 0 }
+          }
+        },
+        "downstream": { "type": "array", "items": { "$ref": "#/$defs/downstream" } },
+        "inference": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "baseline_run_id",
+                "method",
+                "confidence_level",
+                "sidedness",
+                "memory_allocated_ratio_ci95",
+                "e2e_wct_ratio_ci95",
+                "validation_loss_degradation_ci95",
+                "downstream"
+              ],
+              "properties": {
+                "baseline_run_id": { "type": "string", "minLength": 1 },
+                "method": { "type": "string", "pattern": "paired" },
+                "confidence_level": { "const": 0.95 },
+                "sidedness": { "const": "one-sided" },
+                "memory_allocated_ratio_ci95": {
+                  "type": ["array", "null"],
+                  "prefixItems": [{ "type": "number" }, { "type": "number" }],
+                  "minItems": 2,
+                  "maxItems": 2
+                },
+                "e2e_wct_ratio_ci95": {
+                  "type": ["array", "null"],
+                  "prefixItems": [{ "type": "number" }, { "type": "number" }],
+                  "minItems": 2,
+                  "maxItems": 2
+                },
+                "validation_loss_degradation_ci95": {
+                  "type": ["array", "null"],
+                  "prefixItems": [{ "type": "number" }, { "type": "number" }],
+                  "minItems": 2,
+                  "maxItems": 2
+                },
+                "downstream": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["task", "metric", "degradation_ci95"],
+                    "properties": {
+                      "task": { "type": "string", "minLength": 1 },
+                      "metric": { "type": "string", "minLength": 1 },
+                      "degradation_ci95": {
+                        "type": "array",
+                        "prefixItems": [{ "type": "number" }, { "type": "number" }],
+                        "minItems": 2,
+                        "maxItems": 2
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "record_type",
+        "run_id",
+        "arm_id",
+        "status",
+        "comparison",
+        "denominators",
+        "provenance",
+        "environment",
+        "parameter_groups",
+        "optimizer_state",
+        "measurement"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "record_type": { "const": "run" },
+        "run_id": { "type": "string", "minLength": 1 },
+        "arm_id": {
+          "enum": [
+            "adamw_bf16_state_fp32",
+            "adamw_bf16_state_fp8",
+            "muon_bf16_state_fp32",
+            "muon_bf16_state_fp8",
+            "adamw_fp8gemm_state_fp32",
+            "muon_fp8gemm_state_fp32"
+          ]
+        },
+        "status": { "enum": ["completed", "failed", "not_run"] },
+        "comparison": { "$ref": "#/$defs/comparison" },
+        "denominators": { "$ref": "#/$defs/denominators" },
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "environment": { "$ref": "#/$defs/environment" },
+        "parameter_groups": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/parameterGroup" } },
+        "optimizer_state": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["persistent_data_bytes", "metadata_bytes", "persistent_total_bytes", "master_parameter_bytes", "tensors"],
+          "properties": {
+            "persistent_data_bytes": { "type": ["integer", "null"], "minimum": 0 },
+            "metadata_bytes": { "type": ["integer", "null"], "minimum": 0 },
+            "persistent_total_bytes": { "type": ["integer", "null"], "minimum": 0 },
+            "master_parameter_bytes": { "type": ["integer", "null"], "minimum": 0 },
+            "tensors": { "type": "array", "items": { "$ref": "#/$defs/stateTensor" } }
+          }
+        },
+        "measurement": { "$ref": "#/$defs/measurement" }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "criterion"],
+      "properties": {
+        "status": { "enum": ["pass", "fail", "inconclusive", "not_applicable"] },
+        "criterion": { "type": "string", "minLength": 1 }
+      }
+    },
+    "ratioEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baseline", "treatment", "ratio", "ratio_direction", "ratio_ci95"],
+      "properties": {
+        "baseline": { "$ref": "#/$defs/nullableNumber" },
+        "treatment": { "$ref": "#/$defs/nullableNumber" },
+        "ratio": { "$ref": "#/$defs/nullableNumber" },
+        "ratio_direction": { "enum": ["baseline_over_treatment", "treatment_over_baseline"] },
+        "ratio_ci95": {
+          "type": ["array", "null"],
+          "prefixItems": [{ "type": "number" }, { "type": "number" }],
+          "minItems": 2,
+          "maxItems": 2
+        }
+      }
+    },
+    "downstreamEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task",
+        "metric",
+        "higher_is_better",
+        "baseline",
+        "treatment",
+        "degradation_fraction_of_baseline",
+        "degradation_ci95",
+        "status"
+      ],
+      "properties": {
+        "task": { "type": "string", "minLength": 1 },
+        "metric": { "type": "string", "minLength": 1 },
+        "higher_is_better": { "type": "boolean" },
+        "baseline": { "type": "number" },
+        "treatment": { "type": "number" },
+        "degradation_fraction_of_baseline": { "$ref": "#/$defs/nullableNumber" },
+        "degradation_ci95": {
+          "type": ["array", "null"],
+          "prefixItems": [{ "type": "number" }, { "type": "number" }],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "status": { "enum": ["pass", "fail", "inconclusive"] }
+      }
+    },
+    "pair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "record_type",
+        "pair_id",
+        "axis",
+        "optimizer",
+        "baseline_run_id",
+        "treatment_run_id",
+        "denominators",
+        "effects",
+        "gates",
+        "verdict"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "record_type": { "const": "pair" },
+        "pair_id": { "type": "string", "minLength": 1 },
+        "axis": { "enum": ["optimizer_state", "fp8_gemm"] },
+        "optimizer": { "enum": ["adamw", "muon"] },
+        "baseline_run_id": { "type": "string", "minLength": 1 },
+        "treatment_run_id": { "type": "string", "minLength": 1 },
+        "denominators": { "$ref": "#/$defs/denominators" },
+        "effects": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "max_memory_allocated_bytes",
+            "max_memory_reserved_bytes",
+            "persistent_optimizer_state_bytes",
+            "tokens_per_second",
+            "optimizer_step_seconds",
+            "full_step_seconds",
+            "e2e_wct_seconds",
+            "validation_loss_degradation_fraction_of_baseline",
+            "validation_loss_degradation_ci95",
+            "downstream"
+          ],
+          "properties": {
+            "max_memory_allocated_bytes": { "$ref": "#/$defs/ratioEffect" },
+            "max_memory_reserved_bytes": { "$ref": "#/$defs/ratioEffect" },
+            "persistent_optimizer_state_bytes": { "$ref": "#/$defs/ratioEffect" },
+            "tokens_per_second": { "$ref": "#/$defs/ratioEffect" },
+            "optimizer_step_seconds": { "$ref": "#/$defs/ratioEffect" },
+            "full_step_seconds": { "$ref": "#/$defs/ratioEffect" },
+            "e2e_wct_seconds": { "$ref": "#/$defs/ratioEffect" },
+            "validation_loss_degradation_fraction_of_baseline": { "$ref": "#/$defs/nullableNumber" },
+            "validation_loss_degradation_ci95": {
+              "type": ["array", "null"],
+              "prefixItems": [{ "type": "number" }, { "type": "number" }],
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "downstream": { "type": "array", "items": { "$ref": "#/$defs/downstreamEffect" } }
+          }
+        },
+        "gates": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/gate" },
+          "required": ["health", "routing", "memory", "wct", "validation", "downstream"]
+        },
+        "verdict": { "enum": ["pass", "fail", "inconclusive"] }
+      }
+    }
+  }
+}
