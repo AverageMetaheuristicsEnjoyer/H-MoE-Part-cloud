@@ -72,13 +72,30 @@ case "$mode" in
     save_args=(--save "$decay_dir" --save-interval "$short_decay_iters" --no-save-optim --no-save-rng)
     load_args=(--load "$decay_dir" --override-opt_param-scheduler)
     ;;
+  smoke)
+    # Exercises the whole path cheaply: real data, 2 GPUs, checkpoint save and
+    # resume on the alternate volume, loggers. Re-run it to test resume.
+    train_iters=25
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    smoke_dir="$ckpt_root/smoke/$arm"
+    save_args=(--save "$smoke_dir" --save-interval 10)
+    load_args=(--load "$smoke_dir")
+    ;;
   *) echo "unknown mode: $mode" >&2; exit 2 ;;
 esac
 
 run_id="stage3-$arm-$mode"
 mkdir -p "$log_root/$run_id" "$trunk_dir"
 export PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root"
-[[ -f /home/jovyan/.wandb-key ]] && export WANDB_API_KEY=$(cat /home/jovyan/.wandb-key)
+# Without credentials wandb.init() would abort the run, so fall back to offline
+# logging: the run still records everything and can be `wandb sync`ed later.
+if [[ -f /home/jovyan/.wandb-key ]]; then
+  export WANDB_API_KEY=$(cat /home/jovyan/.wandb-key)
+else
+  export WANDB_MODE=offline
+  echo "WANDB=offline (no /home/jovyan/.wandb-key); sync later with 'wandb sync'"
+fi
 
 gpu_count=$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)
 echo "ARM=$arm MODE=$mode GPUS=$gpu_count micro_batch=$micro_batch global_batch=$global_batch"
