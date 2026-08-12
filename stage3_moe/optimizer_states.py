@@ -347,7 +347,12 @@ class FP8StateDictMixin:
             len(group["params"]) != len(saved["params"])
             for group, saved in zip(groups, saved_groups)
         ):
-            raise ValueError("loaded state dict does not match the optimizer")
+            live = [len(group["params"]) for group in groups]
+            stored = [len(saved["params"]) for saved in saved_groups]
+            raise ValueError(
+                "loaded state dict does not match the optimizer: "
+                f"live group sizes {live} vs stored {stored}"
+            )
 
         id_map = dict(
             zip(
