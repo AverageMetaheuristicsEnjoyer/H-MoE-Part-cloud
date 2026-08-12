@@ -160,6 +160,7 @@
       "properties": {
         "role": { "enum": ["adamw_all", "muon_matrix", "adamw_fallback"] },
         "parameters": { "type": "integer", "minimum": 0 },
+        "parameters_global": { "type": "integer", "minimum": 0 },
         "active_parameters_per_token": { "type": "integer", "minimum": 0 },
         "named_parameter_manifest_sha256": { "$ref": "#/$defs/sha256" }
       }

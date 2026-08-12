@@ -182,15 +182,42 @@ def optimizer_state_ledger(optimizer, arm):
     }
 
 
+ROLES = ("adamw_all", "adamw_fallback", "muon_matrix")
+
+
+def _is_routed_expert(name):
+    """Routed experts are the only expert-parallel tensors.
+
+    Names read `...mlp.experts.linear_fc1.weight0` for routed experts and
+    `...mlp.shared_experts.linear_fc1.weight` for the shared one, so `.experts.`
+    matches routed experts and never the shared expert. This is decided by name
+    rather than MCore's `allreduce` flag because the optimizer holds FP32 master
+    copies, which do not necessarily carry the flag.
+    """
+    return ".experts." in name
+
+
+def _sum_over_expert_ranks(values):
+    """Sum per-rank quantities across the expert-parallel group; identity at EP=1."""
+    if not torch.distributed.is_initialized():
+        return list(values)
+    from megatron.core import parallel_state
+
+    group = parallel_state.get_expert_model_parallel_group()
+    if torch.distributed.get_world_size(group=group) == 1:
+        return list(values)
+    buffer = torch.tensor(list(values), dtype=torch.float64, device=torch.cuda.current_device())
+    torch.distributed.all_reduce(buffer, op=torch.distributed.ReduceOp.SUM, group=group)
+    return [int(round(value)) for value in buffer.tolist()]
+
+
 def parameter_group_ledger(optimizer, arm, parameter_names):
-    if torch.distributed.is_initialized() and torch.distributed.get_world_size() != 1:
-        raise NotImplementedError(
-            "Stage 3 parameter ledger currently supports the one-GPU EP=1 short probes only"
-        )
     counts = defaultdict(int)
+    expert_counts = defaultdict(int)
     names = defaultdict(list)
     active = defaultdict(int)
     fc1_names = set()
+    expert_fc1_names = set()
     split_fc1_names = set()
     router_names = set()
     fallback_router_names = set()
@@ -203,6 +230,8 @@ def parameter_group_ledger(optimizer, arm, parameter_names):
                 if name is None:
                     raise AssertionError("optimizer parameter has no stable model name")
                 counts[role] += parameter.numel()
+                if _is_routed_expert(name):
+                    expert_counts[role] += parameter.numel()
                 names[role].append(f"{name}:{tuple(parameter.shape)}:{parameter.numel()}")
                 if role == "muon_matrix" and name.endswith(".router.weight"):
                     raise AssertionError("router weight reached Muon")
@@ -212,26 +241,41 @@ def parameter_group_ledger(optimizer, arm, parameter_names):
                         fallback_router_names.add(name)
                 if role == "muon_matrix" and ".linear_fc1.weight" in name:
                     fc1_names.add(name)
+                    if _is_routed_expert(name):
+                        expert_fc1_names.add(name)
                     if group.get("stage3_split_swiglu_fc1"):
                         split_fc1_names.add(name)
+
+    # Replicated tensors are identical on every expert rank, so count them once and
+    # add only the sharded expert tensors summed across the expert-parallel group.
+    reduced = _sum_over_expert_ranks(
+        [expert_counts[role] for role in ROLES] + [len(expert_fc1_names)]
+    )
+    global_counts = {
+        role: counts[role] - expert_counts[role] + reduced[index]
+        for index, role in enumerate(ROLES)
+        if role in counts
+    }
+    global_fc1 = len(fc1_names) - len(expert_fc1_names) + reduced[-1]
+
     if not adam_only and fc1_names != split_fc1_names:
         missing = sorted(fc1_names - split_fc1_names)
         raise AssertionError(f"Muon SwiGLU FC1 split flag missing for {missing[:3]}")
-    if not adam_only and len(fc1_names) != 1 + 17 * 65:
-        raise AssertionError(f"expected 1106 Muon SwiGLU FC1 weights, found {len(fc1_names)}")
+    if not adam_only and global_fc1 != 1 + 17 * 65:
+        raise AssertionError(f"expected 1106 Muon SwiGLU FC1 weights, found {global_fc1}")
     if not adam_only and len(router_names) != 17:
         raise AssertionError(f"expected 17 MoE router weights, found {len(router_names)}")
     if not adam_only and router_names != fallback_router_names:
         raise AssertionError("not every router weight is in the AdamW fallback group")
-    if sum(counts.values()) != TOTAL_PARAMETERS:
+    if sum(global_counts.values()) != TOTAL_PARAMETERS:
         raise AssertionError(
-            f"total parameter mismatch: {sum(counts.values())} != {TOTAL_PARAMETERS}"
+            f"total parameter mismatch: {sum(global_counts.values())} != {TOTAL_PARAMETERS}"
         )
-    if not adam_only and dict(counts) != {
+    if not adam_only and global_counts != {
         "muon_matrix": MUON_MATRIX_PARAMETERS,
         "adamw_fallback": ADAMW_FALLBACK_PARAMETERS,
     }:
-        raise AssertionError(f"Muon parameter groups do not match the design: {dict(counts)}")
+        raise AssertionError(f"Muon parameter groups do not match the design: {global_counts}")
     active.update(
         {"adamw_all": ACTIVE_PARAMETERS}
         if adam_only
@@ -241,7 +285,9 @@ def parameter_group_ledger(optimizer, arm, parameter_names):
         {
             "role": role,
             "parameters": count,
+            "parameters_global": global_counts[role],
             "active_parameters_per_token": active[role],
+            # manifest covers this rank's shard only
             "named_parameter_manifest_sha256": hashlib.sha256(
                 "\n".join(sorted(names[role])).encode()
             ).hexdigest(),
@@ -461,6 +507,14 @@ class Probe:
         torch.cuda.synchronize()
         self.written = True
         self.result_path.parent.mkdir(parents=True, exist_ok=True)
+        # Both ledgers reduce across the expert group, so every rank must reach them;
+        # only rank 0 then writes, otherwise the ranks would clobber one file.
+        parameter_groups = parameter_group_ledger(
+            self.optimizer, self.arm, self.parameter_names
+        )
+        routing = self.routing_metrics()
+        if torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
+            return
         try:
             from megatron.training import get_args
 
@@ -493,9 +547,7 @@ class Probe:
                 },
                 "provenance": _provenance(self.argv),
                 "environment": _environment(),
-                "parameter_groups": parameter_group_ledger(
-                    self.optimizer, self.arm, self.parameter_names
-                ),
+                "parameter_groups": parameter_groups,
                 "optimizer_state": optimizer_state_ledger(self.optimizer, self.arm),
                 "measurement": {
                     "protocol": {
@@ -529,7 +581,7 @@ class Probe:
                         "training": statistics.mean(self.losses) if self.losses else None,
                         "validation": None,
                     },
-                    "routing": self.routing_metrics(),
+                    "routing": routing,
                     "downstream": [],
                     "inference": None,
                 },
