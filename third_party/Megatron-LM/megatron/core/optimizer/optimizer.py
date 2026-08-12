@@ -435,16 +435,21 @@ class MegatronOptimizer(ABC):
         # Keep state_dict param group order since groups are LocalNonpersistentObject
         # and their order is determined at runtime, not from the checkpoint.
         params_in_state_dict_order = [g['params'] for g in state_dict_groups]
-        loaded_groups_map = {
-            tuple(
+        # Several groups can share one identifier key when they differ only by an
+        # option outside param_group_identifier_keys (e.g. a per-group flag read by
+        # the underlying optimizer). Keep every group under its key, in checkpoint
+        # order, so the map does not collapse them onto the last one.
+        loaded_groups_map: Dict[Tuple, List[Dict]] = {}
+        for group in state_dict_groups:
+            key = tuple(
                 # NeMo may have different key for required fields, e.g., "wd_mult" to "pre_wd_mult"
-                group[key] if key in group else group[f"pre_{key}"]
-                for key in param_group_identifier_keys
-            ): group
-            for group in state_dict_groups
-        }
+                group[key_name] if key_name in group else group[f"pre_{key_name}"]
+                for key_name in param_group_identifier_keys
+            )
+            loaded_groups_map.setdefault(key, []).append(group)
 
         final_groups = []
+        groups_taken: Dict[Tuple, int] = {}
         for key, params in zip(needed_groups, params_in_state_dict_order):
             if key not in loaded_groups_map:
                 available_keys = '\n'.join(str(k) for k in loaded_groups_map.keys())
@@ -454,8 +459,13 @@ class MegatronOptimizer(ABC):
                     f"Parameter group key definition: {param_group_identifier_keys}"
                 )
 
+            # Groups sharing a key are matched in order; copy so that two needed
+            # groups never end up aliasing one checkpoint group.
+            candidates = loaded_groups_map[key]
+            taken = groups_taken.get(key, 0)
+            group = dict(candidates[min(taken, len(candidates) - 1)])
+            groups_taken[key] = taken + 1
             # Update group's parameters to preserve state dict ordering
-            group = loaded_groups_map[key]
             group['params'] = params
             final_groups.append(group)
 

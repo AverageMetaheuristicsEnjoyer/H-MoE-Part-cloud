@@ -129,6 +129,32 @@ def test_install_contract_routes_router_to_adam_and_marks_fc1():
         entry.default_param_overrides = old_overrides
 
 
+def test_checkpoint_keeps_the_two_muon_groups_apart():
+    from megatron.core.optimizer.optimizer import MegatronOptimizer
+
+    # Muon ends up with two param groups that differ only by our per-group SwiGLU
+    # flag, which is not one of MCore's param_group_identifier_keys. Matching the
+    # checkpoint by those keys alone collapses both groups onto the last one.
+    common = {
+        "wd_mult": 1.0,
+        "lr_mult": 1.0,
+        "is_expert_parallel": False,
+        "is_decoupled_lr": False,
+    }
+    build = lambda: [
+        {**common, "params": list(range(1142))},
+        {**common, "params": list(range(1142, 2248)), SPLIT_SWIGLU_FC1: True},
+    ]
+    live, stored = build(), build()
+
+    reordered = MegatronOptimizer._filter_and_reorder_param_groups(live, stored)
+
+    assert [len(group["params"]) for group in reordered] == [1142, 1106]
+    assert reordered[0] is not reordered[1]
+    assert SPLIT_SWIGLU_FC1 not in reordered[0]
+    assert reordered[1][SPLIT_SWIGLU_FC1] is True
+
+
 def test_swiglu_halves_are_orthogonalized_independently():
     optimizer = object.__new__(SplitSwiGLUTensorParallelMuon)
     calls = []
