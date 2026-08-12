@@ -55,10 +55,12 @@ tests/stage4/test_stage4_lm_eval_basic_v2.py
 .venv-eval/
 artifacts/
 scripts/assemble_dense_2c_data.py
-scripts/run_stage4_dense_1c2c.sh
+scripts/run_dense_1c2c.sh
 scripts/run_stage4_evaluation.sh
-stage4/evaluate_checkpoint.py
-stage4/eval_tasks/lm_eval_basic_v2.py
+scripts/run_stage4_evaluation_pipeline.sh
+stage4/compare_evaluation.py
+stage4/megatron_lm_eval.py
+stage4/run_evaluation.py
 ```
 
 Pinned nested revisions:
@@ -109,6 +111,11 @@ only persistent side effect was a Triton compilation cache at
 `runtime-tmp/triton-stage3-contract`; that exact directory was removed and its
 absence verified.  No foreign process or file was modified.  Subsequent GPU
 work remains gated on a genuinely idle/allocated device.
+
+The final CPU-only contract run hid CUDA with `CUDA_VISIBLE_DEVICES=-1` and
+executed `python -m pytest -q tests/stage3_moe` in the pinned container.  It
+reported `28 passed, 4 skipped, 5 subtests passed` in 29.36 s.  This run did not
+allocate GPU memory.
 
 Source evidence for the negative Stage 2 verdict and implementation gaps:
 

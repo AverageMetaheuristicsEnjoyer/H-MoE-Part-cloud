@@ -256,8 +256,9 @@ tests/stage3_moe/{test_launcher_contract,test_optimizer_contract,test_pair_resul
 ```
 
 **Measured verification:** all six launcher dry-runs and shell/AST/JSON checks
-pass; the pair/schema suite passes 11/11.  A final CPU-only run in the pinned
-node207 container passes 10 tests and skips four CUDA cases.  The CUDA unit
+pass; the pair/schema suite passes 11/11.  The final CPU-only run of the full
+Stage 3 test directory in the pinned node207 container passes 28 tests and
+skips four CUDA cases (plus five passing subtests).  The CUDA unit
 incident disclosed in the evidence ledger is not a true-MoE smoke and is not
 counted here.  No W&B/HF publication, checkpoint deletion, reset, or long run
 was performed.
