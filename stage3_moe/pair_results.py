@@ -203,6 +203,10 @@ def _validate_ci(ci, label):
 
 
 def _routing_gate(run):
+    if "--mock-data" in run["provenance"]["argv"]:
+        # Random tokens make the per-expert distribution unrepresentative at any step
+        # count, so the counts are recorded but cannot decide the gate either way.
+        return "inconclusive"
     routing = run["measurement"]["routing"]
     fields = (
         routing["tokens_per_expert_artifact_sha256"],
@@ -483,7 +487,7 @@ def compare_runs(baseline, treatment):
 
     gates = {
         "health": _gate(health_status, "both runs completed on clean matched GPUs"),
-        "routing": _gate(routing_status, "global unpadded min/mean >= 0.10, CV < 0.20, dropped tokens = 0"),
+        "routing": _gate(routing_status, "global unpadded min/mean >= 0.10, CV < 0.20, dropped tokens = 0; not decidable on mock data"),
         "memory": _gate(memory_status, "optimizer-state axis: one-sided paired 95% CI lower bound for max-allocated baseline/treatment >= 1.10"),
         "wct": _gate(wct_status, "FP8-GEMM axis: one-sided paired 95% CI lower bound for launcher-start-to-process-exit WCT baseline/treatment >= 1.10 after >=20 warmups and >=100 measured steps"),
         "validation": _gate(validation_status, "one-sided paired 95% CI upper bound for relative validation-loss degradation < 1%"),
