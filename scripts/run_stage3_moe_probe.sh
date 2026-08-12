@@ -117,10 +117,12 @@ case "$data_mode" in
     ;;
 esac
 
-if [[ ! ${CUDA_VISIBLE_DEVICES:-} =~ ^[0-9]+$ ]]; then
-  echo "set CUDA_VISIBLE_DEVICES to exactly one numeric device index" >&2
+if [[ ! ${CUDA_VISIBLE_DEVICES:-} =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+  echo "set CUDA_VISIBLE_DEVICES to one numeric device index, or a comma-separated list" >&2
   exit 2
 fi
+IFS=',' read -r -a selected_devices <<<"$CUDA_VISIBLE_DEVICES"
+gpu_count=${#selected_devices[@]}
 
 python_bin=${STAGE3_MOE_PYTHON:-python}
 runtime_prefix=(env)
@@ -181,28 +183,34 @@ selected_gpu_uuid=${STAGE3_MOE_GPU_UUID:-unverified}
 if [[ ${STAGE3_MOE_DRY_RUN:-0} == 1 ]]; then
   echo "GPU_PREFLIGHT=dry-run"
 else
-  gpu_line=$(nvidia-smi --query-gpu=index,uuid,memory.used,driver_version --format=csv,noheader,nounits | awk -F, -v selected="$CUDA_VISIBLE_DEVICES" '
-    {for (i=1; i<=NF; i++) {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)}}
-    $1 == selected {print $2, $3, $4}
-  ')
-  read -r selected_gpu_uuid selected_gpu_memory_mib driver_version <<<"$gpu_line"
-  if [[ -z ${selected_gpu_uuid:-} ]]; then
-    echo "selected GPU index $CUDA_VISIBLE_DEVICES was not reported by nvidia-smi" >&2
-    exit 2
-  fi
-  compute_pids=$(nvidia-smi --query-compute-apps=gpu_uuid,pid --format=csv,noheader,nounits | awk -F, -v selected="$selected_gpu_uuid" '
-    {for (i=1; i<=NF; i++) {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)}}
-    $1 == selected {print $2}
-  ')
-  echo "GPU_PREFLIGHT index=$CUDA_VISIBLE_DEVICES uuid=$selected_gpu_uuid memory_used_mib=$selected_gpu_memory_mib driver=$driver_version"
-  if [[ -n "$compute_pids" ]]; then
-    echo "refusing to use GPU $CUDA_VISIBLE_DEVICES; active compute PIDs: ${compute_pids//$'\n'/,}" >&2
-    exit 3
-  fi
-  if ((selected_gpu_memory_mib > 1024)); then
-    echo "refusing to use GPU $CUDA_VISIBLE_DEVICES; idle memory threshold exceeded: ${selected_gpu_memory_mib} MiB > 1024 MiB" >&2
-    exit 3
-  fi
+  # Every requested device must clear the gate, not just the first one.
+  selected_uuids=()
+  for device in "${selected_devices[@]}"; do
+    gpu_line=$(nvidia-smi --query-gpu=index,uuid,memory.used,driver_version --format=csv,noheader,nounits | awk -F, -v selected="$device" '
+      {for (i=1; i<=NF; i++) {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)}}
+      $1 == selected {print $2, $3, $4}
+    ')
+    read -r device_uuid device_memory_mib driver_version <<<"$gpu_line"
+    if [[ -z ${device_uuid:-} ]]; then
+      echo "selected GPU index $device was not reported by nvidia-smi" >&2
+      exit 2
+    fi
+    compute_pids=$(nvidia-smi --query-compute-apps=gpu_uuid,pid --format=csv,noheader,nounits | awk -F, -v selected="$device_uuid" '
+      {for (i=1; i<=NF; i++) {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)}}
+      $1 == selected {print $2}
+    ')
+    echo "GPU_PREFLIGHT index=$device uuid=$device_uuid memory_used_mib=$device_memory_mib driver=$driver_version"
+    if [[ -n "$compute_pids" ]]; then
+      echo "refusing to use GPU $device; active compute PIDs: ${compute_pids//$'\n'/,}" >&2
+      exit 3
+    fi
+    if ((device_memory_mib > 1024)); then
+      echo "refusing to use GPU $device; idle memory threshold exceeded: ${device_memory_mib} MiB > 1024 MiB" >&2
+      exit 3
+    fi
+    selected_uuids+=("$device_uuid")
+  done
+  selected_gpu_uuid=$(IFS=,; echo "${selected_uuids[*]}")
   gpu_clean_before=1
   gpu_clean_during=1
 fi
@@ -247,7 +255,7 @@ cmd=(
   "STAGE3_MOE_GPU_CLEAN_BEFORE=$gpu_clean_before"
   "STAGE3_MOE_GPU_CLEAN_DURING=$gpu_clean_during"
   "STAGE3_MOE_GPU_CLEAN_AFTER=0"
-  "$python_bin" -m torch.distributed.run --standalone --nproc-per-node 1
+  "$python_bin" -m torch.distributed.run --standalone --nproc-per-node "$gpu_count"
   stage3_moe/pretrain_gpt.py
   --stage3-arm "$arm"
   --stage3-result-path "$inprocess_result_path"
@@ -272,7 +280,7 @@ echo "STAGE3_MOE_SITE=$stage3_site STAGE3_MOE_IMAGE=$stage3_image"
 echo "MCORE_COMMIT=$STAGE3_MOE_MCORE_COMMIT STATUS=$mcore_commit_status"
 echo "EO_COMMIT=$STAGE3_MOE_EO_COMMIT STATUS=$eo_commit_status"
 echo "ARM=$arm DATA=$data_mode PROTOCOL=$protocol WARMUP_STEPS=$warmup_steps MEASURE_STEPS=$measure_steps TRAIN_ITERS=$train_iters"
-echo "DENOMINATORS gpu=1 micro_batch=${STAGE3_MOE_MICRO_BATCH:-1} global_batch=${STAGE3_MOE_GLOBAL_BATCH:-1} sequence_length=2048 total_parameters=$STAGE3_MOE_TOTAL_PARAMETERS active_parameters=$STAGE3_MOE_ACTIVE_PARAMETERS"
+echo "DENOMINATORS gpu=$gpu_count micro_batch=${STAGE3_MOE_MICRO_BATCH:-1} global_batch=${STAGE3_MOE_GLOBAL_BATCH:-1} sequence_length=2048 total_parameters=$STAGE3_MOE_TOTAL_PARAMETERS active_parameters=$STAGE3_MOE_ACTIVE_PARAMETERS"
 echo "GRADIENT_ACCUMULATION_FUSION=$grad_accum_fusion"
 
 cd "$root"

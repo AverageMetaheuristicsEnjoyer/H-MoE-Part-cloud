@@ -55,7 +55,7 @@ STAGE3_MOE_PARALLEL_ARGS=(
   --tensor-model-parallel-size 1
   --pipeline-model-parallel-size 1
   --context-parallel-size 1
-  --expert-model-parallel-size 1
+  --expert-model-parallel-size ${STAGE3_MOE_EP:-1}
   --expert-tensor-parallel-size 1
 )
 
