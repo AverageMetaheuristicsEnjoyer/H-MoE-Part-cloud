@@ -92,6 +92,15 @@ esac
 run_id="stage3-$arm-$mode"
 mkdir -p "$log_root/$run_id" "$trunk_dir"
 export PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root"
+# Transformer Engine loads cudart and friends from the pip nvidia packages; without
+# these the run dies with "cudart shared object not found".
+unset PYTHONNOUSERSITE
+nvidia_lib_path=$(find /home/user/conda/lib/python3.12/site-packages/nvidia \
+  -mindepth 2 -maxdepth 2 -type d -name lib -print 2>/dev/null | paste -sd: -)
+export LD_LIBRARY_PATH=${nvidia_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+export CUDNN_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cudnn
+export CURAND_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/curand
+export NVRTC_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cuda_nvrtc
 # Without credentials wandb.init() would abort the run, so fall back to offline
 # logging: the run still records everything and can be `wandb sync`ed later.
 if [[ -f /home/jovyan/.wandb-key ]]; then
