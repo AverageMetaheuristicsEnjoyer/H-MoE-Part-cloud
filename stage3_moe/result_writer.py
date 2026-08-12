@@ -48,6 +48,9 @@ def _role(raw):
     return "adamw_fallback"
 
 
+TOKEN_TALLY = "stage3_tokens_per_expert"
+
+
 def _moe_routers(model_chunks):
     """MCore registers `local_tokens_per_expert` on every router when expert bias is on."""
     for chunk_index, chunk in enumerate(model_chunks):
@@ -55,6 +58,31 @@ def _moe_routers(model_chunks):
             counts = getattr(module, "local_tokens_per_expert", None)
             if torch.is_tensor(counts):
                 yield f"model_chunk{chunk_index}.{name}", module
+
+
+def install_router_tallies(model_chunks):
+    """Accumulate per-expert token counts that MCore itself discards every step.
+
+    `reset_model_temporary_tensors` zeroes `local_tokens_per_expert` inside each
+    training step once the expert bias has been updated, so the buffer is empty by
+    the time results are written. Wrapping `_apply_expert_bias` and taking the delta
+    it produces keeps MCore's own counting - including the padding mask and the
+    grad-enabled guard - while surviving the reset.
+    """
+    for _, module in _moe_routers(model_chunks):
+        if hasattr(module, TOKEN_TALLY):
+            continue
+        setattr(module, TOKEN_TALLY, torch.zeros_like(module.local_tokens_per_expert))
+        original = module._apply_expert_bias
+
+        def tally(routing_map, padding_mask=None, _module=module, _original=original):
+            before = _module.local_tokens_per_expert.detach().clone()
+            result = _original(routing_map, padding_mask=padding_mask)
+            tallied = getattr(_module, TOKEN_TALLY)
+            tallied += _module.local_tokens_per_expert.detach() - before
+            return result
+
+        module._apply_expert_bias = tally
 
 
 def _storage_key(tensor):
@@ -346,17 +374,15 @@ class Probe:
         self.parameter_names = {}
         self.written = False
         self.model_chunks = []
-        self.routing_snapshot = {}
 
     def reset(self):
         torch.cuda.synchronize()
         torch.cuda.reset_peak_memory_stats()
-        # `local_tokens_per_expert` accumulates for the life of the process, so record the
-        # warm-up total here and report only the delta over the measured window.
-        self.routing_snapshot = {
-            name: module.local_tokens_per_expert.detach().clone()
-            for name, module in _moe_routers(self.model_chunks)
-        }
+        # Drop the warm-up tally so routing describes the measured window only.
+        for _, module in _moe_routers(self.model_chunks):
+            tallied = getattr(module, TOKEN_TALLY, None)
+            if tallied is not None:
+                tallied.zero_()
 
     def routing_metrics(self):
         empty = {
@@ -369,10 +395,11 @@ class Probe:
         }
         names, rows = [], []
         for name, module in _moe_routers(self.model_chunks):
-            counts = module.local_tokens_per_expert.detach().to(torch.float64)
-            baseline = self.routing_snapshot.get(name)
+            tallied = getattr(module, TOKEN_TALLY, None)
+            if tallied is None:
+                continue
             names.append(name)
-            rows.append(counts - baseline if baseline is not None else counts)
+            rows.append(tallied.detach().to(torch.float64))
         if not rows:
             return empty
         matrix = torch.stack(rows)
@@ -533,6 +560,7 @@ def install_probe(*, arm, result_path, warmup_steps, measured_steps, program_sta
         if probe.arm.endswith("_state_fp8"):
             assert_fp8_adam_bootstrap(optimizer)
         probe.model_chunks = list(model)
+        install_router_tallies(probe.model_chunks)
         for chunk_index, chunk in enumerate(model):
             for name, parameter in chunk.named_parameters():
                 stable_name = f"model_chunk{chunk_index}.{name}"
