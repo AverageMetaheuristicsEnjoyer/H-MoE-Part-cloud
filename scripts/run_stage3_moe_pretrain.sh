@@ -80,7 +80,9 @@ case "$mode" in
     ;;
   smoke)
     # Exercises the whole path cheaply: real data, 2 GPUs, checkpoint save and
-    # resume on the alternate volume, loggers. Re-run it to test resume.
+    # resume on the alternate volume, loggers. Three checkpoints of ~7.3 GB per
+    # run filled the 100 GB volume twice, so they are removed when the run ends;
+    # set STAGE3_MOE_KEEP_SMOKE_CKPT=1 to keep them and re-run to test resume.
     train_iters=25
     target_iters=$full_iters
     decay_iters=$full_decay_iters
@@ -251,4 +253,10 @@ code=$?
 set -e
 echo "TRAIN_EXIT=$code"
 tail -n 150 "$train_log"
+
+if [[ $mode == smoke && ${STAGE3_MOE_KEEP_SMOKE_CKPT:-0} != 1 ]]; then
+  echo "SMOKE_CKPT=removing $smoke_dir"
+  rm -rf "$smoke_dir"
+  df -h "$ckpt_root" | tail -1
+fi
 exit 0
