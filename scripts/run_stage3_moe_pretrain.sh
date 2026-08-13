@@ -184,6 +184,7 @@ export STAGE3_MOE_DRIVER=$(nvidia-smi --query-gpu=driver_version --format=csv,no
 export STAGE3_MOE_CUBLASLT=$(python -c 'import transformer_engine_torch as t; print(t.get_cublasLt_version())' 2>/dev/null || echo unknown)
 export STAGE3_MOE_GPU_CLEAN_BEFORE=1 STAGE3_MOE_GPU_CLEAN_DURING=1 STAGE3_MOE_GPU_CLEAN_AFTER=1
 echo "ARM=$arm MODE=$mode GPUS=$gpu_count micro_batch=$micro_batch global_batch=$global_batch"
+echo "FP8_DEQUANT_CHUNK=${STAGE3_MOE_FP8_DEQUANT_CHUNK:-0} (0 = every state in FP32 at once)"
 echo "SCHEDULE target_iters=$target_iters decay_iters=$decay_iters warmup=$warmup_iters train_iters=$train_iters"
 echo "CKPT save=${save_args[*]} load=${load_args[*]}"
 

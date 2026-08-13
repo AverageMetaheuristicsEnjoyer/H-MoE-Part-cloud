@@ -1,3 +1,4 @@
+import os
 from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass
@@ -389,11 +390,14 @@ class FP8StateDictMixin:
 class FP8StateOptimizerMixin(FP8StateDictMixin):
     state_specs = ()
     group_size = GROUP_SIZE
+    # Parameters whose state is held in FP32 at the same time. 0 means all of them,
+    # which is what every measurement so far was taken with.
+    dequantize_chunk = int(os.environ.get("STAGE3_MOE_FP8_DEQUANT_CHUNK", "0"))
 
-    def step(self, closure=None):
+    def _step_over(self, groups, closure):
         active = [
             (parameter, self.state[parameter])
-            for group in self.param_groups
+            for group in groups
             for parameter in group["params"]
             if parameter.grad is not None
         ]
@@ -406,7 +410,12 @@ class FP8StateOptimizerMixin(FP8StateDictMixin):
                         )
 
         with torch.autograd.profiler.record_function("optimizer_math"):
-            loss = super().step(closure)
+            every_group = self.param_groups
+            self.param_groups = groups
+            try:
+                loss = super().step(closure)
+            finally:
+                self.param_groups = every_group
 
         with torch.autograd.profiler.record_function("optimizer_state_quantize"):
             for _, state in active:
@@ -418,6 +427,43 @@ class FP8StateOptimizerMixin(FP8StateDictMixin):
                     quantize_fp8_state_(
                         state, spec, value, group_size=self.group_size
                     )
+        return loss
+
+    def _param_group_chunks(self, chunk):
+        """Yield views of ``param_groups`` holding at most *chunk* parameters.
+
+        Each parameter's update reads only its own state and its group's
+        hyper-parameters, and neither the wrapped Muon nor AdamW writes to the
+        group dict during a step, so stepping a subset at a time is equivalent
+        to stepping everything at once.
+        """
+        selection = []
+        for index, group in enumerate(self.param_groups):
+            for parameter in group["params"]:
+                selection.append((index, parameter))
+                if len(selection) == chunk:
+                    yield self._narrowed(selection)
+                    selection = []
+        if selection:
+            yield self._narrowed(selection)
+
+    def _narrowed(self, selection):
+        params_by_group = defaultdict(list)
+        for index, parameter in selection:
+            params_by_group[index].append(parameter)
+        return [
+            {**self.param_groups[index], "params": params}
+            for index, params in params_by_group.items()
+        ]
+
+    def step(self, closure=None):
+        if self.dequantize_chunk <= 0:
+            return self._step_over(self.param_groups, closure)
+        loss = None
+        for groups in self._param_group_chunks(self.dequantize_chunk):
+            loss = self._step_over(groups, closure)
+            # Re-running a closure would repeat the forward and backward pass.
+            closure = None
         return loss
 
 

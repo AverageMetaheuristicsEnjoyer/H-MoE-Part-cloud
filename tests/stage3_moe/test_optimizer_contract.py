@@ -90,6 +90,58 @@ def test_adam_hybrid_state_and_checkpoint_resume():
     assert resumed.state[resumed_parameter]["exp_avg_sq"].dtype == torch.float8_e5m2
 
 
+def test_dequantize_chunks_cover_every_parameter_once():
+    from stage3_moe.optimizer_states import FP8StateOptimizerMixin
+
+    optimizer = object.__new__(FP8StateOptimizerMixin)
+    first = [torch.nn.Parameter(torch.zeros(2)) for _ in range(3)]
+    second = [torch.nn.Parameter(torch.zeros(2)) for _ in range(2)]
+    optimizer.param_groups = [
+        {"params": first, "lr": 0.1},
+        {"params": second, "lr": 0.2, SPLIT_SWIGLU_FC1: True},
+    ]
+
+    chunks = list(optimizer._param_group_chunks(2))
+
+    visited = [p for groups in chunks for group in groups for p in group["params"]]
+    assert [id(p) for p in visited] == [id(p) for p in first + second]
+    assert all(
+        sum(len(group["params"]) for group in groups) <= 2 for groups in chunks
+    )
+    # A narrowed view must still carry its own group's hyper-parameters, and a group
+    # split across chunks contributes one view per chunk.
+    assert {group["lr"] for groups in chunks for group in groups} == {0.1, 0.2}
+    assert all(
+        group.get(SPLIT_SWIGLU_FC1, False) == (group["lr"] == 0.2)
+        for groups in chunks
+        for group in groups
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_chunked_dequantization_matches_stepping_everything_at_once():
+    optimizer_class = make_fp8_adamw(torch.optim.AdamW)
+    torch.manual_seed(0)
+    start = [torch.randn(257, device="cuda") for _ in range(4)]
+    grads = [torch.randn(257, device="cuda") for _ in range(4)]
+
+    stepped = {}
+    for chunk in (0, 1, 3):
+        parameters = [torch.nn.Parameter(tensor.clone()) for tensor in start]
+        optimizer = optimizer_class(parameters, lr=1e-3, betas=(0.9, 0.95))
+        optimizer.dequantize_chunk = chunk
+        for _ in range(3):
+            for parameter, grad in zip(parameters, grads):
+                parameter.grad = grad.clone()
+            optimizer.step()
+        stepped[chunk] = [parameter.detach().clone() for parameter in parameters]
+
+    for chunk in (1, 3):
+        assert all(
+            torch.equal(whole, part) for whole, part in zip(stepped[0], stepped[chunk])
+        )
+
+
 def test_router_and_grouped_expert_routing_predicates():
     matrix = torch.nn.Parameter(torch.empty(64, 1024))
     assert is_router_weight(matrix, "decoder.layers.1.mlp.router.weight")

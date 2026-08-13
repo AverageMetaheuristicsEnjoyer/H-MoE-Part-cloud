@@ -16,6 +16,14 @@ for d in "$lg"/*/; do
   [ -d "$d" ] || continue
   echo "--- $d"
   ls -la "$d" | head -8
+  # Whether a resume actually loaded is decided at startup, so it never shows up
+  # in the tail the launcher prints.
+  newest=$(ls -1t "$d"/train-*.log 2>/dev/null | head -1)
+  if [ -n "$newest" ]; then
+    echo "  LOG $newest"
+    grep -iE "loading checkpoint|could not find|will not load|checkpoint .*at iteration|setting training iteration|does not match the optimizer|live group sizes" \
+      "$newest" 2>/dev/null | head -6 | sed 's/^/    /'
+  fi
   if [ -f "$d/results.jsonl" ]; then
     python - "$d/results.jsonl" <<'PYX'
 import json, sys
