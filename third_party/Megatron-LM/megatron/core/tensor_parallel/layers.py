@@ -954,16 +954,18 @@ class ColumnParallelLinear(torch.nn.Module):
         )
 
         if config.gradient_accumulation_fusion and not _grad_accum_fusion_available:
-            raise RuntimeError(
-                "ColumnParallelLinear was called with gradient_accumulation_fusion set "
-                "to True but the custom CUDA extension fused_weight_gradient_mlp_cuda "
-                "module is not found. To use gradient_accumulation_fusion you must "
-                "install APEX with --cpp_ext and --cuda_ext. For example: "
-                'pip install --global-option="--cpp_ext" --global-option="--cuda_ext ." '
-                "Note that the extension requires CUDA>=11. Otherwise, you must turn off "
-                "gradient accumulation fusion."
+            # Refusing to build would disable the fusion for the whole model, including
+            # the Transformer Engine layers that implement it themselves and need no
+            # APEX. Fall back to unfused accumulation for this layer alone instead.
+            warnings.warn(
+                "ColumnParallelLinear cannot fuse gradient accumulation: the custom CUDA "
+                "extension fused_weight_gradient_mlp_cuda is not found (install APEX with "
+                "--cpp_ext and --cuda_ext to get it). This layer will accumulate unfused; "
+                "Transformer Engine layers are unaffected."
             )
-        self.gradient_accumulation_fusion = config.gradient_accumulation_fusion
+        self.gradient_accumulation_fusion = (
+            config.gradient_accumulation_fusion and _grad_accum_fusion_available
+        )
 
         if self.allreduce_dgrad and self.sequence_parallel:
             raise RuntimeError(
@@ -1194,7 +1196,11 @@ class RowParallelLinear(torch.nn.Module):
         self.config = config
         self.is_expert = is_expert
         self.expert_parallel = config.expert_model_parallel_size > 1
-        self.gradient_accumulation_fusion = config.gradient_accumulation_fusion
+        # Same fallback as ColumnParallelLinear: without the APEX extension this layer
+        # accumulates unfused rather than dying in the backward pass.
+        self.gradient_accumulation_fusion = (
+            config.gradient_accumulation_fusion and _grad_accum_fusion_available
+        )
         self.sequence_parallel = config.sequence_parallel
         self.tp_group = tp_group
 

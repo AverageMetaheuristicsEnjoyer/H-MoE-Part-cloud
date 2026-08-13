@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Stage 3 MoE matched pretraining, WSD trunk-and-branch.
 #
-#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b
+#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench
+#
+# smoke exercises save and resume; bench measures throughput and peak memory with no
+# checkpoint traffic. STAGE3_MOE_RUN_SUFFIX keeps concurrent variants from sharing a
+# run directory or a checkpoint.
 #
 # The schedule follows docs/design.md:182 -- linear warmup on steps 1-173,
 # constant peak LR through step 13,794, exponential decay over the final 20% to
@@ -80,16 +84,27 @@ case "$mode" in
     train_iters=25
     target_iters=$full_iters
     decay_iters=$full_decay_iters
-    smoke_dir="$ckpt_root/smoke/$arm"
+    smoke_dir="$ckpt_root/smoke/$arm${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
     save_args=(--save "$smoke_dir" --save-interval 10)
     load_args=(--load "$smoke_dir")
+    probe_warmup=5
+    probe_measure=10
+    ;;
+  bench)
+    # Throughput and peak memory only. No checkpoint traffic, so an NFS write never
+    # lands inside the measured window and topologies stay comparable.
+    train_iters=25
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    save_args=()
+    load_args=()
     probe_warmup=5
     probe_measure=10
     ;;
   *) echo "unknown mode: $mode" >&2; exit 2 ;;
 esac
 
-run_id="stage3-$arm-$mode"
+run_id="stage3-$arm-$mode${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
 mkdir -p "$log_root/$run_id" "$trunk_dir"
 export PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root"
 # Transformer Engine loads cudart and friends from the pip nvidia packages; without
@@ -124,11 +139,28 @@ else
   echo "LOGGERS=absent (wandb/tensorboard not importable); running without them"
 fi
 
-# Apex's fused kernel is absent from the cloud image; MCore aborts unless told.
+# Apex's fused kernel is absent from the cloud image. Transformer Engine implements the
+# fusion itself, so only the LM head (a plain ColumnParallelLinear) actually needs Apex,
+# and the patched layer now degrades on its own instead of aborting the run. Asking for
+# the fusion therefore buys it for every TE layer, including the expert GEMMs.
 fusion_args=()
-if ! python -c 'import fused_weight_gradient_mlp_cuda' >/dev/null 2>&1; then
+if [[ ${STAGE3_MOE_WGRAD_FUSION:-0} == 1 ]]; then
+  echo "GRADIENT_ACCUMULATION_FUSION=requested (TE layers fuse, LM head falls back)"
+elif ! python -c 'import fused_weight_gradient_mlp_cuda' >/dev/null 2>&1; then
   fusion_args=(--no-gradient-accumulation-fusion)
   echo "GRADIENT_ACCUMULATION_FUSION=disabled"
+fi
+
+# Throughput levers, kept off until a paired measurement justifies each one.
+speed_args=()
+if [[ ${STAGE3_MOE_OVERLAP_GRAD_REDUCE:-0} == 1 ]]; then
+  speed_args+=(--overlap-grad-reduce)
+fi
+if [[ ${STAGE3_MOE_MOE_FUSIONS:-0} == 1 ]]; then
+  speed_args+=(--moe-permute-fusion --moe-shared-expert-overlap)
+fi
+if [[ ${#speed_args[@]} -gt 0 ]]; then
+  echo "SPEED_ARGS=${speed_args[*]}"
 fi
 
 gpu_count=$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)
@@ -206,6 +238,7 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   "${optimizer_args[@]}" \
   "${compute[@]}" \
   "${fusion_args[@]}" \
+  "${speed_args[@]}" \
   --ckpt-format torch \
   "${save_args[@]}" \
   "${load_args[@]}" \
