@@ -103,6 +103,7 @@ def main():
 
         install_muon_contract(fp8_states=state_fp8)
 
+    from stage3_moe.memory_audit import install as install_memory_audit
     from stage3_moe.result_writer import install_probe
 
     install_probe(
@@ -113,6 +114,7 @@ def main():
         program_start=PROGRAM_START,
         argv=mcore_argv,
     )
+    install_memory_audit()
     print(
         f"stage3 MoE arm={stage3_args.stage3_arm} "
         f"warmup={stage3_args.stage3_warmup_steps} "

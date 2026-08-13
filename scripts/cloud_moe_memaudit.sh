@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# One-off: find what the checkpoint save leaves resident in the FP8 arm.
+#
+#   mlsub run ... --entry scripts/cloud_moe_memaudit.sh --gpus 1
+#
+# Reproduces the smoke configuration that measured 1.0969 (mb=4, chunk=0, 1 GPU),
+# with STAGE3_MOE_MEM_AUDIT=1 bracketing every save. The launcher hides the run
+# behind its own log, so the MEMAUDIT lines are pulled back out at the end. The
+# checkpoints are throwaway and are removed on both sides of the run.
+set -u
+root=$(cd "$(dirname "$0")/.." && pwd)
+ckpt_root=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs3/hmoe-checkpoints/stage3}
+log_root=${STAGE3_MOE_LOG_ROOT:-/home/jovyan/hmoe-cloud/pretrain}
+arm=muon_bf16_state_fp8
+
+export STAGE3_MOE_RUN_SUFFIX=memaudit
+export STAGE3_MOE_MEM_AUDIT=1
+export STAGE3_MOE_MICRO_BATCH=${STAGE3_MOE_MICRO_BATCH:-4}
+export STAGE3_MOE_FP8_DEQUANT_CHUNK=${STAGE3_MOE_FP8_DEQUANT_CHUNK:-0}
+
+smoke_dir="$ckpt_root/smoke/$arm-$STAGE3_MOE_RUN_SUFFIX"
+run_dir="$log_root/stage3-$arm-smoke-$STAGE3_MOE_RUN_SUFFIX"
+
+echo "=== volume before ==="; df -h /workspace-SR006.nfs3 | tail -1
+rm -rf "$smoke_dir"
+
+"$root/scripts/run_stage3_moe_pretrain.sh" "$arm" smoke
+echo "ARM_EXIT=$?"
+
+echo "=== MEMAUDIT ==="
+newest=$(ls -1t "$run_dir"/train-*.log 2>/dev/null | head -1)
+if [[ -n $newest ]]; then
+  grep -aE "MEMAUDIT|saving checkpoint at iteration|successfully saved checkpoint" "$newest" || echo "(no MEMAUDIT lines)"
+else
+  echo "(no train log under $run_dir)"
+fi
+
+echo "=== RESULT ==="
+cat "$run_dir/results.jsonl" 2>/dev/null || echo "(no results.jsonl)"
+
+rm -rf "$smoke_dir"
+echo "=== volume after ==="; df -h /workspace-SR006.nfs3 | tail -1
+echo "EXIT=0"
+exit 0
