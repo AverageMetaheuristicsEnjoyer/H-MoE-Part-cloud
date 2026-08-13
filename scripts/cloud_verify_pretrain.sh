@@ -39,6 +39,7 @@ for line in open(sys.argv[1]):
     print(f"  SUMMARY {d['arm_id']} mb={n['micro_batch_sequences_per_gpu']}"
           f" gb={n['global_batch_sequences']}"
           f" max_alloc={m['memory']['max_allocated_bytes']}"
+          f" max_resvd={m['memory']['max_reserved_bytes']}"
           f" persistent={d['optimizer_state']['persistent_total_bytes']}"
           f" tok_s={t['tokens_per_second']:.0f}"
           f" opt_s={step} full_s={full} opt_share={share}")
