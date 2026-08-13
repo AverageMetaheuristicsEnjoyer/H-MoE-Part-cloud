@@ -17,6 +17,9 @@ find "$ck" -maxdepth 3 -type d -name "iter_*" 2>/dev/null | head
 echo
 echo "=== volume ==="; df -h /workspace-SR006.nfs3 | tail -1
 echo
+echo
+if [ -f /home/jovyan/.wandb-key ]; then echo "=== wandb key: present ==="; else echo "=== wandb key: absent -> runs are offline ==="; fi
+echo
 echo "=== run dirs ==="; ls -la "$lg" 2>/dev/null | head
 for d in "$lg"/*/; do
   [ -d "$d" ] || continue
@@ -30,7 +33,12 @@ for d in "$lg"/*/; do
     echo "  LOG $newest"
     grep -iE "loading checkpoint|could not find|will not load|checkpoint .*at iteration|setting training iteration|does not match the optimizer|live group sizes" \
       "$newest" 2>/dev/null | head -6 | sed 's/^/    /'
+    # A running job's own log is unreadable through the platform API, so the last
+    # progress line here is the only way to see how far a live run has got.
+    grep -E "iteration +[0-9]+/" "$newest" 2>/dev/null | tail -2 | cut -c1-220 | sed 's/^/    /'
   fi
+  # wandb names an offline run dir offline-run-*, an online one run-*.
+  ls -1 "$d/wandb" 2>/dev/null | grep -E "^(offline-)?run-" | tail -1 | sed 's/^/  WANDB /'
   if [ -f "$d/results.jsonl" ]; then
     python - "$d/results.jsonl" <<'PYX'
 import json, sys
