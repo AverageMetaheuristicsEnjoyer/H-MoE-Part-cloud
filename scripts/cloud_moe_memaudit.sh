@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# One-off: find what the checkpoint save leaves resident in the FP8 arm.
+# Acceptance test for the checkpoint-save memory regression.
 #
-#   mlsub run ... --entry scripts/cloud_moe_memaudit.sh --gpus 1
+#   mlsub run ... --entry scripts/cloud_moe_memaudit.sh --gpus 1 --image torch28
 #
-# Reproduces the smoke configuration that measured 1.0969 (mb=4, chunk=0, 1 GPU),
-# with STAGE3_MOE_MEM_AUDIT=1 bracketing every save. The launcher hides the run
-# behind its own log, so the MEMAUDIT lines are pulled back out at the end. The
-# checkpoints are throwaway and are removed on both sides of the run.
+# Reproduces the smoke configuration that measured 1.0969 FAIL (mb=4, chunk=0,
+# 1 GPU) and reports the peak it reaches now; a fixed run peaks where a bench run
+# does, at 21,117,359,104 B. Pass --env STAGE3_MOE_MEM_AUDIT=1 to also bracket
+# every save with the live-FP8 census. The launcher hides the run behind its own
+# log, so the MEMAUDIT lines are pulled back out at the end. The checkpoints are
+# throwaway and are removed on both sides of the run.
 set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
 ckpt_root=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs3/hmoe-checkpoints/stage3}
@@ -14,7 +16,7 @@ log_root=${STAGE3_MOE_LOG_ROOT:-/home/jovyan/hmoe-cloud/pretrain}
 arm=muon_bf16_state_fp8
 
 export STAGE3_MOE_RUN_SUFFIX=memaudit
-export STAGE3_MOE_MEM_AUDIT=1
+export STAGE3_MOE_MEM_AUDIT=${STAGE3_MOE_MEM_AUDIT:-0}
 export STAGE3_MOE_MICRO_BATCH=${STAGE3_MOE_MICRO_BATCH:-4}
 export STAGE3_MOE_FP8_DEQUANT_CHUNK=${STAGE3_MOE_FP8_DEQUANT_CHUNK:-0}
 

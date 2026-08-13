@@ -2834,11 +2834,18 @@ def save_checkpoint_and_time(
         report_memory(f"(after save_checkpoint for iteration {iteration})")
     num_checkpoints_memory_reported += 1
 
-    if args.fp8:
-        # Run garbage collection after checkpoint saving to free memory from
-        # dequantized bf16 tensors that were temporarily created during fp8
-        # model checkpoint saving.
-        gc.collect()
+    # Run garbage collection after checkpoint saving to free memory from
+    # dequantized bf16 tensors that were temporarily created during fp8
+    # model checkpoint saving.
+    #
+    # Stage 3 patch: this was gated on args.fp8, which covers FP8 compute only.
+    # Saving leaves a reference cycle holding the optimizer state, and an
+    # optimizer that replaces its state tensors rather than updating them in
+    # place -- which quantized state does, and FP32 state does not -- then keeps
+    # the previous copy alive for as long as the cycle goes uncollected. That
+    # cost the FP8 arm a second full state, 1,175,910,016 B, and the memory gate
+    # with it. Collecting is cheap once per save interval, so do it always.
+    gc.collect()
 
     timers.log([timer_key])
 
