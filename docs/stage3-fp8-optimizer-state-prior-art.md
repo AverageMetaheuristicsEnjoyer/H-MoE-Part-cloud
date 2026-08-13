@@ -233,9 +233,22 @@ faster. The gain, whatever it is, is in forward and backward. Against the three
 replicated chunk=0 runs (full step 30.02 / 29.15 / 26.06 s — a 15 % spread on an
 identical configuration, `max_allocated` identical to the byte) chunk=128's
 23.91 s is +9 % over the best and +19 % over the mean, not the +25.6 % that came
-from comparing single runs. The mechanism is most likely allocator churn
-(~3.7 GB of fresh FP32 buffers per step against ~0.03 GB), which
-`max_reserved_bytes` would confirm.
+from comparing single runs.
+
+`max_reserved_bytes` does support the allocator explanation, on the memory side
+at least. Reserved minus allocated, mb=4:
+
+| chunk | allocated | reserved | allocator overhead |
+|---|---|---|---|
+| 0 | 21,117,359,104 | 23,783,800,832 | 2.67 GB (12.6 %) |
+| 32 | 21,117,156,352 | 22,871,539,712 | 1.75 GB (8.3 %) |
+| 128 | 21,117,569,536 | 22,970,105,856 | 1.85 GB (8.8 %) |
+
+Chunking gives back about **0.8 GB of reserved-but-unallocated memory** for the
+same allocated peak, consistently. It does not explain the throughput spread
+though: within chunk=0 the fastest run (16,344 tok/s) and the slowest
+(14,188 tok/s) differ by 2.1 MB of reserved. So the memory effect is real and
+measured; the speed claim still needs replicates before it is quoted.
 
 **Worth taking from the prior art:**
 
