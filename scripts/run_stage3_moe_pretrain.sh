@@ -110,8 +110,11 @@ export PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-opti
 # Transformer Engine loads cudart and friends from the pip nvidia packages; without
 # these the run dies with "cudart shared object not found".
 unset PYTHONNOUSERSITE
+# That path exists only in the torch28 image. On any other one find exits 1, and
+# under `set -eo pipefail` with stderr silenced the run used to die here without
+# printing anything at all; let it carry on and fail loudly further down instead.
 nvidia_lib_path=$(find /home/user/conda/lib/python3.12/site-packages/nvidia \
-  -mindepth 2 -maxdepth 2 -type d -name lib -print 2>/dev/null | paste -sd: -)
+  -mindepth 2 -maxdepth 2 -type d -name lib -print 2>/dev/null | paste -sd: - || true)
 export LD_LIBRARY_PATH=${nvidia_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 export CUDNN_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cudnn
 export CURAND_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/curand
