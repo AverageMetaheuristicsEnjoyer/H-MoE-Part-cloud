@@ -21,11 +21,22 @@ export STAGE3_MOE_FP8_DEQUANT_CHUNK=${STAGE3_MOE_FP8_DEQUANT_CHUNK:-0}
 smoke_dir="$ckpt_root/smoke/$arm-$STAGE3_MOE_RUN_SUFFIX"
 run_dir="$log_root/stage3-$arm-smoke-$STAGE3_MOE_RUN_SUFFIX"
 
-echo "=== volume before ==="; df -h /workspace-SR006.nfs3 | tail -1
+echo "=== volume before ==="
+df -h /workspace-SR006.nfs3 | tail -1
+df -h /home/jovyan | tail -1
+ls -ld /home/user/conda/lib/python3.12/site-packages/nvidia 2>&1
 rm -rf "$smoke_dir"
 
-"$root/scripts/run_stage3_moe_pretrain.sh" "$arm" smoke
-echo "ARM_EXIT=$?"
+# The launcher runs under `set -euo pipefail` and silences several commands, so a
+# failure before its first echo says nothing at all. Keep a trace for that case.
+trace=/tmp/launcher-trace.log
+bash -x "$root/scripts/run_stage3_moe_pretrain.sh" "$arm" smoke 2>"$trace"
+code=$?
+echo "ARM_EXIT=$code"
+if [[ $code -ne 0 ]]; then
+  echo "=== launcher trace (tail) ==="
+  tail -n 60 "$trace"
+fi
 
 echo "=== MEMAUDIT ==="
 newest=$(ls -1t "$run_dir"/train-*.log 2>/dev/null | head -1)
