@@ -35,10 +35,12 @@ for d in "$lg"/*/; do
       "$newest" 2>/dev/null | head -6 | sed 's/^/    /'
     # A running job's own log is unreadable through the platform API, so the last
     # progress line here is the only way to see how far a live run has got.
-    grep -E "iteration +[0-9]+/" "$newest" 2>/dev/null | tail -2 | cut -c1-220 | sed 's/^/    /'
+    grep -E "iteration +[0-9]+/" "$newest" 2>/dev/null | tail -1 | cut -c1-420 | sed 's/^/    /'
   fi
-  # wandb names an offline run dir offline-run-*, an online one run-*.
-  ls -1 "$d/wandb" 2>/dev/null | grep -E "^(offline-)?run-" | tail -1 | sed 's/^/  WANDB /'
+  # wandb names an offline run dir offline-run-*, an online one run-*; its size says
+  # whether history is actually being recorded.
+  du -sh "$d/wandb"/*run-* 2>/dev/null | tail -1 | sed 's/^/  WANDB /'
+  du -sh "$d/tensorboard" 2>/dev/null | sed 's/^/  TB /'
   if [ -f "$d/results.jsonl" ]; then
     python - "$d/results.jsonl" <<'PYX'
 import json, sys
