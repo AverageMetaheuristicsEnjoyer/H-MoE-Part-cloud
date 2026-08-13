@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # Confirm what a pretraining run actually left behind: checkpoints, result record,
 # logger output. Read-only.
+#
+#   ... --entry scripts/cloud_verify_pretrain.sh --args "SUBSTRING"
+#
+# With every run dir reported the output outgrew the platform's log limit and rows
+# were silently dropped, so pass a substring to report only the matching runs.
 set -u
+want=${1:-}
 ck=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs3/hmoe-checkpoints/stage3}
 lg=${STAGE3_MOE_LOG_ROOT:-/home/jovyan/hmoe-cloud/pretrain}
 echo "=== checkpoints ==="
@@ -14,6 +20,7 @@ echo
 echo "=== run dirs ==="; ls -la "$lg" 2>/dev/null | head
 for d in "$lg"/*/; do
   [ -d "$d" ] || continue
+  case "$d" in *"$want"*) ;; *) continue ;; esac
   echo "--- $d"
   ls -la "$d" | head -8
   # Whether a resume actually loaded is decided at startup, so it never shows up
