@@ -29,7 +29,8 @@ for arm in "$@"; do
     echo "--- LOAD $arm"
     grep -iE "loading checkpoint|will not load|at iteration|does not match the optimizer" "$newest" | head -4
     echo "--- STEPS $arm"
-    grep -E "iteration +[0-9]+/" "$newest" | sed -E 's/.*(iteration +[0-9]+\/[0-9]+).*elapsed time per iteration \(ms\): ([0-9.]+).*/\1 ms=\2/'
+    grep -E "iteration +[0-9]+/" "$newest" |
+      sed -E 's/.*iteration +([0-9]+)\/ *([0-9]+).*elapsed time per iteration \(ms\): ([0-9.]+).*/iter=\1\/\2 ms=\3/'
   fi
   [[ -f "$run_dir/results.jsonl" ]] && { echo "--- RESULT_JSONL $arm"; tail -1 "$run_dir/results.jsonl"; }
 done
