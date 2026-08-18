@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Stage 3 MoE matched pretraining, WSD trunk-and-branch.
 #
-#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench
+#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench
 #
 # smoke exercises save and resume; bench measures throughput and peak memory with no
-# checkpoint traffic. STAGE3_MOE_RUN_SUFFIX keeps concurrent variants from sharing a
-# run directory or a checkpoint.
+# checkpoint traffic; resume-bench does the same from the trunk branch point, so the
+# measured steps sit in the phase training actually runs in. STAGE3_MOE_RUN_SUFFIX keeps
+# concurrent variants from sharing a run directory or a checkpoint.
 #
 # The schedule follows docs/design.md:182 -- linear warmup on steps 1-173,
 # constant peak LR through step 13,794, exponential decay over the final 20% to
@@ -14,8 +15,8 @@
 # shorter budget just branches off earlier and runs its own decay tail.
 set -euo pipefail
 
-arm=${1:?usage: run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b}
-mode=${2:?usage: run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b}
+arm=${1:?usage: run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench}
+mode=${2:?usage: run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench}
 root=$(cd "$(dirname "$0")/.." && pwd)
 source "$root/configs/stage3-moe-1p029b.sh"
 
@@ -102,6 +103,21 @@ case "$mode" in
     load_args=()
     probe_warmup=5
     probe_measure=10
+    ;;
+  resume-bench)
+    # Steady-state timing. `bench` measures 25 cold iterations of an untrained model,
+    # which is a different regime: at iteration 2254 the router is balanced and the
+    # expert GEMMs are small, and FP8 delayed scaling measures very differently there.
+    # Resume the branch point, run a short window, never write a checkpoint.
+    train_iters=$((short_branch + ${STAGE3_MOE_BENCH_ITERS:-150}))
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    save_args=()
+    # The scheduler derives wd_incr_steps from train_iters, which no longer equals the
+    # trunk's, and refuses to load on the mismatch. Weight decay is constant here
+    # (start_wd = end_wd = 0.1) and every LR argument matches the trunk, so overriding
+    # rebuilds the identical schedule; num_steps still comes from the checkpoint.
+    load_args=(--load "$trunk_dir" --override-opt_param-scheduler)
     ;;
   *) echo "unknown mode: $mode" >&2; exit 2 ;;
 esac
