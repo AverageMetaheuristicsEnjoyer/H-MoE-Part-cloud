@@ -4,7 +4,9 @@
 # planning input for further training, and only nfs3 was being watched.
 set -u
 echo "=== all mounts ==="
-df -h / /tmp /home/jovyan /workspace-SR006.nfs2 /workspace-SR006.nfs3 2>&1
+df -h 2>/dev/null | grep -vE "^(tmpfs|devtmpfs|overlay .*/var/lib)" | head -25
+echo "--- named ---"
+df -h / /tmp /home/jovyan /workspace-SR006.nfs2 /workspace-SR006.nfs3 /home/jovyan/shares/SR006.nfs2 2>&1
 echo
 echo "=== what fills them ==="
 du -sh /home/jovyan/* 2>/dev/null | sort -h | tail -8
