@@ -21,6 +21,19 @@ if [[ -n ${STAGE3_MOE_WARMUP_STEPS:-} && -n ${STAGE3_MOE_MEASURE_STEPS:-} ]]; th
   step_args=(--warmup-steps "$STAGE3_MOE_WARMUP_STEPS" --measure-steps "$STAGE3_MOE_MEASURE_STEPS")
 fi
 data_mode=${STAGE3_MOE_DATA_MODE:-mock}
+if [[ $data_mode == real ]]; then
+  # The probe demands the manifest hash on real data; derive it exactly as the
+  # pretrain launcher does so probe and trunk provenance agree.
+  export STAGE3_MOE_DATA_ROOT=${STAGE3_MOE_DATA_ROOT:-/home/jovyan/data/fineweb-edu-gpt2-megatron/data}
+  export STAGE3_MOE_DATA_MANIFEST_SHA256=${STAGE3_MOE_DATA_MANIFEST_SHA256:-$(
+    if [[ -f "$STAGE3_MOE_DATA_ROOT/../artifact-manifest.json" ]]; then
+      sha256sum "$STAGE3_MOE_DATA_ROOT/../artifact-manifest.json" | awk '{print $1}'
+    else
+      printf '%s' 'AverageMetaheuristicsEnjoyer/fineweb-edu-gpt2-megatron' | sha256sum | awk '{print $1}'
+    fi)}
+  echo "DATA root=$STAGE3_MOE_DATA_ROOT manifest_sha256=$STAGE3_MOE_DATA_MANIFEST_SHA256"
+  ls -d "$STAGE3_MOE_DATA_ROOT" "$STAGE3_MOE_DATA_ROOT"/train* 2>&1 | head -5
+fi
 batch_tag="mb${STAGE3_MOE_MICRO_BATCH:-1}gb${STAGE3_MOE_GLOBAL_BATCH:-1}"
 echo "BATCH micro=${STAGE3_MOE_MICRO_BATCH:-1} global=${STAGE3_MOE_GLOBAL_BATCH:-1} steps=${step_args[*]:-default} data=$data_mode"
 
