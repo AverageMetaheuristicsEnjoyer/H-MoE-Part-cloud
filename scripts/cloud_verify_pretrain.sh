@@ -55,8 +55,8 @@ PYD
   # tail never showed, because it exits 0 whatever the training process did.
   if [ ! -f "$d/results.jsonl" ] && [ ! -f "$d/downstream/downstream.json" ] && [ -n "$newest" ]; then
     echo "  NO OUTPUT, tail of $newest:"
-    grep -aE "Error|Traceback|error|assert|Assertion|raise |Killed|out of memory" "$newest" | tail -12 | sed 's/^/    /'
-    tail -6 "$newest" | sed 's/^/    /'
+    grep -aiE "error|traceback|assert|raise |killed|out of memory|fp8|cublas|invalid|dimension|align" "$newest" | tail -18 | sed 's/^/    /'
+    tail -12 "$newest" | sed 's/^/    /'
   fi
   if [ -f "$d/results.jsonl" ]; then
     python - "$d/results.jsonl" <<'PYX'
