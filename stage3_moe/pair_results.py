@@ -53,11 +53,39 @@ def _positive_or_none(value, label):
         raise ValueError(f"{label}: expected a finite positive number")
 
 
-def _normalized_pair_argv(baseline_argv, treatment_argv, axis):
+# Options whose value names where a run reads or writes, never what it computes. Their
+# values are per-arm by construction -- each arm must load its own checkpoint and log under
+# its own name -- so comparing them verbatim rejects every honest pair. Masking the arm id
+# instead keeps the check strict: a path that differs by anything else still fails.
+_PER_ARM_VALUE_OPTIONS = (
+    "--load",
+    "--save",
+    "--tensorboard-dir",
+    "--wandb-exp-name",
+    "--wandb-save-dir",
+)
+
+_ARM_PLACEHOLDER = "<arm>"
+
+
+def _mask_arm_in_paths(argv, arm):
+    if not arm:
+        return list(argv)
+    masked = list(argv)
+    for index, token in enumerate(masked[:-1]):
+        if token in _PER_ARM_VALUE_OPTIONS:
+            masked[index + 1] = masked[index + 1].replace(arm, _ARM_PLACEHOLDER)
+    return masked
+
+
+def _normalized_pair_argv(baseline_argv, treatment_argv, axis,
+                          baseline_arm=None, treatment_arm=None):
     for label, argv in (("baseline", baseline_argv), ("treatment", treatment_argv)):
         for option in ("--fp8-format", "--fp8-recipe"):
             if option in argv and (axis != "fp8_gemm" or label != "treatment"):
                 raise ValueError(f"{label} argv contains forbidden {option}")
+    baseline_argv = _mask_arm_in_paths(baseline_argv, baseline_arm)
+    treatment_argv = _mask_arm_in_paths(treatment_argv, treatment_arm)
     if axis != "fp8_gemm":
         return list(baseline_argv), list(treatment_argv)
 
@@ -318,7 +346,11 @@ def compare_runs(baseline, treatment):
     if baseline["provenance"]["config_sha256"] != treatment["provenance"]["config_sha256"]:
         raise ValueError("pair matched config hashes differ")
     normalized_base_argv, normalized_treat_argv = _normalized_pair_argv(
-        baseline["provenance"]["argv"], treatment["provenance"]["argv"], axis
+        baseline["provenance"]["argv"],
+        treatment["provenance"]["argv"],
+        axis,
+        baseline_arm=baseline["arm_id"],
+        treatment_arm=treatment["arm_id"],
     )
     if normalized_base_argv != normalized_treat_argv:
         raise ValueError("pair normalized effective MCore argv differ")

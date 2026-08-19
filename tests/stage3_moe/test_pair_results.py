@@ -338,3 +338,43 @@ class PairResultsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PerArmPathTest(unittest.TestCase):
+    """A pair may differ in where each arm reads and writes, and nowhere else."""
+
+    def pair(self, baseline_extra, treatment_extra):
+        baseline = make_run(
+            "adamw_bf16_state_fp32", "baseline", "fp8_gemm", "adamw", "bf16", "fp32"
+        )
+        treatment = make_run(
+            "adamw_fp8gemm_state_fp32", "treatment", "fp8_gemm", "adamw",
+            "fp8_delayed_hybrid", "fp32",
+        )
+        baseline["provenance"]["argv"] = list(baseline["provenance"]["argv"]) + baseline_extra
+        treatment["provenance"]["argv"] = (
+            list(treatment["provenance"]["argv"]) + treatment_extra + ["--fp8-format", "hybrid", "--fp8-recipe", "delayed"]
+        )
+        return baseline, treatment
+
+    def test_paths_differing_only_by_the_arm_id_are_accepted(self):
+        baseline, treatment = self.pair(
+            ["--load", "/ckpt/trunk/adamw_bf16_state_fp32",
+             "--wandb-exp-name", "stage3-adamw_bf16_state_fp32-decay"],
+            ["--load", "/ckpt/trunk/adamw_fp8gemm_state_fp32",
+             "--wandb-exp-name", "stage3-adamw_fp8gemm_state_fp32-decay"],
+        )
+        self.assertEqual(compare_runs(baseline, treatment)["axis"], "fp8_gemm")
+
+    def test_a_different_checkpoint_root_is_still_refused(self):
+        baseline, treatment = self.pair(
+            ["--load", "/ckpt/trunk/adamw_bf16_state_fp32"],
+            ["--load", "/somewhere-else/trunk/adamw_fp8gemm_state_fp32"],
+        )
+        with self.assertRaises(ValueError):
+            compare_runs(baseline, treatment)
+
+    def test_a_computational_argument_is_still_refused(self):
+        baseline, treatment = self.pair(["--lr", "1.63e-3"], ["--lr", "1.0e-3"])
+        with self.assertRaises(ValueError):
+            compare_runs(baseline, treatment)
