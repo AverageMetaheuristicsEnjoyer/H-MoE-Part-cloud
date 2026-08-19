@@ -41,6 +41,16 @@ for d in "$lg"/*/; do
   # whether history is actually being recorded.
   du -sh "$d/wandb"/*run-* 2>/dev/null | tail -1 | sed 's/^/  WANDB /'
   du -sh "$d/tensorboard" 2>/dev/null | sed 's/^/  TB /'
+  # A scoring run's numbers live here: the platform log window is far too small to hold
+  # two arms' worth of MCore startup and still show them.
+  if [ -f "$d/downstream/downstream.json" ]; then
+    echo "  DOWNSTREAM_JSON $d"
+    python - "$d/downstream/downstream.json" <<'PYD'
+import json, sys
+for item in json.load(open(sys.argv[1])):
+    print(f"    {item['task']} {item['metric']}={item['value']:.6f}")
+PYD
+  fi
   if [ -f "$d/results.jsonl" ]; then
     python - "$d/results.jsonl" <<'PYX'
 import json, sys
