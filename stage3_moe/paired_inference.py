@@ -17,6 +17,7 @@ one to declare a pass, the upper one to declare a fail.
 """
 
 import argparse
+import hashlib
 import json
 import math
 import statistics
@@ -69,6 +70,128 @@ def _interval_for_degradations(values):
     return [mean - margin, mean + margin]
 
 
+def _load_per_example(result_path, task, expected_sha256):
+    """Per-example rows for one task, refused unless they hash to what the record claims."""
+    artifact = Path(result_path).parent / "downstream" / f"{task}.jsonl"
+    if not artifact.exists():
+        return None
+    if hashlib.sha256(artifact.read_bytes()).hexdigest() != expected_sha256:
+        return None
+    rows = {}
+    for line in artifact.read_text().splitlines():
+        if line.strip():
+            row = json.loads(line)
+            rows[row["doc_id"]] = row["metrics"]
+    return rows
+
+
+def _paired_bootstrap(baseline_values, treatment_values, higher_is_better,
+                      iterations=2000, seed=1234):
+    """One-sided 95% bounds on relative degradation, resampling whole documents.
+
+    The pairing key is the document (`pair_key: task_and_doc_id`), so baseline and
+    treatment are resampled through the same index and their per-document correlation
+    stays intact -- which is the whole point of scoring both arms on the same examples.
+    """
+    import numpy as np
+
+    baseline = np.asarray(baseline_values, dtype=float)
+    treatment = np.asarray(treatment_values, dtype=float)
+    if baseline.size < 2:
+        return None
+    generator = np.random.default_rng(seed)
+    index = generator.integers(0, baseline.size, size=(iterations, baseline.size))
+    baseline_means = baseline[index].mean(axis=1)
+    treatment_means = treatment[index].mean(axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        if higher_is_better:
+            degradation = (baseline_means - treatment_means) / np.abs(baseline_means)
+        else:
+            degradation = (treatment_means - baseline_means) / np.abs(baseline_means)
+    degradation = degradation[np.isfinite(degradation)]
+    if degradation.size == 0:
+        return None
+    # Not clamped at zero: an improvement is a real outcome and the gate reads both bounds.
+    return [float(np.percentile(degradation, 5)), float(np.percentile(degradation, 95))]
+
+
+def mcnemar(baseline_values, treatment_values):
+    """Exact two-sided McNemar p-value for paired 0/1 outcomes, plus the discordant counts."""
+    only_baseline = sum(1 for b, t in zip(baseline_values, treatment_values) if b > t)
+    only_treatment = sum(1 for b, t in zip(baseline_values, treatment_values) if t > b)
+    discordant = only_baseline + only_treatment
+    if discordant == 0:
+        return 1.0, only_baseline, only_treatment
+    tail = sum(math.comb(discordant, k) for k in range(min(only_baseline, only_treatment) + 1))
+    return min(1.0, 2 * tail / 2 ** discordant), only_baseline, only_treatment
+
+
+def downstream_intervals(replicates):
+    """Paired per-example intervals for every (task, metric) the records report.
+
+    This one is not an interval across replicates: the comparison is paired by document,
+    so one replicate carrying per-example artifacts is enough. The first replicate that
+    has readable, hash-matching artifacts for a metric supplies it. Returns an empty list
+    unless every reported metric could be covered -- `_downstream_effects` refuses a
+    baseline/treatment key set that does not match exactly, so a partial block would
+    abort the whole comparison rather than weaken it.
+    """
+    intervals = {}
+    secondary = {}
+    for baseline_path, treatment_path, baseline, treatment in replicates:
+        reported = {
+            (item["task"], item["metric"]): item
+            for item in treatment["measurement"]["downstream"]
+        }
+        baseline_reported = {
+            (item["task"], item["metric"]): item
+            for item in baseline["measurement"]["downstream"]
+        }
+        for key, treatment_item in sorted(reported.items()):
+            if key in intervals or key not in baseline_reported:
+                continue
+            task, metric = key
+            baseline_item = baseline_reported[key]
+            baseline_rows = _load_per_example(
+                baseline_path, task, baseline_item["per_example_artifact_sha256"]
+            )
+            treatment_rows = _load_per_example(
+                treatment_path, task, treatment_item["per_example_artifact_sha256"]
+            )
+            if not baseline_rows or not treatment_rows:
+                continue
+            shared = sorted(set(baseline_rows) & set(treatment_rows))
+            paired = [
+                (baseline_rows[doc][metric], treatment_rows[doc][metric])
+                for doc in shared
+                if metric in baseline_rows[doc] and metric in treatment_rows[doc]
+            ]
+            if len(paired) < 2:
+                continue
+            baseline_values = [value for value, _ in paired]
+            treatment_values = [value for _, value in paired]
+            interval = _paired_bootstrap(
+                baseline_values, treatment_values, treatment_item["higher_is_better"]
+            )
+            if interval is None:
+                continue
+            intervals[key] = interval
+            if set(baseline_values) <= {0.0, 1.0} and set(treatment_values) <= {0.0, 1.0}:
+                secondary[key] = mcnemar(baseline_values, treatment_values)
+    expected = {
+        (item["task"], item["metric"])
+        for _, _, _, treatment in replicates
+        for item in treatment["measurement"]["downstream"]
+    }
+    if not expected or set(intervals) != expected:
+        return [], secondary
+    block = [
+        {"task": task, "metric": metric, "degradation_ci95": intervals[(task, metric)]}
+        for task, metric in sorted(intervals)
+    ]
+    return block, secondary
+
+
 def discover_replicates(paths):
     """Return {(axis, optimizer): [(baseline_path, treatment_path, baseline, treatment)]}."""
     runs = {}
@@ -95,6 +218,7 @@ def discover_replicates(paths):
 
 
 def build_inference(replicates):
+    downstream, _ = downstream_intervals(replicates)
     memory, wct, degradation = [], [], []
     for _, _, baseline, treatment in replicates:
         base_measure, treat_measure = baseline["measurement"], treatment["measurement"]
@@ -117,7 +241,7 @@ def build_inference(replicates):
         "memory_allocated_ratio_ci95": log_ratio_interval(memory),
         "e2e_wct_ratio_ci95": log_ratio_interval(wct),
         "validation_loss_degradation_ci95": _interval_for_degradations(degradation),
-        "downstream": [],
+        "downstream": downstream,
         "_ratios": {"memory_allocated": memory, "e2e_wct": wct},
     }
 
@@ -153,6 +277,17 @@ def main(argv=None):
                 f"[{interval[0]:.4f}, {interval[1]:.4f}]"
             )
             print(f"  {name} = {text}")
+        _, secondary = downstream_intervals(replicates)
+        for item in summary["downstream"]:
+            key = (item["task"], item["metric"])
+            low, high = item["degradation_ci95"]
+            line = f"  downstream {item['task']}/{item['metric']} = [{low:+.4f}, {high:+.4f}]"
+            if key in secondary:
+                probability, only_baseline, only_treatment = secondary[key]
+                line += f"  mcnemar p={probability:.4f} (b={only_baseline}, c={only_treatment})"
+            print(line)
+        if not summary["downstream"]:
+            print("  downstream: no paired per-example artifacts, gate stays inconclusive")
         if not args.write:
             continue
         for _, treatment_path, baseline, treatment in replicates:
