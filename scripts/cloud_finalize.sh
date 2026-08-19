@@ -4,7 +4,8 @@
 #   mlsub run ... --entry scripts/cloud_finalize.sh --gpus cpu --args "FILTER"
 set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
-persist=/home/jovyan/hmoe-cloud/artifacts/stage3-moe-probes
+# Probe records live under artifacts/; scoring records live beside their run in pretrain/.
+persist=${STAGE3_MOE_RESULTS_ROOT:-/home/jovyan/hmoe-cloud/artifacts/stage3-moe-probes}
 filter=${1:-}
 
 cd "$root"
@@ -42,9 +43,27 @@ for a, b in permutations(files, 2):
     for k in ("max_memory_allocated_bytes", "persistent_optimizer_state_bytes",
               "full_step_seconds", "e2e_wct_seconds"):
         v = e[k]
+        # An evaluation record has no optimizer state and takes no training step, so
+        # these are legitimately null there.
+        if v["ratio"] is None:
+            print(f"  {k:32s} ratio=n/a")
+            continue
         ci = v.get("ratio_ci95")
         text = "" if ci is None else f"  ci95=[{ci[0]:.4f}, {ci[1]:.4f}]"
         print(f"  {k:32s} ratio={v['ratio']:.4f}{text}")
+    val = e["validation_loss_degradation_fraction_of_baseline"]
+    val_ci = e["validation_loss_degradation_ci95"]
+    val_ci_text = "" if val_ci is None else f"  ci95=[{val_ci[0]:+.4f}, {val_ci[1]:+.4f}]"
+    print(f"  {'validation_loss':32s} degradation="
+          f"{'n/a' if val is None else format(val, '+.4%')}{val_ci_text}")
+    for item in e["downstream"]:
+        ci = item["degradation_ci95"]
+        ci_text = "" if ci is None else f"  ci95=[{ci[0]:+.4f}, {ci[1]:+.4f}]"
+        deg = item["degradation_fraction_of_baseline"]
+        deg_text = "n/a" if deg is None else format(deg, "+.4%")
+        print(f"  {item['task']:32s} {item['metric']:12s} "
+              f"{item['baseline']:.4f} -> {item['treatment']:.4f}  "
+              f"deg={deg_text}{ci_text}  {item['status']}")
     print("  gates: " + ", ".join(f"{g}={d['gates'][g]['status']}" for g in d["gates"]))
 PY
 echo "EXIT=0"
