@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 3 MoE matched pretraining, WSD trunk-and-branch.
 #
-#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench
+#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench|eval-downstream
 #
 # smoke exercises save and resume; bench measures throughput and peak memory with no
 # checkpoint traffic; resume-bench does the same from the trunk branch point, so the
@@ -51,6 +51,8 @@ optimizer_args=()
 trunk_dir="$ckpt_root/trunk/$arm"
 decay_dir="$ckpt_root/1p2b/$arm"
 
+run_id_eval="stage3-$arm-$mode${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
+eval_args=()
 case "$mode" in
   trunk)
     # Stable phase only: stop at the branch point, never reaching decay.
@@ -118,6 +120,28 @@ case "$mode" in
     # (start_wd = end_wd = 0.1) and every LR argument matches the trunk, so overriding
     # rebuilds the identical schedule; num_steps still comes from the checkpoint.
     load_args=(--load "$trunk_dir" --override-opt_param-scheduler)
+    ;;
+  eval-downstream)
+    # Score a finished checkpoint. --skip-train makes MCore build the model, load the
+    # weights and go straight to evaluation, which is what the decay endpoints support:
+    # they are saved with --no-save-optim, so there is no optimizer state to restore.
+    train_iters=$short_iters
+    target_iters=$short_iters
+    decay_iters=$short_decay_iters
+    eval_load=${STAGE3_MOE_EVAL_LOAD:?set STAGE3_MOE_EVAL_LOAD to the checkpoint directory}
+    save_args=()
+    load_args=(--load "$eval_load" --no-load-optim --no-load-rng --skip-train
+               --override-opt_param-scheduler)
+    probe_warmup=0
+    probe_measure=1
+    eval_args=(
+      --stage3-eval-downstream "${STAGE3_MOE_EVAL_TASKS:-basic_v2_hellaswag,basic_v2_arc_easy,basic_v2_arc_challenge,basic_v2_piqa,basic_v2_gsm8k_gold_bpb_5shot}"
+      --stage3-eval-artifact-dir "$log_root/$run_id_eval/downstream"
+      --stage3-eval-batch-size "${STAGE3_MOE_EVAL_BATCH:-8}"
+    )
+    if [[ -n ${STAGE3_MOE_EVAL_LIMIT:-} ]]; then
+      eval_args+=(--stage3-eval-limit "$STAGE3_MOE_EVAL_LIMIT")
+    fi
     ;;
   *) echo "unknown mode: $mode" >&2; exit 2 ;;
 esac
@@ -218,6 +242,7 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   --stage3-result-path "$log_root/$run_id/results.jsonl" \
   --stage3-warmup-steps "$probe_warmup" \
   --stage3-measure-steps "$probe_measure" \
+  "${eval_args[@]}" \
   --optimizer-state-precision "$state_precision" \
   "${STAGE3_MOE_MODEL_ARGS[@]}" \
   "${STAGE3_MOE_ROUTER_ARGS[@]}" \

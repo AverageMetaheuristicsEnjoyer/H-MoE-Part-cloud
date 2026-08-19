@@ -23,10 +23,41 @@ def take_stage3_args(argv):
     parser.add_argument(
         "--optimizer-state-precision", choices=("fp32", "fp8"), required=True
     )
+    # Downstream scoring runs inside the training process so the forward is the same one
+    # the arm was trained with; see stage3_moe/lm_eval_mcore.py.
+    parser.add_argument("--stage3-eval-downstream", default=None)
+    parser.add_argument("--stage3-eval-artifact-dir", type=Path, default=None)
+    parser.add_argument("--stage3-eval-batch-size", type=int, default=8)
+    parser.add_argument("--stage3-eval-limit", type=int, default=None)
     args, remaining = parser.parse_known_args(argv[1:])
     if args.stage3_warmup_steps < 0 or args.stage3_measure_steps < 1:
         raise ValueError("stage3 warmup must be non-negative and measured steps positive")
     return args, [argv[0], *remaining]
+
+
+def install_downstream_eval(*, tasks, artifact_dir, batch_size, limit):
+    """Score the loaded checkpoint the moment MCore finishes building and loading it."""
+    import megatron.training.training as training
+
+    previous = training.setup_model_and_optimizer
+
+    def setup_and_evaluate(*args, **kwargs):
+        model, optimizer, scheduler = previous(*args, **kwargs)
+        from stage3_moe.lm_eval_mcore import run_suite
+
+        module = model[0]
+        module.eval()
+        run_suite(
+            module,
+            tasks=tasks,
+            include_path=ROOT / "stage4" / "eval_tasks",
+            artifact_dir=artifact_dir,
+            batch_size=batch_size,
+            limit=limit,
+        )
+        return model, optimizer, scheduler
+
+    training.setup_model_and_optimizer = setup_and_evaluate
 
 
 def option_value(argv, option):
@@ -115,6 +146,13 @@ def main():
         argv=mcore_argv,
     )
     install_memory_audit()
+    if stage3_args.stage3_eval_downstream:
+        install_downstream_eval(
+            tasks=[task for task in stage3_args.stage3_eval_downstream.split(",") if task],
+            artifact_dir=stage3_args.stage3_eval_artifact_dir,
+            batch_size=stage3_args.stage3_eval_batch_size,
+            limit=stage3_args.stage3_eval_limit,
+        )
     print(
         f"stage3 MoE arm={stage3_args.stage3_arm} "
         f"warmup={stage3_args.stage3_warmup_steps} "
