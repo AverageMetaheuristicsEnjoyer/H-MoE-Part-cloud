@@ -211,6 +211,18 @@ def _sum_over_expert_ranks(values):
     return [int(round(value)) for value in buffer.tolist()]
 
 
+# An evaluation run builds the optimizer but never steps it, so no state tensor is ever
+# materialized and `optimizer_state_ledger` has nothing to inspect. Null says that; zero
+# would claim the arm holds no state, which is a different and false statement.
+UNSTEPPED_OPTIMIZER_STATE = {
+    "master_parameter_bytes": None,
+    "metadata_bytes": None,
+    "persistent_data_bytes": None,
+    "persistent_total_bytes": None,
+    "tensors": [],
+}
+
+
 def parameter_group_ledger(optimizer, arm, parameter_names):
     counts = defaultdict(int)
     expert_counts = defaultdict(int)
@@ -552,7 +564,11 @@ class Probe:
                 "provenance": _provenance(self.argv),
                 "environment": _environment(),
                 "parameter_groups": parameter_groups,
-                "optimizer_state": optimizer_state_ledger(self.optimizer, self.arm),
+                "optimizer_state": (
+                    UNSTEPPED_OPTIMIZER_STATE
+                    if self.protocol_kind == "evaluation"
+                    else optimizer_state_ledger(self.optimizer, self.arm)
+                ),
                 "measurement": {
                     "protocol": {
                         "kind": self.protocol_kind or (
