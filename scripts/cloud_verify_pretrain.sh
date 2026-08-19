@@ -51,6 +51,13 @@ for item in json.load(open(sys.argv[1])):
     print(f"    {item['task']} {item['metric']}={item['value']:.6f}")
 PYD
   fi
+  # A run that left neither a record nor scores failed somewhere the launcher's own
+  # tail never showed, because it exits 0 whatever the training process did.
+  if [ ! -f "$d/results.jsonl" ] && [ ! -f "$d/downstream/downstream.json" ] && [ -n "$newest" ]; then
+    echo "  NO OUTPUT, tail of $newest:"
+    grep -aE "Error|Traceback|error|assert|Assertion|raise |Killed|out of memory" "$newest" | tail -12 | sed 's/^/    /'
+    tail -6 "$newest" | sed 's/^/    /'
+  fi
   if [ -f "$d/results.jsonl" ]; then
     python - "$d/results.jsonl" <<'PYX'
 import json, sys
