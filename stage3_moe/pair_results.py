@@ -57,7 +57,7 @@ def _positive_or_none(value, label):
 # values are per-arm by construction -- each arm must load its own checkpoint and log under
 # its own name -- so comparing them verbatim rejects every honest pair. Masking the arm id
 # instead keeps the check strict: a path that differs by anything else still fails.
-_PER_ARM_VALUE_OPTIONS = (
+PER_ARM_VALUE_OPTIONS = (
     "--load",
     "--save",
     "--tensorboard-dir",
@@ -65,16 +65,16 @@ _PER_ARM_VALUE_OPTIONS = (
     "--wandb-save-dir",
 )
 
-_ARM_PLACEHOLDER = "<arm>"
+ARM_PLACEHOLDER = "<arm>"
 
 
-def _mask_arm_in_paths(argv, arm):
+def mask_arm_in_paths(argv, arm):
     if not arm:
         return list(argv)
     masked = list(argv)
     for index, token in enumerate(masked[:-1]):
-        if token in _PER_ARM_VALUE_OPTIONS:
-            masked[index + 1] = masked[index + 1].replace(arm, _ARM_PLACEHOLDER)
+        if token in PER_ARM_VALUE_OPTIONS:
+            masked[index + 1] = masked[index + 1].replace(arm, ARM_PLACEHOLDER)
     return masked
 
 
@@ -84,8 +84,8 @@ def _normalized_pair_argv(baseline_argv, treatment_argv, axis,
         for option in ("--fp8-format", "--fp8-recipe"):
             if option in argv and (axis != "fp8_gemm" or label != "treatment"):
                 raise ValueError(f"{label} argv contains forbidden {option}")
-    baseline_argv = _mask_arm_in_paths(baseline_argv, baseline_arm)
-    treatment_argv = _mask_arm_in_paths(treatment_argv, treatment_arm)
+    baseline_argv = mask_arm_in_paths(baseline_argv, baseline_arm)
+    treatment_argv = mask_arm_in_paths(treatment_argv, treatment_arm)
     if axis != "fp8_gemm":
         return list(baseline_argv), list(treatment_argv)
 

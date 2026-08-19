@@ -14,6 +14,7 @@ from pathlib import Path
 
 import torch
 
+from stage3_moe.pair_results import mask_arm_in_paths
 from stage3_moe import (
     ACTIVE_PARAMETERS,
     ADAMW_FALLBACK_PARAMETERS,
@@ -308,7 +309,10 @@ def parameter_group_ledger(optimizer, arm, parameter_names):
     ]
 
 
-def _normalized_match_argv(argv):
+def _normalized_match_argv(argv, arm):
+    # The match key is what proves two runs controlled the same factors, so it has to
+    # ignore exactly what the pair comparison ignores: where this arm reads and writes.
+    argv = mask_arm_in_paths(argv, arm)
     normalized = []
     skip = False
     for item in argv:
@@ -324,7 +328,7 @@ def _normalized_match_argv(argv):
 
 def _comparison(arm, argv):
     computed_match_key = hashlib.sha256(
-        "\0".join(_normalized_match_argv(argv)).encode()
+        "\0".join(_normalized_match_argv(argv, arm)).encode()
     ).hexdigest()
     return {
         "optimizer": "muon" if arm.startswith("muon_") else "adamw",
