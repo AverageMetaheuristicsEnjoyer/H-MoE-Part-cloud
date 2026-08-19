@@ -130,7 +130,10 @@ case "$mode" in
     decay_iters=$short_decay_iters
     eval_load=${STAGE3_MOE_EVAL_LOAD:?set STAGE3_MOE_EVAL_LOAD to the checkpoint directory}
     save_args=()
-    load_args=(--load "$eval_load" --no-load-optim --no-load-rng --skip-train
+    # No --skip-train: it returns optimizer=None, and both the FP8-state bootstrap check
+    # and the record's optimizer ledgers need a real optimizer object. Training is skipped
+    # anyway because the checkpoint's iteration already equals train_iters.
+    load_args=(--load "$eval_load" --no-load-optim --no-load-rng
                --override-opt_param-scheduler)
     probe_warmup=0
     probe_measure=1

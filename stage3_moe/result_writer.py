@@ -414,6 +414,10 @@ class Probe:
         self.argv = argv
         self.step = 0
         self.full_step_seconds = []
+        # Filled by an evaluation run; a training run leaves them as they are.
+        self.downstream = []
+        self.validation_loss = None
+        self.protocol_kind = None
         self.optimizer_step_seconds = []
         self.losses = []
         self.optimizer = None
@@ -551,7 +555,7 @@ class Probe:
                 "optimizer_state": optimizer_state_ledger(self.optimizer, self.arm),
                 "measurement": {
                     "protocol": {
-                        "kind": (
+                        "kind": self.protocol_kind or (
                             "formal_timing"
                             if self.warmup_steps >= 20 and self.measured_steps >= 100
                             else "smoke"
@@ -579,10 +583,10 @@ class Probe:
                     },
                     "loss": {
                         "training": statistics.mean(self.losses) if self.losses else None,
-                        "validation": None,
+                        "validation": self.validation_loss,
                     },
                     "routing": routing,
-                    "downstream": [],
+                    "downstream": self.downstream,
                     "inference": None,
                 },
             }
@@ -611,6 +615,7 @@ def install_probe(*, arm, result_path, warmup_steps, measured_steps, program_sta
         model, optimizer, scheduler = original_setup(*args, **kwargs)
         if probe.arm.endswith("_state_fp8"):
             assert_fp8_adam_bootstrap(optimizer)
+        probe.optimizer = optimizer
         probe.model_chunks = list(model)
         install_router_tallies(probe.model_chunks)
         for chunk_index, chunk in enumerate(model):
@@ -622,6 +627,28 @@ def install_probe(*, arm, result_path, warmup_steps, measured_steps, program_sta
         return model, optimizer, scheduler
 
     training.setup_model_and_optimizer = named_setup
+
+    # `evaluate` returns the loss dict but not which split it came from, and
+    # `evaluate_and_print_results` knows the split but not the value; between them the
+    # validation number the quality gate reads can be recovered.
+    last_evaluation = {}
+    original_evaluate = training.evaluate
+    original_report = training.evaluate_and_print_results
+
+    def capturing_evaluate(*args, **kwargs):
+        result = original_evaluate(*args, **kwargs)
+        last_evaluation["losses"] = result[0]
+        return result
+
+    def capturing_report(prefix, *args, **kwargs):
+        value = original_report(prefix, *args, **kwargs)
+        loss = (last_evaluation.get("losses") or {}).get("lm loss")
+        if loss is not None and "validation set" in str(prefix):
+            probe.validation_loss = float(loss)
+        return value
+
+    training.evaluate = capturing_evaluate
+    training.evaluate_and_print_results = capturing_report
 
     timed_optimizer_ids = set()
 
@@ -660,6 +687,9 @@ def install_probe(*, arm, result_path, warmup_steps, measured_steps, program_sta
     def write_unfinished():
         expected = probe.warmup_steps + probe.measured_steps
         if probe.step < expected:
-            probe.write(status="failed")
+            # An evaluation run scores a checkpoint and never trains, so falling short of
+            # the measured window is what it is supposed to do.
+            probe.write(status="completed" if probe.protocol_kind == "evaluation" else "failed")
 
     atexit.register(write_unfinished)
+    return probe

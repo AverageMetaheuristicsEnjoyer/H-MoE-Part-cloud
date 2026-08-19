@@ -35,11 +35,12 @@ def take_stage3_args(argv):
     return args, [argv[0], *remaining]
 
 
-def install_downstream_eval(*, tasks, artifact_dir, batch_size, limit):
+def install_downstream_eval(probe, *, tasks, artifact_dir, batch_size, limit):
     """Score the loaded checkpoint the moment MCore finishes building and loading it."""
     import megatron.training.training as training
 
     previous = training.setup_model_and_optimizer
+    probe.protocol_kind = "evaluation"
 
     def setup_and_evaluate(*args, **kwargs):
         model, optimizer, scheduler = previous(*args, **kwargs)
@@ -47,7 +48,7 @@ def install_downstream_eval(*, tasks, artifact_dir, batch_size, limit):
 
         module = model[0]
         module.eval()
-        run_suite(
+        probe.downstream = run_suite(
             module,
             tasks=tasks,
             include_path=ROOT / "stage4" / "eval_tasks",
@@ -55,6 +56,8 @@ def install_downstream_eval(*, tasks, artifact_dir, batch_size, limit):
             batch_size=batch_size,
             limit=limit,
         )
+        # MCore's own validation runs after this and puts the model back in train mode.
+        module.eval()
         return model, optimizer, scheduler
 
     training.setup_model_and_optimizer = setup_and_evaluate
@@ -137,7 +140,7 @@ def main():
     from stage3_moe.memory_audit import install as install_memory_audit
     from stage3_moe.result_writer import install_probe
 
-    install_probe(
+    probe = install_probe(
         arm=stage3_args.stage3_arm,
         result_path=stage3_args.stage3_result_path,
         warmup_steps=stage3_args.stage3_warmup_steps,
@@ -148,6 +151,7 @@ def main():
     install_memory_audit()
     if stage3_args.stage3_eval_downstream:
         install_downstream_eval(
+            probe,
             tasks=[task for task in stage3_args.stage3_eval_downstream.split(",") if task],
             artifact_dir=stage3_args.stage3_eval_artifact_dir,
             batch_size=stage3_args.stage3_eval_batch_size,
