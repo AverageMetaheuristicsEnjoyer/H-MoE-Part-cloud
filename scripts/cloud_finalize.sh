@@ -25,10 +25,17 @@ from pathlib import Path
 root, filter_ = Path(sys.argv[1]), sys.argv[2]
 files = sorted(p for p in root.glob("*/results.jsonl") if filter_ in str(p))
 seen = set()
+rejected = {}
 for a, b in permutations(files, 2):
     out = subprocess.run([sys.executable, "-m", "stage3_moe.pair_results", str(a), str(b)],
                          capture_output=True, text=True)
     if out.returncode != 0:
+        # Every rejection was silent, so a run that paired nothing looked the same as a
+        # run with nothing to pair. One line per distinct reason is enough to act on.
+        reason = (out.stderr or "").strip().splitlines()
+        reason = reason[-1] if reason else "unknown"
+        if reason not in rejected:
+            rejected[reason] = (a.parent.name, b.parent.name)
         continue
     d = json.loads(out.stdout)
     key = (d["axis"], d["optimizer"], d["baseline_run_id"], d["treatment_run_id"])
@@ -65,6 +72,9 @@ for a, b in permutations(files, 2):
               f"{item['baseline']:.4f} -> {item['treatment']:.4f}  "
               f"deg={deg_text}{ci_text}  {item['status']}")
     print("  gates: " + ", ".join(f"{g}={d['gates'][g]['status']}" for g in d["gates"]))
+
+for reason, (left, right) in rejected.items():
+    print(f"\nREJECTED {reason}\n  example: {left} -> {right}")
 PY
 echo "EXIT=0"
 exit 0
