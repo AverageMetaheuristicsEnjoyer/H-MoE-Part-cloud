@@ -16,6 +16,9 @@ from pathlib import Path
 import torch
 from lm_eval.api.model import LM
 
+# A multiple of 16 satisfies both halves of TE's rule for any batch size.
+FP8_ALIGNMENT = 16
+
 
 class MCoreLM(LM):
     """The lm-eval `LM` interface, backed by an MCore GPTModel."""
@@ -47,8 +50,14 @@ class MCoreLM(LM):
 
     def _forward_logprobs(self, batch):
         """batch: list of token-id lists. Returns log-softmax logits per sequence."""
-        widths = [len(ids) for ids in batch]
-        width = max(widths)
+        # TE refuses an FP8 GEMM unless the flattened token count divides by 8:
+        # "FP8 execution requires the product of all dimensions except the last to be
+        # divisible by 8". Training never trips this because it only ever feeds full
+        # 2048-token sequences; scoring batches are as long as their longest member.
+        # Padding sits at the end of every sequence, attention is causal, and the
+        # logprobs are read only over the real continuation, so the scores are unchanged.
+        width = max(len(ids) for ids in batch)
+        width = -(-width // FP8_ALIGNMENT) * FP8_ALIGNMENT
         padded = torch.full((len(batch), width), self.eot_token_id, dtype=torch.long)
         for row, ids in enumerate(batch):
             padded[row, : len(ids)] = torch.tensor(ids, dtype=torch.long)
