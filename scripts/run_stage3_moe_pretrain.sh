@@ -15,8 +15,8 @@
 # shorter budget just branches off earlier and runs its own decay tail.
 set -euo pipefail
 
-arm=${1:?usage: run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench}
-mode=${2:?usage: run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench}
+arm=${1:?usage: run_stage3_moe_pretrain.sh ARM full|trunk|decay-1p2b|smoke|bench|resume-bench}
+mode=${2:?usage: run_stage3_moe_pretrain.sh ARM full|trunk|decay-1p2b|smoke|bench|resume-bench}
 root=$(cd "$(dirname "$0")/.." && pwd)
 source "$root/configs/stage3-moe-1p029b.sh"
 
@@ -53,7 +53,30 @@ decay_dir="$ckpt_root/1p2b/$arm"
 
 run_id_eval="stage3-$arm-$mode${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
 eval_args=()
+full_dir="$ckpt_root/${STAGE3_MOE_FULL_DIR:-1c}/$arm"
+
 case "$mode" in
+  full)
+    # The 1C budget: 17,242 steps = 7,344,816,128 tokens, decay tail included.
+    # This is not a new run. `trunk` was already launched on exactly this schedule
+    # (--lr-decay-iters 17242, --lr-wsd-decay-iters 3448) and stopped at 2254 inside the
+    # constant-LR plateau, so continuing it reproduces the single 1C curve. train_iters is
+    # the only argument that changes, and it is precisely what makes the parameter
+    # scheduler assert (wd_incr_steps = train_iters * global_batch), hence the override --
+    # weight decay is constant here (start_wd = end_wd = 0.1) and every LR argument
+    # matches, so the rebuilt schedule is identical and num_steps still comes from the
+    # checkpoint.
+    train_iters=$full_iters
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    mkdir -p "$full_dir"
+    # Keep only the newest checkpoint. Without --save-retain-interval MCore deletes
+    # nothing, and 53 saves x 7-16 GB fits on no volume we have; 17,388 = 54 x 322 lies
+    # past the end of the run, so no iteration is ever divisible by it and every previous
+    # checkpoint is dropped once its successor is on disk and the tracker points at it.
+    save_args=(--save "$full_dir" --save-interval 322 --save-retain-interval 17388)
+    load_args=(--load "$full_dir" --override-opt_param-scheduler)
+    ;;
   trunk)
     # Stable phase only: stop at the branch point, never reaching decay.
     train_iters=$short_branch
@@ -166,12 +189,20 @@ export CURAND_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/curand
 export NVRTC_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cuda_nvrtc
 # Without credentials wandb.init() would abort the run, so fall back to offline
 # logging: the run still records everything and can be `wandb sync`ed later.
-if [[ -f /home/jovyan/.wandb-key ]]; then
+# A key in the environment (mlsub run --env WANDB_API_KEY=...) wins: that is how the
+# self-hosted server is reached, and WANDB_BASE_URL has to travel with it.
+if [[ -n ${WANDB_API_KEY:-} ]]; then
+  echo "WANDB=online host=${WANDB_BASE_URL:-https://api.wandb.ai}"
+elif [[ -f /home/jovyan/.wandb-key ]]; then
   export WANDB_API_KEY=$(cat /home/jovyan/.wandb-key)
 else
   export WANDB_MODE=offline
-  echo "WANDB=offline (no /home/jovyan/.wandb-key); sync later with 'wandb sync'"
+  echo "WANDB=offline (no key in the environment and no /home/jovyan/.wandb-key); sync later with 'wandb sync'"
 fi
+# A 1C arm outlives one job, so every segment must land in the same W&B run instead of
+# opening a new one. MCore calls wandb.init() without an id, so the env vars decide.
+export WANDB_RUN_ID="${WANDB_RUN_ID:-$run_id}"
+export WANDB_RESUME="${WANDB_RESUME:-allow}"
 
 # A missing logger must not kill a multi-hour run: drop the loggers instead.
 logger_args=()
