@@ -73,6 +73,11 @@ if not jobs:
     print("nothing to do"); sys.exit(0)
 
 api = HfApi(token=os.environ["HF_TOKEN"])
+if "/" not in repo:
+    # Resolve the namespace from the token rather than guessing it: a wrong owner is a
+    # 403 halfway through, and this job is the only thing standing between the endpoints
+    # and their deletion.
+    repo = f'{api.whoami()["name"]}/{repo}'
 api.create_repo(repo, repo_type="model", private=True, exist_ok=True)
 print(f"REPO_READY {repo} (private)", flush=True)
 
