@@ -70,11 +70,20 @@ case "$mode" in
     target_iters=$full_iters
     decay_iters=$full_decay_iters
     mkdir -p "$full_dir"
-    # Keep only the newest checkpoint. Without --save-retain-interval MCore deletes
-    # nothing, and 53 saves x 7-16 GB fits on no volume we have; 17,388 = 54 x 322 lies
-    # past the end of the run, so no iteration is ever divisible by it and every previous
-    # checkpoint is dropped once its successor is on disk and the tracker points at it.
-    save_args=(--save "$full_dir" --save-interval 322 --save-retain-interval 17388)
+    # 363 x 38 = 13,794 = lr_decay_iters - lr_wsd_decay_iters, which the scheduler makes
+    # the last step at peak LR (optimizer_param_scheduler.py:263-266: coeff is 1.0 while
+    # num_steps <= wsd_anneal_start_). So a checkpoint lands exactly on the end of the
+    # stable phase. The trunk's 322 cannot: it divides 2254, which is why it was chosen,
+    # but 13,794 = 2*3*11^2*19 shares only a factor of 2 with it, and the nearest saves
+    # would straddle the boundary at 13,524 and 13,846.
+    #
+    # Retaining that one iteration is the whole point of a WSD run. The stable phase is
+    # constant-LR, so every shorter budget, every alternative decay tail and any later WSM
+    # merge branch from it -- exactly as the 1.2B deliverables branched from the trunk at
+    # 2254. Without it those cost a 13,794-step re-run. 13,794 is the only multiple of
+    # itself below 17,242, so precisely one checkpoint is ever retained; everything else is
+    # dropped as soon as its successor is on disk and the tracker points at it.
+    save_args=(--save "$full_dir" --save-interval 363 --save-retain-interval 13794)
     load_args=(--load "$full_dir" --override-opt_param-scheduler)
     ;;
   trunk)
