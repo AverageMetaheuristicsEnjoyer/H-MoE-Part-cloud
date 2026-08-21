@@ -71,13 +71,13 @@ print(f"REPO_READY {repo} (private)", flush=True)
 
 arms = os.environ["HMOE_ARMS"].replace(",", " ").split() or sorted(d.name for d in root.glob("*") if d.is_dir())
 print(f"ARMS {' '.join(arms)}", flush=True)
-done, failed = set(), set()
+done, verified = set(), set()
 
 def tracker_of(arm):
     t = root / arm / "latest_checkpointed_iteration.txt"
     return t.read_text().strip() if t.is_file() else ""
 
-def handle(arm):
+def upload(arm):
     local = root / arm / name
     remote = f"{prefix}/{arm}/{name}"
     files = {str(p.relative_to(local)): p.stat().st_size for p in sorted(local.rglob("*")) if p.is_file()}
@@ -105,29 +105,32 @@ def handle(arm):
             print(f"    {k}: local={files[k]} remote={remote_files.get(k)}", flush=True)
         return False
     print(f"VERIFIED {remote}: {len(remote_files)} files match", flush=True)
+    return True
 
-    if do_delete:
-        # The tracker still names this checkpoint until the next save lands, and a
-        # resubmitted job would try to load exactly what the tracker names.
-        live = tracker_of(arm)
-        if live == str(iteration):
-            print(f"DELETE_DEFERRED {arm}: tracker still at {live}, it is the resume point", flush=True)
-            return False
-        shutil.rmtree(local)
-        print(f"REMOVED_LOCAL {local} (tracker at {live})", flush=True)
+def reclaim(arm):
+    # The tracker still names this checkpoint until the next save lands ~1.5 h later,
+    # and a resubmitted job would try to load exactly what the tracker names. Deleting
+    # is deferred, never retried as a re-upload: verification already stands.
+    live = tracker_of(arm)
+    if live == str(iteration):
+        print(f"DELETE_DEFERRED {arm}: tracker still at {live}, it is the resume point", flush=True)
+        return False
+    shutil.rmtree(root / arm / name)
+    print(f"REMOVED_LOCAL {root / arm / name} (tracker at {live})", flush=True)
     return True
 
 while True:
     for arm in arms:
         if arm in done:
             continue
-        if not (root / arm / name).is_dir():
-            continue
-        if handle(arm):
+        if arm not in verified:
+            if not (root / arm / name).is_dir():
+                continue
+            if not upload(arm):
+                continue
+            verified.add(arm)
+        if not do_delete or reclaim(arm):
             done.add(arm)
-            failed.discard(arm)
-        else:
-            failed.add(arm)
     pending = [a for a in arms if a not in done]
     if not pending or time.time() >= deadline:
         break
@@ -135,9 +138,10 @@ while True:
           f"({(deadline - time.time()) / 60:.0f} min left)", flush=True)
     time.sleep(300)
 
-print(f"DONE={len(done)} PENDING={len([a for a in arms if a not in done])} RETRY={len(failed)}")
+print(f"DONE={len(done)} UPLOADED={len(verified)} PENDING={len([a for a in arms if a not in done])}")
 for arm in arms:
-    print(f"  {arm}: {'archived' if arm in done else 'not archived'} tracker={tracker_of(arm)}")
+    state = 'archived' if arm in done else ('uploaded, local copy kept' if arm in verified else 'not archived')
+    print(f"  {arm}: {state} tracker={tracker_of(arm)}")
 PY
 echo "PY_EXIT=$?"
 df -h "$root" | tail -1
