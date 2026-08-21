@@ -77,11 +77,28 @@ def tracker_of(arm):
     t = root / arm / "latest_checkpointed_iteration.txt"
     return t.read_text().strip() if t.is_file() else ""
 
+def remote_listing(remote):
+    out = {}
+    try:
+        entries = api.list_repo_tree(repo, path_in_repo=remote, repo_type="model", recursive=True)
+    except Exception:                              # noqa: BLE001 - absent path, nothing there yet
+        return out
+    for entry in entries:
+        size = getattr(entry, "size", None)
+        if size is not None:
+            out[entry.path[len(remote) + 1:]] = size
+    return out
+
 def upload(arm):
     local = root / arm / name
     remote = f"{prefix}/{arm}/{name}"
     files = {str(p.relative_to(local)): p.stat().st_size for p in sorted(local.rglob("*")) if p.is_file()}
     total = sum(files.values())
+    # A second job on the same wave -- a retry, or a hand submit racing a timer -- must
+    # not re-send 14 GB that is already there and correct.
+    if not {k: v for k, v in files.items() if remote_listing(remote).get(k) != v}:
+        print(f"ALREADY_ON_SERVER {remote}: {len(files)} files match, skipping upload", flush=True)
+        return True
     print(f"--- UPLOAD {local} -> {remote} ({len(files)} files, {total / 2**30:.2f} GiB)", flush=True)
     t0 = time.time()
     try:
@@ -93,11 +110,7 @@ def upload(arm):
     print(f"UPLOADED {remote} in {dt / 60:.1f} min ({total / 2**20 / max(dt, 1):.1f} MB/s)", flush=True)
 
     # Verify from the server's own listing, not from the upload call's return value.
-    remote_files = {}
-    for entry in api.list_repo_tree(repo, path_in_repo=remote, repo_type="model", recursive=True):
-        size = getattr(entry, "size", None)
-        if size is not None:
-            remote_files[entry.path[len(remote) + 1:]] = size
+    remote_files = remote_listing(remote)
     missing = {k: v for k, v in files.items() if remote_files.get(k) != v}
     if missing:
         print(f"VERIFY_FAILED {remote}: {len(missing)} file(s) missing or wrong size, keeping local", flush=True)
