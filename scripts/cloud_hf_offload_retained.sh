@@ -12,6 +12,10 @@
 #                else keeps it (upload only)
 #   $3 minutes   how long to keep waiting for arms that have not written the checkpoint
 #                yet, polling every 5 min.  0 = process whatever exists and exit.
+#   $4 arms      optional list of arm names to wait on, in one quoted argument. A
+#                directory that will never produce the checkpoint would otherwise hold
+#                the poll open to the deadline. It goes here rather than in an --env
+#                because mlsub rejects an env value containing a space or a comma.
 #
 # Override the target with STAGE3_MOE_CKPT_ROOT / STAGE3_MOE_RETAIN_ITER /
 # STAGE3_MOE_HF_PREFIX to serve the mb=16 wave on nfs3 instead, and STAGE3_MOE_ARMS
@@ -23,6 +27,7 @@ set -u
 repo=${1:?usage: cloud_hf_offload_retained.sh OWNER/REPO [delete|keep] [wait_minutes]}
 delete=${2:-keep}
 wait_min=${3:-0}
+arms_arg=${4:-}
 
 root=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs2/hmoe-checkpoints/stage3-1c-mb4/1c}
 iter=${STAGE3_MOE_RETAIN_ITER:-13794}
@@ -44,7 +49,7 @@ else
 fi
 
 HMOE_REPO=$repo HMOE_DELETE=$delete HMOE_WAIT=$wait_min HMOE_ROOT=$root \
-HMOE_ITER=$iter HMOE_PREFIX=$prefix HMOE_ARMS=${STAGE3_MOE_ARMS:-} python - <<'PY'
+HMOE_ITER=$iter HMOE_PREFIX=$prefix HMOE_ARMS=$arms_arg python - <<'PY'
 import os, pathlib, shutil, sys, time
 from huggingface_hub import HfApi
 
