@@ -15,7 +15,8 @@
 #
 # Override the target with STAGE3_MOE_CKPT_ROOT / STAGE3_MOE_RETAIN_ITER /
 # STAGE3_MOE_HF_PREFIX to serve the mb=16 wave on nfs3 instead, and STAGE3_MOE_ARMS
-# (space separated) to restrict which arms are waited on -- a directory that will
+# (comma separated -- mlsub rejects an env value containing a space) to restrict
+# which arms are waited on -- a directory that will
 # never produce the checkpoint would otherwise hold the poll open to the deadline.
 set -u
 
@@ -63,7 +64,7 @@ if "/" not in repo:
 api.create_repo(repo, repo_type="model", private=True, exist_ok=True)
 print(f"REPO_READY {repo} (private)", flush=True)
 
-arms = os.environ["HMOE_ARMS"].split() or sorted(d.name for d in root.glob("*") if d.is_dir())
+arms = os.environ["HMOE_ARMS"].replace(",", " ").split() or sorted(d.name for d in root.glob("*") if d.is_dir())
 print(f"ARMS {' '.join(arms)}", flush=True)
 done, failed = set(), set()
 
