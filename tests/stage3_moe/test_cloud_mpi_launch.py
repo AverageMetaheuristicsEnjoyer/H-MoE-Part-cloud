@@ -23,20 +23,25 @@ def fake_commands(tmp_path):
 
 
 def test_mpi_native_maps_cloud_rank_environment(tmp_path):
-    env = fake_commands(tmp_path)
-    env.update(
-        OMPI_COMM_WORLD_RANK="1",
-        OMPI_COMM_WORLD_LOCAL_RANK="1",
-        OMPI_COMM_WORLD_SIZE="2",
-    )
+    for world_size in (2, 4, 8):
+        rank = world_size - 1
+        env = fake_commands(tmp_path)
+        env.update(
+            OMPI_COMM_WORLD_RANK=str(rank),
+            OMPI_COMM_WORLD_LOCAL_RANK=str(rank),
+            OMPI_COMM_WORLD_SIZE=str(world_size),
+        )
 
-    completed = subprocess.run(
-        [MPI_NATIVE], cwd=ROOT, env=env, check=True, text=True, capture_output=True
-    )
+        completed = subprocess.run(
+            [MPI_NATIVE], cwd=ROOT, env=env, check=True, text=True, capture_output=True
+        )
 
-    assert "LAUNCH=mpi-native rank=1 local_rank=1 world_size=2" in completed.stdout
-    assert "PYTHON_ARGS=scripts/nccl_smoke.py" in completed.stdout
-    assert "DIST_ENV=1,1,2,127.0.0.1,29500" in completed.stdout
+        assert (
+            f"LAUNCH=mpi-native rank={rank} local_rank={rank} world_size={world_size}"
+            in completed.stdout
+        )
+        assert "PYTHON_ARGS=scripts/nccl_smoke.py" in completed.stdout
+        assert f"DIST_ENV={rank},{rank},{world_size},127.0.0.1,29500" in completed.stdout
 
 
 def test_rank0_torchrun_starts_one_worker_group(tmp_path):

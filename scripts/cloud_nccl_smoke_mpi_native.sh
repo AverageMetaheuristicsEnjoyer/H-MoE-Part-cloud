@@ -4,10 +4,13 @@ set -euo pipefail
 : "${OMPI_COMM_WORLD_RANK:?Cloud MPI rank is missing}"
 : "${OMPI_COMM_WORLD_LOCAL_RANK:?Cloud MPI local rank is missing}"
 : "${OMPI_COMM_WORLD_SIZE:?Cloud MPI world size is missing}"
-[[ $OMPI_COMM_WORLD_SIZE == 2 ]] || {
-  echo "expected two Cloud MPI ranks, got $OMPI_COMM_WORLD_SIZE" >&2
-  exit 2
-}
+case $OMPI_COMM_WORLD_SIZE in
+  2|4|8) ;;
+  *)
+    echo "expected 2, 4, or 8 Cloud MPI ranks, got $OMPI_COMM_WORLD_SIZE" >&2
+    exit 2
+    ;;
+esac
 
 export RANK=$OMPI_COMM_WORLD_RANK
 export LOCAL_RANK=$OMPI_COMM_WORLD_LOCAL_RANK
