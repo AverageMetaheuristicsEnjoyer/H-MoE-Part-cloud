@@ -14,7 +14,9 @@
 #                yet, polling every 5 min.  0 = process whatever exists and exit.
 #
 # Override the target with STAGE3_MOE_CKPT_ROOT / STAGE3_MOE_RETAIN_ITER /
-# STAGE3_MOE_HF_PREFIX to serve the mb=16 wave on nfs3 instead.
+# STAGE3_MOE_HF_PREFIX to serve the mb=16 wave on nfs3 instead, and STAGE3_MOE_ARMS
+# (space separated) to restrict which arms are waited on -- a directory that will
+# never produce the checkpoint would otherwise hold the poll open to the deadline.
 set -u
 
 repo=${1:?usage: cloud_hf_offload_retained.sh OWNER/REPO [delete|keep] [wait_minutes]}
@@ -41,7 +43,7 @@ else
 fi
 
 HMOE_REPO=$repo HMOE_DELETE=$delete HMOE_WAIT=$wait_min HMOE_ROOT=$root \
-HMOE_ITER=$iter HMOE_PREFIX=$prefix python - <<'PY'
+HMOE_ITER=$iter HMOE_PREFIX=$prefix HMOE_ARMS=${STAGE3_MOE_ARMS:-} python - <<'PY'
 import os, pathlib, shutil, sys, time
 from huggingface_hub import HfApi
 
@@ -61,7 +63,7 @@ if "/" not in repo:
 api.create_repo(repo, repo_type="model", private=True, exist_ok=True)
 print(f"REPO_READY {repo} (private)", flush=True)
 
-arms = sorted(d.name for d in root.glob("*") if d.is_dir())
+arms = os.environ["HMOE_ARMS"].split() or sorted(d.name for d in root.glob("*") if d.is_dir())
 print(f"ARMS {' '.join(arms)}", flush=True)
 done, failed = set(), set()
 
