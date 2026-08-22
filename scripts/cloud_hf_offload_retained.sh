@@ -80,7 +80,9 @@ def tracker_of(arm):
 def remote_listing(remote):
     out = {}
     try:
-        entries = api.list_repo_tree(repo, path_in_repo=remote, repo_type="model", recursive=True)
+        # list() inside the try: list_repo_tree is a generator, so the request -- and the
+        # 404 for a path that does not exist yet -- fires on iteration, not on the call.
+        entries = list(api.list_repo_tree(repo, path_in_repo=remote, repo_type="model", recursive=True))
     except Exception:                              # noqa: BLE001 - absent path, nothing there yet
         return out
     for entry in entries:
