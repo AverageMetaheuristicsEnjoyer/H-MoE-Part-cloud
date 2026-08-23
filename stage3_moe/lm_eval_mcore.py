@@ -1,9 +1,9 @@
 """Score the downstream suite with the live MCore model.
 
 Every primary task in `stage4/eval_tasks` is `output_type: multiple_choice`, so lm-eval
-only ever asks for `loglikelihood`. Serving that from the model MCore just loaded keeps the
-forward identical to the one the run was trained and validated with -- a conversion to
-another runtime would put an unmeasured difference between the arms being compared.
+only ever asks for `loglikelihood`. Serving that from the model MCore just loaded avoids a
+conversion to another runtime. The evaluation launcher records whether GEMMs use the arm's
+native mode or the diagnostic BF16 override.
 
 The training data is pre-tokenized GPT-2 (`NullTokenizer`, vocab 50257), so scoring text
 needs the real GPT-2 tokenizer; its ids are the ones the model was trained on.

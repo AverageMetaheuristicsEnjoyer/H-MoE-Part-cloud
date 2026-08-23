@@ -203,6 +203,7 @@
           "required": ["kind", "warmup_steps", "measured_steps", "e2e_train_steps"],
           "properties": {
             "kind": { "enum": ["smoke", "formal_timing", "long_training", "evaluation"] },
+            "evaluation_gemm_mode": { "enum": ["bf16", "fp8_delayed_hybrid"] },
             "warmup_steps": { "type": "integer", "minimum": 0 },
             "measured_steps": { "type": "integer", "minimum": 0 },
             "e2e_train_steps": { "type": "integer", "minimum": 0 }

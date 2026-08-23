@@ -168,6 +168,21 @@ case "$mode" in
     esac
     target_iters=$train_iters
     eval_load=${STAGE3_MOE_EVAL_LOAD:?set STAGE3_MOE_EVAL_LOAD to the checkpoint directory}
+    case ${STAGE3_MOE_EVAL_COMPUTE_MODE:-native} in
+      native)
+        eval_compute_mode=bf16
+        [[ ${#compute[@]} -gt 0 ]] && eval_compute_mode=fp8_delayed_hybrid
+        ;;
+      bf16)
+        [[ -n ${STAGE3_MOE_RUN_SUFFIX:-} ]] || {
+          echo "BF16 eval override requires STAGE3_MOE_RUN_SUFFIX" >&2
+          exit 2
+        }
+        compute=()
+        eval_compute_mode=bf16
+        ;;
+      *) echo "unknown eval compute mode: $STAGE3_MOE_EVAL_COMPUTE_MODE" >&2; exit 2 ;;
+    esac
     save_args=()
     # No --skip-train: it returns optimizer=None, and both the FP8-state bootstrap check
     # and the record's optimizer ledgers need a real optimizer object. Training is skipped
@@ -180,6 +195,7 @@ case "$mode" in
       --stage3-eval-downstream "${STAGE3_MOE_EVAL_TASKS:-basic_v2_hellaswag,basic_v2_arc_easy,basic_v2_arc_challenge,basic_v2_piqa,basic_v2_gsm8k_gold_bpb_5shot}"
       --stage3-eval-artifact-dir "$log_root/$run_id_eval/downstream"
       --stage3-eval-batch-size "${STAGE3_MOE_EVAL_BATCH:-8}"
+      --stage3-eval-compute-mode "$eval_compute_mode"
     )
     if [[ -n ${STAGE3_MOE_EVAL_LIMIT:-} ]]; then
       eval_args+=(--stage3-eval-limit "$STAGE3_MOE_EVAL_LIMIT")

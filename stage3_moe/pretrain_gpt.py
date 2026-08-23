@@ -23,15 +23,22 @@ def take_stage3_args(argv):
     parser.add_argument(
         "--optimizer-state-precision", choices=("fp32", "fp8"), required=True
     )
-    # Downstream scoring runs inside the training process so the forward is the same one
-    # the arm was trained with; see stage3_moe/lm_eval_mcore.py.
+    # Downstream scoring runs inside the training process so it uses the loaded MCore model.
+    # The diagnostic BF16 override changes only the evaluation GEMM mode.
     parser.add_argument("--stage3-eval-downstream", default=None)
     parser.add_argument("--stage3-eval-artifact-dir", type=Path, default=None)
     parser.add_argument("--stage3-eval-batch-size", type=int, default=8)
     parser.add_argument("--stage3-eval-limit", type=int, default=None)
+    parser.add_argument(
+        "--stage3-eval-compute-mode",
+        choices=("bf16", "fp8_delayed_hybrid"),
+        default=None,
+    )
     args, remaining = parser.parse_known_args(argv[1:])
     if args.stage3_warmup_steps < 0 or args.stage3_measure_steps < 1:
         raise ValueError("stage3 warmup must be non-negative and measured steps positive")
+    if bool(args.stage3_eval_downstream) != bool(args.stage3_eval_compute_mode):
+        raise ValueError("downstream tasks and evaluation compute mode must be set together")
     return args, [argv[0], *remaining]
 
 
@@ -68,7 +75,9 @@ def option_value(argv, option):
     return argv[index + 1]
 
 
-def validate_axis(arm, state_precision, argv, warmup_steps, measure_steps):
+def validate_axis(
+    arm, state_precision, argv, warmup_steps, measure_steps, eval_compute_mode=None
+):
     optimizer = "muon" if arm.startswith("muon_") else "adam"
     if option_value(argv, "--optimizer") != optimizer:
         raise ValueError(f"{arm} requires --optimizer {optimizer}")
@@ -84,13 +93,19 @@ def validate_axis(arm, state_precision, argv, warmup_steps, measure_steps):
 
     compute_fp8 = "_fp8gemm_" in arm
     has_fp8 = "--fp8-format" in argv or "--fp8-recipe" in argv
-    if compute_fp8:
+    eval_bf16_override = compute_fp8 and eval_compute_mode == "bf16"
+    if compute_fp8 and not eval_bf16_override:
         if option_value(argv, "--fp8-format") != "hybrid":
             raise ValueError("FP8 GEMM arms require --fp8-format hybrid")
         if option_value(argv, "--fp8-recipe") != "delayed":
             raise ValueError("FP8 GEMM arms require --fp8-recipe delayed")
     elif has_fp8:
         raise ValueError("BF16-GEMM arms must not pass FP8 compute flags")
+    actual_compute_mode = "fp8_delayed_hybrid" if has_fp8 else "bf16"
+    if eval_compute_mode is not None and eval_compute_mode != actual_compute_mode:
+        raise ValueError(
+            f"evaluation compute mode {eval_compute_mode} does not match MCore argv"
+        )
     if "--use-distributed-optimizer" in argv:
         raise ValueError("the first Stage 3 MoE probes use the non-distributed optimizer")
 
@@ -125,6 +140,7 @@ def main():
         mcore_argv,
         stage3_args.stage3_warmup_steps,
         stage3_args.stage3_measure_steps,
+        stage3_args.stage3_eval_compute_mode,
     )
     sys.argv = mcore_argv
 

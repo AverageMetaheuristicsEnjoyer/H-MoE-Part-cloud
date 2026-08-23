@@ -543,6 +543,20 @@ class Probe:
             tokens_per_second = (
                 args.global_batch_size * args.seq_length / full_step if full_step else None
             )
+            protocol = {
+                "kind": self.protocol_kind or (
+                    "formal_timing"
+                    if self.warmup_steps >= 20 and self.measured_steps >= 100
+                    else "smoke"
+                ),
+                "warmup_steps": self.warmup_steps,
+                "measured_steps": len(self.full_step_seconds),
+                "e2e_train_steps": self.step,
+            }
+            if self.protocol_kind == "evaluation":
+                protocol["evaluation_gemm_mode"] = (
+                    "fp8_delayed_hybrid" if "--fp8-format" in self.argv else "bf16"
+                )
             record = {
                 "schema_version": 1,
                 "record_type": "run",
@@ -574,16 +588,7 @@ class Probe:
                     else optimizer_state_ledger(self.optimizer, self.arm)
                 ),
                 "measurement": {
-                    "protocol": {
-                        "kind": self.protocol_kind or (
-                            "formal_timing"
-                            if self.warmup_steps >= 20 and self.measured_steps >= 100
-                            else "smoke"
-                        ),
-                        "warmup_steps": self.warmup_steps,
-                        "measured_steps": len(self.full_step_seconds),
-                        "e2e_train_steps": self.step,
-                    },
+                    "protocol": protocol,
                     "memory": {
                         "max_allocated_bytes": torch.cuda.max_memory_allocated(),
                         "max_reserved_bytes": torch.cuda.max_memory_reserved(),

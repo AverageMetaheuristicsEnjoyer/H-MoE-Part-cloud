@@ -25,7 +25,7 @@ mkdir -p "$HF_HOME"
 
 nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
 df -h "$HF_HOME" | tail -1
-echo "EVAL roots=${eval_roots[*]} tasks=${STAGE3_MOE_EVAL_TASKS:-basic_v2 default} limit=${STAGE3_MOE_EVAL_LIMIT:-none}"
+echo "EVAL roots=${eval_roots[*]} tasks=${STAGE3_MOE_EVAL_TASKS:-basic_v2 default} limit=${STAGE3_MOE_EVAL_LIMIT:-none} compute=${STAGE3_MOE_EVAL_COMPUTE_MODE:-native}"
 
 if ! python -c 'import lm_eval' >/dev/null 2>&1; then
   echo "=== installing lm-eval ==="
