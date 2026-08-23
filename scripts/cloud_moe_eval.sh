@@ -10,11 +10,12 @@ set -u
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 ckpt_root=${STAGE3_MOE_EVAL_ROOT:-/workspace-SR006.nfs3/hmoe-checkpoints/stage3}
-# Where to look for each arm's endpoint, in order. The two 1C waves live on different
-# volumes -- the mb=4 arms under nfs2, the fp8gemm arms under nfs3 -- and the compute-axis
-# pair takes its baseline from one and its treatment from the other, so a single job has
-# to be able to reach both.
-eval_roots=${STAGE3_MOE_EVAL_ROOTS:-$ckpt_root/1p2b}
+# Where to look for each arm's endpoint, colon separated and searched in order. The two
+# 1C waves live on different volumes -- the mb=4 arms under nfs2, the fp8gemm arms under
+# nfs3 -- and the compute-axis pair takes its baseline from one and its treatment from the
+# other, so a single job has to be able to reach both. (mlsub refuses an environment value
+# containing a space, hence the colon.)
+IFS=: read -ra eval_roots <<<"${STAGE3_MOE_EVAL_ROOTS:-$ckpt_root/1p2b}"
 stage_dir=${STAGE3_MOE_EVAL_STAGE:-/tmp/stage3-eval-ckpt}
 # The datasets are the bulk of this and /home/jovyan runs chronically near full, so the
 # HF cache goes on the volume with room; the packages stay in the image's own user base.
@@ -24,7 +25,7 @@ mkdir -p "$HF_HOME"
 
 nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
 df -h "$HF_HOME" | tail -1
-echo "EVAL roots=$eval_roots tasks=${STAGE3_MOE_EVAL_TASKS:-basic_v2 default} limit=${STAGE3_MOE_EVAL_LIMIT:-none}"
+echo "EVAL roots=${eval_roots[*]} tasks=${STAGE3_MOE_EVAL_TASKS:-basic_v2 default} limit=${STAGE3_MOE_EVAL_LIMIT:-none}"
 
 if ! python -c 'import lm_eval' >/dev/null 2>&1; then
   echo "=== installing lm-eval ==="
@@ -45,7 +46,7 @@ for arm in "$@"; do
     continue
   fi
   src=""
-  for base in $eval_roots; do
+  for base in "${eval_roots[@]}"; do
     tracker="$base/$arm/latest_checkpointed_iteration.txt"
     [[ -f $tracker ]] || continue
     # The offloaded waves left trackers behind pointing at iteration directories that
@@ -55,7 +56,7 @@ for arm in "$@"; do
     break
   done
   if [[ -z $src ]]; then
-    echo "SKIP $arm: no endpoint under $eval_roots"
+    echo "SKIP $arm: no endpoint under ${eval_roots[*]}"
     continue
   fi
   rm -rf "$stage_dir"
