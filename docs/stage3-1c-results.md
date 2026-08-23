@@ -127,6 +127,17 @@ applies to this whole table.
 - Each pair is one replicate, so `memory_allocated_ratio_ci95` and `e2e_wct_ratio_ci95` are
   null. The downstream CIs are paired per document and need no replicates.
 
+## The numbers themselves
+
+[`stage3-1c-downstream.json`](stage3-1c-downstream.json) holds all 54 metric values at full
+precision, each arm's validation loss, the paired 95 % degradation intervals on the four
+treatment arms, and the SHA-256 of every per-example artifact they were computed from. It was
+lifted off the volume with `scripts/cloud_dump_downstream.sh`; the tables above are the same
+numbers rounded.
+
+**Nothing logs these scores anywhere else.** `run_suite` writes them to the run directory and
+no code path pushes them to W&B, so before this file the only copy was on nfs2.
+
 ## Where the artifacts are
 
 | what | where |

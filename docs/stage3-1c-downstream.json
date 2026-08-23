@@ -1,0 +1,318 @@
+{
+  "budget": "1C, iteration 17242, 7,344,816,128 tokens per arm",
+  "scored": "2026-08-23",
+  "suite": "primary basic_v2 (wave 1); secondary tasks not scored",
+  "source": "/workspace-SR006.nfs2/hmoe-cloud/pretrain/stage3-<arm>-eval-downstream-1c/",
+  "arms": {
+    "adamw_bf16_state_fp32": {
+      "run_id": "stage3-adamw_bf16_state_fp32-eval-downstream-1c",
+      "loss": {
+        "training": null,
+        "validation": 2.675480842590332
+      },
+      "metrics": {
+        "basic_v2_arc_challenge/bpb_v2": 1.260669824118474,
+        "basic_v2_arc_challenge/len_norm_v2": 0.30802047781569963,
+        "basic_v2_arc_easy/acc_v2": 0.6207912457912458,
+        "basic_v2_arc_easy/bpb_v2": 1.1508639365591964,
+        "basic_v2_gsm8k_gold_bpb_5shot/bpb_v2": 0.7750588537011578,
+        "basic_v2_hellaswag/bpb_v2": 0.8942667850099223,
+        "basic_v2_hellaswag/len_norm_v2": 0.4277036446922924,
+        "basic_v2_piqa/bpb_v2": 1.1871998174871468,
+        "basic_v2_piqa/len_norm_v2": 0.6838955386289445
+      },
+      "paired_degradation_ci95_vs": null,
+      "paired_degradation_ci95": null,
+      "per_example_artifact_sha256": {
+        "basic_v2_arc_challenge": "259b3200f2243d447a53199aadf0a8591493a41cf51b34a55a0d4c9f5df7bca8",
+        "basic_v2_arc_easy": "df3d2fcdda669db8867c60f49e0ae07a2d37c27d21aa4b1f8cde55ada06ca15c",
+        "basic_v2_gsm8k_gold_bpb_5shot": "a7cc0524fdda1774f0654aeb22b37d714f7fa31f6a7a7d1a231fbce3018c851f",
+        "basic_v2_hellaswag": "646bdfeaf57b314643f4655a943eb7d3091375d96d55461d876503a7807438c5",
+        "basic_v2_piqa": "5f146d4ce4ff414b1436589b3ff6e50dbd57f862eb5f6b5f95f32de64f60998b"
+      }
+    },
+    "adamw_bf16_state_fp8": {
+      "run_id": "stage3-adamw_bf16_state_fp8-eval-downstream-1c",
+      "loss": {
+        "training": null,
+        "validation": 2.6942102909088135
+      },
+      "metrics": {
+        "basic_v2_arc_challenge/bpb_v2": 1.258057146603718,
+        "basic_v2_arc_challenge/len_norm_v2": 0.2858361774744027,
+        "basic_v2_arc_easy/acc_v2": 0.6047979797979798,
+        "basic_v2_arc_easy/bpb_v2": 1.134663748930697,
+        "basic_v2_gsm8k_gold_bpb_5shot/bpb_v2": 0.7914383780120494,
+        "basic_v2_hellaswag/bpb_v2": 0.9031015032269487,
+        "basic_v2_hellaswag/len_norm_v2": 0.41734714200358497,
+        "basic_v2_piqa/bpb_v2": 1.1863537186519357,
+        "basic_v2_piqa/len_norm_v2": 0.6795429815016322
+      },
+      "paired_degradation_ci95_vs": "stage3-adamw_bf16_state_fp32-eval-downstream-1c",
+      "paired_degradation_ci95": {
+        "basic_v2_arc_challenge/bpb_v2": [
+          -0.010373217108433912,
+          0.0061974621550802455
+        ],
+        "basic_v2_arc_challenge/len_norm_v2": [
+          0.016256215960217917,
+          0.1266508544972228
+        ],
+        "basic_v2_arc_easy/acc_v2": [
+          0.00412727777350623,
+          0.047235062933914974
+        ],
+        "basic_v2_arc_easy/bpb_v2": [
+          -0.020040361105677387,
+          -0.008130600727941494
+        ],
+        "basic_v2_gsm8k_gold_bpb_5shot/bpb_v2": [
+          0.018096829868920784,
+          0.024301774785267714
+        ],
+        "basic_v2_hellaswag/bpb_v2": [
+          0.008983032626554966,
+          0.010840181801055495
+        ],
+        "basic_v2_hellaswag/len_norm_v2": [
+          0.013238238510084188,
+          0.034938248065665777
+        ],
+        "basic_v2_piqa/bpb_v2": [
+          -0.003546137747300405,
+          0.002096288237925077
+        ],
+        "basic_v2_piqa/len_norm_v2": [
+          -0.011327778739385069,
+          0.02354125827003181
+        ]
+      },
+      "per_example_artifact_sha256": {
+        "basic_v2_arc_challenge": "20798129e2f549781130616b4ea941eb094d0226b6425c849d48f66cd6fe601b",
+        "basic_v2_arc_easy": "f83dff2e8dea959fbc18cefba477ed82cb944013d5028982cfb3cddc04aef2a3",
+        "basic_v2_gsm8k_gold_bpb_5shot": "de3c97825d43fc8ff66d62b8d9b8f42f91fc4b4c7f3ff97288a7d300a6b186c9",
+        "basic_v2_hellaswag": "65b48bbfa8b5fc3f3fc244795af477d53b57e59799edba90e5e7112b92cfb064",
+        "basic_v2_piqa": "d148ec446bdc8f62c4c6b39cab586ff4a76a9a1b465daf20ed1061718828ca74"
+      }
+    },
+    "adamw_fp8gemm_state_fp32": {
+      "run_id": "stage3-adamw_fp8gemm_state_fp32-eval-downstream-1c",
+      "loss": {
+        "training": null,
+        "validation": 2.724412679672241
+      },
+      "metrics": {
+        "basic_v2_arc_challenge/bpb_v2": 1.3197728859433804,
+        "basic_v2_arc_challenge/len_norm_v2": 0.28498293515358364,
+        "basic_v2_arc_easy/acc_v2": 0.5968013468013468,
+        "basic_v2_arc_easy/bpb_v2": 1.2182903160107446,
+        "basic_v2_gsm8k_gold_bpb_5shot/bpb_v2": 0.8179145983632503,
+        "basic_v2_hellaswag/bpb_v2": 0.9108815071688364,
+        "basic_v2_hellaswag/len_norm_v2": 0.41286596295558653,
+        "basic_v2_piqa/bpb_v2": 1.206247345062809,
+        "basic_v2_piqa/len_norm_v2": 0.6811751904243744
+      },
+      "paired_degradation_ci95_vs": "stage3-adamw_bf16_state_fp32-eval-downstream-1c",
+      "paired_degradation_ci95": {
+        "basic_v2_arc_challenge/bpb_v2": [
+          0.039772625098213686,
+          0.05438152120554593
+        ],
+        "basic_v2_arc_challenge/len_norm_v2": [
+          0.020331395348837135,
+          0.12939253269441947
+        ],
+        "basic_v2_arc_easy/acc_v2": [
+          0.017348461588067434,
+          0.05941965718776626
+        ],
+        "basic_v2_arc_easy/bpb_v2": [
+          0.052426072035679734,
+          0.06485363109422806
+        ],
+        "basic_v2_gsm8k_gold_bpb_5shot/bpb_v2": [
+          0.05194326006393304,
+          0.05861970213158866
+        ],
+        "basic_v2_hellaswag/bpb_v2": [
+          0.01760636230920638,
+          0.019571660702489897
+        ],
+        "basic_v2_hellaswag/len_norm_v2": [
+          0.023465368111607,
+          0.04630946916525197
+        ],
+        "basic_v2_piqa/bpb_v2": [
+          0.012994910318968832,
+          0.019322351013859974
+        ],
+        "basic_v2_piqa/len_norm_v2": [
+          -0.014110473776651321,
+          0.02300036310042385
+        ]
+      },
+      "per_example_artifact_sha256": {
+        "basic_v2_arc_challenge": "1595cdea7cb37f9f1a4e59c814ce4721b655e57800b51b35ca0d2bbbbdd7ba65",
+        "basic_v2_arc_easy": "e83afd9acc70bc4ed31fc8a79fb7f011ef3bb987ff71d9d0f16f01863a7b9484",
+        "basic_v2_gsm8k_gold_bpb_5shot": "421fcafad089c79b21eb28ac62b08bd74593ca98a1404169d37424aa1c49331b",
+        "basic_v2_hellaswag": "0787f6b20074bae4fb4af5a4156a435eeff6ed52e6a7f1ed53ad722d1f67df4e",
+        "basic_v2_piqa": "74f25496d03663577333a2f187b4a0b283633a1ee3c29d7bdcb3f28ee75419d8"
+      }
+    },
+    "muon_bf16_state_fp32": {
+      "run_id": "stage3-muon_bf16_state_fp32-eval-downstream-1c",
+      "loss": {
+        "training": null,
+        "validation": 2.650182008743286
+      },
+      "metrics": {
+        "basic_v2_arc_challenge/bpb_v2": 1.2213979219299131,
+        "basic_v2_arc_challenge/len_norm_v2": 0.29266211604095566,
+        "basic_v2_arc_easy/acc_v2": 0.6203703703703703,
+        "basic_v2_arc_easy/bpb_v2": 1.0916660343976268,
+        "basic_v2_gsm8k_gold_bpb_5shot/bpb_v2": 0.767977964335312,
+        "basic_v2_hellaswag/bpb_v2": 0.8934045519669234,
+        "basic_v2_hellaswag/len_norm_v2": 0.4334793865763792,
+        "basic_v2_piqa/bpb_v2": 1.162138996901914,
+        "basic_v2_piqa/len_norm_v2": 0.6920565832426551
+      },
+      "paired_degradation_ci95_vs": null,
+      "paired_degradation_ci95": null,
+      "per_example_artifact_sha256": {
+        "basic_v2_arc_challenge": "98229a0095b2952383b0f6632aa3a71ca8da116a3d9270f7eee1976edeb4eabb",
+        "basic_v2_arc_easy": "03f1cb967d6a1047c1926d275301da041778391819f4578579cf45a4fc3164a2",
+        "basic_v2_gsm8k_gold_bpb_5shot": "01f41a9519eefa105593c3102d4dc3b7535edb4395f41ebab5916ac9569581cb",
+        "basic_v2_hellaswag": "1f312ffec8cfa09c0beaf93c48ef2f1d3a09f261e171945284a0b44a6b2bb184",
+        "basic_v2_piqa": "b1f22a56e40fa50f9d69fea270efdb0eaa628e33bef1259992dca06f8d03ead6"
+      }
+    },
+    "muon_bf16_state_fp8": {
+      "run_id": "stage3-muon_bf16_state_fp8-eval-downstream-1c",
+      "loss": {
+        "training": null,
+        "validation": 2.6485724449157715
+      },
+      "metrics": {
+        "basic_v2_arc_challenge/bpb_v2": 1.2630528125182758,
+        "basic_v2_arc_challenge/len_norm_v2": 0.29436860068259385,
+        "basic_v2_arc_easy/acc_v2": 0.6296296296296297,
+        "basic_v2_arc_easy/bpb_v2": 1.1755197961784427,
+        "basic_v2_gsm8k_gold_bpb_5shot/bpb_v2": 0.7721224081107358,
+        "basic_v2_hellaswag/bpb_v2": 0.8905099045332436,
+        "basic_v2_hellaswag/len_norm_v2": 0.43537143995220073,
+        "basic_v2_piqa/bpb_v2": 1.1872948576090947,
+        "basic_v2_piqa/len_norm_v2": 0.6806311207834603
+      },
+      "paired_degradation_ci95_vs": "stage3-muon_bf16_state_fp32-eval-downstream-1c",
+      "paired_degradation_ci95": {
+        "basic_v2_arc_challenge/bpb_v2": [
+          0.026350880887040067,
+          0.041892621662747126
+        ],
+        "basic_v2_arc_challenge/len_norm_v2": [
+          -0.0695718050065877,
+          0.05413105413105419
+        ],
+        "basic_v2_arc_easy/acc_v2": [
+          -0.03554878048780497,
+          0.004873882611109006
+        ],
+        "basic_v2_arc_easy/bpb_v2": [
+          0.07001541085681992,
+          0.08385088891226554
+        ],
+        "basic_v2_gsm8k_gold_bpb_5shot/bpb_v2": [
+          0.002687368256336256,
+          0.008303514152871746
+        ],
+        "basic_v2_hellaswag/bpb_v2": [
+          -0.004193609675338528,
+          -0.002320161917694531
+        ],
+        "basic_v2_hellaswag/len_norm_v2": [
+          -0.01525315951476789,
+          0.007018425254553894
+        ],
+        "basic_v2_piqa/bpb_v2": [
+          0.018468827800211897,
+          0.024787594696763213
+        ],
+        "basic_v2_piqa/len_norm_v2": [
+          -0.0007943443641739474,
+          0.033547666659005104
+        ]
+      },
+      "per_example_artifact_sha256": {
+        "basic_v2_arc_challenge": "62b8ab1678c406dda70cb0aaea25d4cc7e2d2dc11ea93afb65e6d74c43e6fd93",
+        "basic_v2_arc_easy": "6559bf6fd265d56e0aabb0a4951c20f52bb9d404de1b39b2d0ae8b2e869502ec",
+        "basic_v2_gsm8k_gold_bpb_5shot": "098c119ab7c44f5141978798d5b1683876f125c13e0f0a93cdb67ff44055674c",
+        "basic_v2_hellaswag": "f57e513d9977118749d803790469eac6698a9f902f8bef0e15bd086cf9fc2e35",
+        "basic_v2_piqa": "5214e7c4c0ef1bce37f25941b9713fe0d26d4db30751a393f5b8d3c619d5c0e9"
+      }
+    },
+    "muon_fp8gemm_state_fp32": {
+      "run_id": "stage3-muon_fp8gemm_state_fp32-eval-downstream-1c",
+      "loss": {
+        "training": null,
+        "validation": 2.6820194721221924
+      },
+      "metrics": {
+        "basic_v2_arc_challenge/bpb_v2": 1.191054288709139,
+        "basic_v2_arc_challenge/len_norm_v2": 0.28668941979522183,
+        "basic_v2_arc_easy/acc_v2": 0.6022727272727273,
+        "basic_v2_arc_easy/bpb_v2": 1.0861456598073096,
+        "basic_v2_gsm8k_gold_bpb_5shot/bpb_v2": 0.8070183457905555,
+        "basic_v2_hellaswag/bpb_v2": 0.9073717108118857,
+        "basic_v2_hellaswag/len_norm_v2": 0.4282015534754033,
+        "basic_v2_piqa/bpb_v2": 1.1878610435739392,
+        "basic_v2_piqa/len_norm_v2": 0.676822633297062
+      },
+      "paired_degradation_ci95_vs": "stage3-muon_bf16_state_fp32-eval-downstream-1c",
+      "paired_degradation_ci95": {
+        "basic_v2_arc_challenge/bpb_v2": [
+          -0.0324565606106681,
+          -0.01655766072363308
+        ],
+        "basic_v2_arc_challenge/len_norm_v2": [
+          -0.043210766001352006,
+          0.08133206985244353
+        ],
+        "basic_v2_arc_easy/acc_v2": [
+          0.006857305088938375,
+          0.05093238660716541
+        ],
+        "basic_v2_arc_easy/bpb_v2": [
+          -0.012009706715982268,
+          0.0022943040617704694
+        ],
+        "basic_v2_gsm8k_gold_bpb_5shot/bpb_v2": [
+          0.0474078882059827,
+          0.054441541773459404
+        ],
+        "basic_v2_hellaswag/bpb_v2": [
+          0.01440390044326825,
+          0.016872462726432072
+        ],
+        "basic_v2_hellaswag/len_norm_v2": [
+          0.0004656153124781617,
+          0.02344302750176837
+        ],
+        "basic_v2_piqa/bpb_v2": [
+          0.01892956733283988,
+          0.025317296057533047
+        ],
+        "basic_v2_piqa/len_norm_v2": [
+          0.0032282798302480445,
+          0.041042971481389245
+        ]
+      },
+      "per_example_artifact_sha256": {
+        "basic_v2_arc_challenge": "6aec9299e7acbe3a0b5ab5295701ddd1ba0302df09931483cfe20c3ab8afb0f7",
+        "basic_v2_arc_easy": "d35644244b50540bbe232f305467681275d516a387468b3c1fff1ef177c82824",
+        "basic_v2_gsm8k_gold_bpb_5shot": "260b2321f14f4e1e1f1a8b17f8bdab00b7cef0a9549841cfe89eaee562aabf48",
+        "basic_v2_hellaswag": "f55513de6efdda035bbfcfaead664250673f0cde1e6622238c3bf896e9dff009",
+        "basic_v2_piqa": "3f4877dba08b9c075d721cf29c14d71cba526faff2f2d57d7a7fae1c61c92ac5"
+      }
+    }
+  }
+}
