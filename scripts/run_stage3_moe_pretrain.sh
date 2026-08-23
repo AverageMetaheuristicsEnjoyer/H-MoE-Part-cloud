@@ -157,9 +157,16 @@ case "$mode" in
     # Score a finished checkpoint. --skip-train makes MCore build the model, load the
     # weights and go straight to evaluation, which is what the decay endpoints support:
     # they are saved with --no-save-optim, so there is no optimizer state to restore.
-    train_iters=$short_iters
-    target_iters=$short_iters
-    decay_iters=$short_decay_iters
+    # The budget has to be the one the endpoint was trained on. MCore restores
+    # consumed_train_samples from the checkpoint and sizes the train dataset from
+    # train_iters, and MegatronPretrainingSampler refuses a dataloader whose samples are
+    # already consumed -- so a 1C endpoint (17,242) cannot be scored on the 1.2B schedule.
+    case ${STAGE3_MOE_EVAL_BUDGET:-1p2b} in
+      1p2b) train_iters=$short_iters; decay_iters=$short_decay_iters ;;
+      1c)   train_iters=$full_iters;  decay_iters=$full_decay_iters ;;
+      *) echo "unknown eval budget: $STAGE3_MOE_EVAL_BUDGET" >&2; exit 2 ;;
+    esac
+    target_iters=$train_iters
     eval_load=${STAGE3_MOE_EVAL_LOAD:?set STAGE3_MOE_EVAL_LOAD to the checkpoint directory}
     save_args=()
     # No --skip-train: it returns optimizer=None, and both the FP8-state bootstrap check
