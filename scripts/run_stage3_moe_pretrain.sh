@@ -33,6 +33,10 @@ micro_batch=${STAGE3_MOE_MICRO_BATCH:-4}            # 4 x DP2 x accum26 = 208
 data_root=${STAGE3_MOE_DATA_ROOT:-/home/jovyan/data/fineweb-edu-gpt2-megatron/data}
 ckpt_root=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs3/hmoe-checkpoints/stage3}
 log_root=${STAGE3_MOE_LOG_ROOT:-/home/jovyan/hmoe-cloud/pretrain}
+data_cache_args=()
+if [[ -n ${STAGE3_MOE_DATA_CACHE_PATH:-} ]]; then
+  data_cache_args=(--data-cache-path "$STAGE3_MOE_DATA_CACHE_PATH")
+fi
 
 case "$arm" in
   adamw_bf16_state_fp32) optimizer=adam; state_precision=fp32; compute=() ;;
@@ -345,6 +349,7 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   --train-data-path "$data_root/train" \
   --valid-data-path "$data_root/development" \
   --test-data-path "$data_root/final" \
+  "${data_cache_args[@]}" \
   --dataloader-type single \
   --num-workers 2 \
   --no-create-attention-mask-in-dataloader \

@@ -8,6 +8,7 @@ export STAGE3_MOE_BENCH_ITERS=${STAGE3_MOE_AMAX_PILOT_ITERS:-300}
 export STAGE3_MOE_MICRO_BATCH=16
 export STAGE3_MOE_LOG_ROOT=${STAGE3_MOE_LOG_ROOT:-/workspace-SR006.nfs2/hmoe-cloud/pretrain}
 export STAGE3_MOE_CKPT_ROOT="/tmp/stage3-amax-pilot-$$"
+export STAGE3_MOE_DATA_CACHE_PATH="/tmp/stage3-amax-pilot-cache-$$"
 
 for variant in h16max current bf16; do
   unset STAGE3_MOE_FP8_AMAX_HISTORY_LEN STAGE3_MOE_FP8_AMAX_COMPUTE_ALGO
@@ -31,5 +32,6 @@ for variant in h16max current bf16; do
 done
 
 rm -rf "$STAGE3_MOE_CKPT_ROOT"
+rm -rf "$STAGE3_MOE_DATA_CACHE_PATH"
 echo "EXIT=0"
 exit 0
