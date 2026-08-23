@@ -80,8 +80,14 @@ def mask_arm_in_paths(argv, arm):
 
 def _normalized_pair_argv(baseline_argv, treatment_argv, axis,
                           baseline_arm=None, treatment_arm=None):
+    fp8_options = (
+        "--fp8-format",
+        "--fp8-recipe",
+        "--fp8-amax-history-len",
+        "--fp8-amax-compute-algo",
+    )
     for label, argv in (("baseline", baseline_argv), ("treatment", treatment_argv)):
-        for option in ("--fp8-format", "--fp8-recipe"):
+        for option in fp8_options:
             if option in argv and (axis != "fp8_gemm" or label != "treatment"):
                 raise ValueError(f"{label} argv contains forbidden {option}")
     baseline_argv = mask_arm_in_paths(baseline_argv, baseline_arm)
@@ -97,6 +103,10 @@ def _normalized_pair_argv(baseline_argv, treatment_argv, axis,
         if index + 1 >= len(normalized) or normalized[index + 1] != expected:
             raise ValueError(f"treatment argv requires {option} {expected}")
         del normalized[index:index + 2]
+    for option in ("--fp8-amax-history-len", "--fp8-amax-compute-algo"):
+        if option in normalized:
+            index = normalized.index(option)
+            del normalized[index:index + 2]
     return list(baseline_argv), normalized
 
 

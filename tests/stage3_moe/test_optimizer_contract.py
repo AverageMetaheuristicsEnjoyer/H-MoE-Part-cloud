@@ -313,6 +313,23 @@ def test_match_key_normalization_removes_only_fp8_compute_axis():
     assert _normalized_match_argv(base + ["--micro-batch-size", "2"]) != base
 
 
+def test_match_key_normalization_removes_delayed_scaling_overrides():
+    treatment = [
+        "p",
+        "--optimizer",
+        "adam",
+        "--fp8-format",
+        "hybrid",
+        "--fp8-recipe",
+        "delayed",
+        "--fp8-amax-history-len",
+        "16",
+        "--fp8-amax-compute-algo",
+        "max",
+    ]
+    assert _normalized_match_argv(treatment) == ["p", "--optimizer", "adam"]
+
+
 def test_parameter_ledger_uses_stable_names(monkeypatch):
     from stage3_moe import result_writer
 

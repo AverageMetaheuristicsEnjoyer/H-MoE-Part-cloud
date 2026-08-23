@@ -43,6 +43,14 @@ case "$arm" in
   muon_fp8gemm_state_fp32)  optimizer=muon; state_precision=fp32; compute=(--fp8-format hybrid --fp8-recipe delayed) ;;
   *) echo "unknown arm: $arm" >&2; exit 2 ;;
 esac
+if ((${#compute[@]})); then
+  if [[ -n ${STAGE3_MOE_FP8_AMAX_HISTORY_LEN:-} ]]; then
+    compute+=(--fp8-amax-history-len "$STAGE3_MOE_FP8_AMAX_HISTORY_LEN")
+  fi
+  if [[ -n ${STAGE3_MOE_FP8_AMAX_COMPUTE_ALGO:-} ]]; then
+    compute+=(--fp8-amax-compute-algo "$STAGE3_MOE_FP8_AMAX_COMPUTE_ALGO")
+  fi
+fi
 probe_warmup=20
 probe_measure=100
 optimizer_args=()
@@ -130,7 +138,7 @@ case "$mode" in
   bench)
     # Throughput and peak memory only. No checkpoint traffic, so an NFS write never
     # lands inside the measured window and topologies stay comparable.
-    train_iters=25
+    train_iters=${STAGE3_MOE_BENCH_ITERS:-25}
     target_iters=$full_iters
     decay_iters=$full_decay_iters
     save_args=()

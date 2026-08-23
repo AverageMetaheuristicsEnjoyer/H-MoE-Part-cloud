@@ -366,6 +366,18 @@ class PerArmPathTest(unittest.TestCase):
         )
         self.assertEqual(compare_runs(baseline, treatment)["axis"], "fp8_gemm")
 
+    def test_delayed_scaling_overrides_are_treatment_only(self):
+        baseline, treatment = self.pair(
+            [],
+            [
+                "--fp8-amax-history-len",
+                "16",
+                "--fp8-amax-compute-algo",
+                "max",
+            ],
+        )
+        self.assertEqual(compare_runs(baseline, treatment)["axis"], "fp8_gemm")
+
     def test_a_different_checkpoint_root_is_still_refused(self):
         baseline, treatment = self.pair(
             ["--load", "/ckpt/trunk/adamw_bf16_state_fp32"],

@@ -319,7 +319,12 @@ def _normalized_match_argv(argv, arm):
         if skip:
             skip = False
             continue
-        if item in {"--fp8-format", "--fp8-recipe"}:
+        if item in {
+            "--fp8-format",
+            "--fp8-recipe",
+            "--fp8-amax-history-len",
+            "--fp8-amax-compute-algo",
+        }:
             skip = True
             continue
         normalized.append(item)

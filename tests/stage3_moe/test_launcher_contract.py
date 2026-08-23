@@ -19,7 +19,7 @@ ARMS = (
 )
 
 
-def dry_run(arm, *extra):
+def dry_run(arm, *extra, env_overrides=None):
     env = os.environ.copy()
     env.update(
         CUDA_VISIBLE_DEVICES="0",
@@ -27,6 +27,7 @@ def dry_run(arm, *extra):
         STAGE3_MOE_PYTHON="/bin/false",
         STAGE3_MOE_RUN_ID="contract-test",
     )
+    env.update(env_overrides or {})
     completed = subprocess.run(
         [str(LAUNCHER), arm, "mock", *extra],
         cwd=ROOT,
@@ -89,6 +90,20 @@ def test_six_arms_keep_state_and_compute_axes_separate():
     assert value(commands["muon_bf16_state_fp8"], "--optimizer-state-precision") == "fp8"
     assert value(commands["muon_bf16_state_fp32"], "--optimizer") == "muon"
     assert "--muon-nesterov" in commands["muon_bf16_state_fp32"]
+
+
+def test_fp8_amax_overrides_are_opt_in_and_fp8_only():
+    overrides = {
+        "STAGE3_MOE_FP8_AMAX_HISTORY_LEN": "16",
+        "STAGE3_MOE_FP8_AMAX_COMPUTE_ALGO": "max",
+    }
+    bf16 = dry_run("adamw_bf16_state_fp32", env_overrides=overrides)[1]
+    fp8 = dry_run("adamw_fp8gemm_state_fp32", env_overrides=overrides)[1]
+
+    assert "--fp8-amax-history-len" not in bf16
+    assert "--fp8-amax-compute-algo" not in bf16
+    assert value(fp8, "--fp8-amax-history-len") == "16"
+    assert value(fp8, "--fp8-amax-compute-algo") == "max"
 
 
 def test_probe_and_smoke_step_contract_and_denominators():
