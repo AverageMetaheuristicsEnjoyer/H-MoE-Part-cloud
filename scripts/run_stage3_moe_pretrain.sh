@@ -242,7 +242,10 @@ case "$mode" in
 esac
 
 run_id="stage3-$arm-$mode${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
-mkdir -p "$log_root/$run_id" "$trunk_dir"
+mkdir -p "$log_root/$run_id"
+if [[ ${STAGE3_MOE_MUON_SHADOW:-0} != 1 ]]; then
+  mkdir -p "$trunk_dir"
+fi
 if [[ ${STAGE3_MOE_MUON_SHADOW:-0} == 1 ]]; then
   export STAGE3_MOE_MUON_SHADOW_PATH="$log_root/$run_id/muon-fp8-shadow.jsonl"
   echo "MUON_FP8_SHADOW=$STAGE3_MOE_MUON_SHADOW_PATH"
