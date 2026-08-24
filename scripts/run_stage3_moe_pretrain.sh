@@ -57,6 +57,7 @@ if ((${#compute[@]})); then
 fi
 probe_warmup=20
 probe_measure=100
+eval_interval=250
 optimizer_args=()
 [[ $optimizer == muon ]] && optimizer_args=("${STAGE3_MOE_MUON_ARGS[@]}")
 
@@ -162,10 +163,21 @@ case "$mode" in
         exit 2
       }
       resume_bench_iters=${STAGE3_MOE_BENCH_ITERS:-20}
+      shadow_load=${STAGE3_MOE_MUON_SHADOW_LOAD:?set STAGE3_MOE_MUON_SHADOW_LOAD to the FP32 checkpoint directory}
+      shadow_iter=${STAGE3_MOE_MUON_SHADOW_ITER:?set STAGE3_MOE_MUON_SHADOW_ITER to its checkpoint iteration}
+      [[ $shadow_iter =~ ^[0-9]+$ ]] || {
+        echo "invalid Muon FP8 shadow checkpoint iteration: $shadow_iter" >&2
+        exit 2
+      }
       probe_warmup=0
       probe_measure=$resume_bench_iters
+      eval_interval=1000000
     fi
-    train_iters=$((short_branch + resume_bench_iters))
+    if [[ ${STAGE3_MOE_MUON_SHADOW:-0} == 1 ]]; then
+      train_iters=$((shadow_iter + resume_bench_iters))
+    else
+      train_iters=$((short_branch + resume_bench_iters))
+    fi
     target_iters=$full_iters
     decay_iters=$full_decay_iters
     save_args=()
@@ -174,6 +186,9 @@ case "$mode" in
     # (start_wd = end_wd = 0.1) and every LR argument matches the trunk, so overriding
     # rebuilds the identical schedule; num_steps still comes from the checkpoint.
     load_args=(--load "$trunk_dir" --override-opt_param-scheduler)
+    if [[ ${STAGE3_MOE_MUON_SHADOW:-0} == 1 ]]; then
+      load_args=(--load "$shadow_load" --override-opt_param-scheduler)
+    fi
     ;;
   eval-downstream)
     # Score a finished checkpoint. --skip-train makes MCore build the model, load the
@@ -370,7 +385,7 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   --num-workers 2 \
   --no-create-attention-mask-in-dataloader \
   --seed "${STAGE3_MOE_SEED:-1234}" \
-  --eval-interval 250 \
+  --eval-interval "$eval_interval" \
   --eval-iters 32 \
   --log-interval 10 \
   --log-throughput \
