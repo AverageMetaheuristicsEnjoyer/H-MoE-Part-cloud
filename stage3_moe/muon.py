@@ -166,6 +166,13 @@ class MuonFP8ShadowDiagnostic(SplitSwiGLUTensorParallelMuon):
         self._shadow_highest_ns = os.environ.get(
             "STAGE3_MOE_MUON_SHADOW_HIGHEST_NS", "0"
         ) == "1"
+        self._shadow_group_size = int(
+            os.environ.get("STAGE3_MOE_MUON_SHADOW_GROUP_SIZE", str(GROUP_SIZE))
+        )
+        if self._shadow_group_size not in {32, GROUP_SIZE}:
+            raise ValueError(
+                f"unknown Muon shadow group size: {self._shadow_group_size}"
+            )
         self._shadow_spec = spec
         if self._shadow_quantizer == "dre":
             self._shadow_spec = StateSpec(
@@ -182,12 +189,24 @@ class MuonFP8ShadowDiagnostic(SplitSwiGLUTensorParallelMuon):
             }
             if self._shadow_quantizer != "stochastic":
                 shadow_state = {}
-                init_fp8_state(shadow_state, self._shadow_spec, reference)
-                quantize_fp8_state_(shadow_state, self._shadow_spec, reference)
+                init_fp8_state(
+                    shadow_state,
+                    self._shadow_spec,
+                    reference,
+                    group_size=self._shadow_group_size,
+                )
+                quantize_fp8_state_(
+                    shadow_state,
+                    self._shadow_spec,
+                    reference,
+                    group_size=self._shadow_group_size,
+                )
                 info["state"] = shadow_state
             else:
                 info["persistent"], _ = _stochastic_maxabs_roundtrip(
-                    reference, group_size=GROUP_SIZE, seed=_shadow_seed(name, 0)
+                    reference,
+                    group_size=self._shadow_group_size,
+                    seed=_shadow_seed(name, 0),
                 )
             self._shadow_parameters[parameter] = info
 
@@ -212,14 +231,23 @@ class MuonFP8ShadowDiagnostic(SplitSwiGLUTensorParallelMuon):
                 grad = parameter.grad.detach()
                 reference_previous = self.state[parameter][spec.name]
                 if self._shadow_quantizer != "stochastic":
-                    shadow_previous = dequantize_fp8_state(info["state"], spec)
+                    shadow_previous = dequantize_fp8_state(
+                        info["state"], spec, group_size=self._shadow_group_size
+                    )
                 else:
                     shadow_previous = info["persistent"]
                 reference_new = torch.lerp(reference_previous, grad, 1 - beta)
                 shadow_new = torch.lerp(shadow_previous, grad, 1 - beta)
                 if self._shadow_quantizer != "stochastic":
-                    quantize_fp8_state_(info["state"], spec, shadow_new)
-                    persisted_shadow = dequantize_fp8_state(info["state"], spec)
+                    quantize_fp8_state_(
+                        info["state"],
+                        spec,
+                        shadow_new,
+                        group_size=self._shadow_group_size,
+                    )
+                    persisted_shadow = dequantize_fp8_state(
+                        info["state"], spec, group_size=self._shadow_group_size
+                    )
                     saturation_fraction = float(
                         (info["state"][spec.name].float().abs() == fp8_max)
                         .float()
@@ -228,7 +256,7 @@ class MuonFP8ShadowDiagnostic(SplitSwiGLUTensorParallelMuon):
                 else:
                     persisted_shadow, payload = _stochastic_maxabs_roundtrip(
                         shadow_new,
-                        group_size=GROUP_SIZE,
+                        group_size=self._shadow_group_size,
                         seed=_shadow_seed(info["name"], self._shadow_step),
                     )
                     info["persistent"] = persisted_shadow
@@ -272,6 +300,7 @@ class MuonFP8ShadowDiagnostic(SplitSwiGLUTensorParallelMuon):
             "parameter_name": pending["info"]["name"],
             "shape": list(parameter.shape),
             "quantizer": self._shadow_quantizer,
+            "group_size": self._shadow_group_size,
             "state": pending["state"],
             "reference_replay": reference_replay,
             "pre_newton_schulz": pre_ns,
