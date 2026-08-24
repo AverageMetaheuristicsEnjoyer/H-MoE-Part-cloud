@@ -41,6 +41,46 @@ for d in "$lg"/*/; do
   # whether history is actually being recorded.
   du -sh "$d/wandb"/*run-* 2>/dev/null | tail -1 | sed 's/^/  WANDB /'
   du -sh "$d/tensorboard" 2>/dev/null | sed 's/^/  TB /'
+  if [ -f "$d/muon-fp8-shadow.jsonl" ]; then
+    echo "  SHADOW rows=$(wc -l < "$d/muon-fp8-shadow.jsonl") sha256=$(sha256sum "$d/muon-fp8-shadow.jsonl" | awk '{print $1}')"
+    python - "$d/muon-fp8-shadow.jsonl" <<'PYS'
+import json, statistics, sys
+
+rows = [json.loads(line) for line in open(sys.argv[1]) if line.strip()]
+for category in sorted({row["category"] for row in rows}):
+    group = sorted((row for row in rows if row["category"] == category), key=lambda row: row["step"])
+
+    def field(*keys):
+        result = []
+        for item in group:
+            value = item
+            for key in keys:
+                value = value[key]
+            result.append(value)
+        return result
+
+    def summary(name, vals):
+        return (
+            f"{name}=first:{vals[0]:.6g},last:{vals[-1]:.6g},"
+            f"tail5:{statistics.fmean(vals[-5:]):.6g},max:{max(vals):.6g}"
+        )
+
+    print(
+        f"    {category} steps={len(group)} "
+        + " ".join(
+            [
+                summary("state_rel", field("state", "relative_l2")),
+                summary("pre_ns_rel", field("pre_newton_schulz", "relative_l2")),
+                summary("post_ns_rel", field("post_newton_schulz", "relative_l2")),
+                summary("ns_amp", field("ns_relative_error_amplification")),
+                summary("saturation", field("state", "saturation_fraction")),
+                summary("underflow", field("state", "underflow_fraction")),
+                summary("replay_rel", field("reference_replay", "relative_l2")),
+            ]
+        )
+    )
+PYS
+  fi
   # A scoring run's numbers live here: the platform log window is far too small to hold
   # two arms' worth of MCore startup and still show them.
   if [ -f "$d/downstream/downstream.json" ]; then
