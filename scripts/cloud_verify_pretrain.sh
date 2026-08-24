@@ -65,10 +65,17 @@ for category in sorted({row["category"] for row in rows}):
             f"tail5:{statistics.fmean(vals[-5:]):.6g},max:{max(vals):.6g}"
         )
 
+    def minimum(name, vals):
+        return (
+            f"{name}=first:{vals[0]:.6g},last:{vals[-1]:.6g},"
+            f"tail5:{statistics.fmean(vals[-5:]):.6g},min:{min(vals):.6g}"
+        )
+
     summaries = [
         summary("state_rel", field("state", "relative_l2")),
         summary("pre_ns_rel", field("pre_newton_schulz", "relative_l2")),
         summary("post_ns_rel", field("post_newton_schulz", "relative_l2")),
+        minimum("post_ns_cos", field("post_newton_schulz", "cosine")),
         summary("ns_amp", field("ns_relative_error_amplification")),
         summary("saturation", field("state", "saturation_fraction")),
         summary("underflow", field("state", "underflow_fraction")),
