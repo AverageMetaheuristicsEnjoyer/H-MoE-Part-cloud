@@ -37,6 +37,12 @@ data_cache_args=()
 if [[ -n ${STAGE3_MOE_DATA_CACHE_PATH:-} ]]; then
   data_cache_args=(--data-cache-path "$STAGE3_MOE_DATA_CACHE_PATH")
 fi
+dataset_args=(
+  --train-data-path "$data_root/train"
+  --valid-data-path "$data_root/development"
+  --test-data-path "$data_root/final"
+)
+eval_iters=32
 
 case "$arm" in
   adamw_bf16_state_fp32) optimizer=adam; state_precision=fp32; compute=() ;;
@@ -172,6 +178,8 @@ case "$mode" in
       probe_warmup=0
       probe_measure=$resume_bench_iters
       eval_interval=1000000
+      eval_iters=0
+      dataset_args=(--train-data-path "$data_root/train")
     fi
     if [[ ${STAGE3_MOE_MUON_SHADOW:-0} == 1 ]]; then
       train_iters=$((shadow_iter + resume_bench_iters))
@@ -380,16 +388,14 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   --train-iters "$train_iters" \
   --tokenizer-type NullTokenizer --vocab-size 50257 \
   --null-tokenizer-eod-id 50256 --null-tokenizer-pad-id -1 \
-  --train-data-path "$data_root/train" \
-  --valid-data-path "$data_root/development" \
-  --test-data-path "$data_root/final" \
+  "${dataset_args[@]}" \
   "${data_cache_args[@]}" \
   --dataloader-type single \
   --num-workers 2 \
   --no-create-attention-mask-in-dataloader \
   --seed "${STAGE3_MOE_SEED:-1234}" \
   --eval-interval "$eval_interval" \
-  --eval-iters 32 \
+  --eval-iters "$eval_iters" \
   --log-interval 10 \
   --log-throughput \
   --timing-log-level 1 \
