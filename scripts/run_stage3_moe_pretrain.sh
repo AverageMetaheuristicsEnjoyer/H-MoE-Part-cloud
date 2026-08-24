@@ -166,11 +166,16 @@ case "$mode" in
     resume_load=${STAGE3_MOE_RESUME_LOAD:-}
     if [[ -n $resume_load ]]; then
       resume_iter=${STAGE3_MOE_RESUME_ITER:?set STAGE3_MOE_RESUME_ITER with STAGE3_MOE_RESUME_LOAD}
+      resume_warmup=${STAGE3_MOE_RESUME_WARMUP:-0}
       [[ $resume_iter =~ ^[0-9]+$ ]] || {
         echo "invalid resume checkpoint iteration: $resume_iter" >&2
         exit 2
       }
-      probe_warmup=0
+      [[ $resume_warmup =~ ^[0-9]+$ ]] || {
+        echo "invalid resume warmup steps: $resume_warmup" >&2
+        exit 2
+      }
+      probe_warmup=$resume_warmup
       probe_measure=$resume_bench_iters
       eval_interval=1000000
       eval_iters=0
@@ -201,7 +206,7 @@ case "$mode" in
     if [[ ${STAGE3_MOE_MUON_SHADOW:-0} == 1 ]]; then
       train_iters=$((shadow_iter + resume_bench_iters))
     elif [[ -n $resume_load ]]; then
-      train_iters=$((resume_iter + resume_bench_iters))
+      train_iters=$((resume_iter + resume_warmup + resume_bench_iters))
     else
       train_iters=$((short_branch + resume_bench_iters))
     fi

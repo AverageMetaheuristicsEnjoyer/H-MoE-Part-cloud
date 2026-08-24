@@ -13,7 +13,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 log_root=${STAGE3_MOE_LOG_ROOT:-/home/jovyan/hmoe-cloud/pretrain}
 
 nvidia-smi --query-gpu=name,uuid,memory.total,driver_version --format=csv,noheader
-echo "BENCH micro_batch=${STAGE3_MOE_MICRO_BATCH:-4} suffix=${STAGE3_MOE_RUN_SUFFIX:-none} iters=${STAGE3_MOE_BENCH_ITERS:-150}"
+echo "BENCH micro_batch=${STAGE3_MOE_MICRO_BATCH:-4} suffix=${STAGE3_MOE_RUN_SUFFIX:-none} warmup=${STAGE3_MOE_RESUME_WARMUP:-default} measured=${STAGE3_MOE_BENCH_ITERS:-150}"
 
 for arm in "$@"; do
   if [[ ! $arm =~ ^[a-z0-9_]+$ ]]; then
