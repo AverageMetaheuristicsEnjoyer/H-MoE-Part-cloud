@@ -272,7 +272,7 @@ esac
 
 run_id="stage3-$arm-$mode${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
 mkdir -p "$log_root/$run_id"
-if [[ ${STAGE3_MOE_MUON_SHADOW:-0} != 1 ]]; then
+if [[ ${STAGE3_MOE_MUON_SHADOW:-0} != 1 && -z ${STAGE3_MOE_RESUME_LOAD:-} ]]; then
   mkdir -p "$trunk_dir"
 fi
 if [[ ${STAGE3_MOE_MUON_SHADOW:-0} == 1 ]]; then
