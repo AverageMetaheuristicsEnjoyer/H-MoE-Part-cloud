@@ -1,4 +1,6 @@
+import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,7 @@ from megatron.core.optimizer.optimizer_config import ParamKey, ParamWithNamePred
 
 from stage3_moe.optimizer_states import (
     FP8StateOptimizerMixin,
+    GROUP_SIZE,
     MUON_STATE_SPECS,
     dequantize_fp8_state,
     init_fp8_state,
@@ -90,6 +93,45 @@ def _tensor_error_metrics(reference: torch.Tensor, candidate: torch.Tensor) -> d
     }
 
 
+def _shadow_seed(name: str, step: int) -> int:
+    digest = hashlib.sha256(f"{name}:{step}".encode()).digest()
+    return int.from_bytes(digest[:8], "little")
+
+
+def _stochastic_maxabs_roundtrip(
+    value: torch.Tensor, *, group_size: int, seed: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    flat = value.float().contiguous().view(-1)
+    padding = (-flat.numel()) % group_size
+    if padding:
+        flat = torch.cat((flat, flat.new_zeros(padding)))
+    groups = flat.view(-1, group_size)
+    fp8_max = float(torch.finfo(torch.float8_e4m3fn).max)
+    scale = (groups.abs().amax(dim=1, keepdim=True) / fp8_max).clamp_min(1e-30)
+    normalized = groups / scale
+    magnitude = normalized.abs().clamp_max(fp8_max)
+    normal_min = 2.0**-6
+    spacing = torch.where(
+        magnitude < normal_min,
+        torch.full_like(magnitude, 2.0**-9),
+        torch.exp2(torch.floor(torch.log2(magnitude.clamp_min(normal_min))) - 3),
+    )
+    lower = torch.floor(magnitude / spacing) * spacing
+    upper = torch.minimum(lower + spacing, torch.full_like(lower, fp8_max))
+    probability = torch.where(upper > lower, (magnitude - lower) / (upper - lower), 0.0)
+    generator = torch.Generator(device=value.device)
+    generator.manual_seed(seed)
+    draw = torch.rand(
+        probability.shape,
+        dtype=probability.dtype,
+        device=probability.device,
+        generator=generator,
+    )
+    payload = torch.where(draw < probability, upper, lower) * normalized.sign()
+    restored = (payload * scale).view(-1)[: value.numel()].view_as(value)
+    return restored, payload.view(-1)[: value.numel()].view_as(value)
+
+
 class MuonFP8ShadowDiagnostic(SplitSwiGLUTensorParallelMuon):
     def configure_shadow(self, parameter_names: dict[int, str], path: Path) -> None:
         if torch.distributed.is_initialized() and torch.distributed.get_world_size() != 1:
@@ -114,19 +156,30 @@ class MuonFP8ShadowDiagnostic(SplitSwiGLUTensorParallelMuon):
             raise AssertionError(f"Muon FP8 shadow parameters missing: {sorted(expected - set(selected))}")
 
         spec = MUON_STATE_SPECS[0]
+        self._shadow_quantizer = os.environ.get(
+            "STAGE3_MOE_MUON_SHADOW_QUANTIZER", "deterministic"
+        )
+        if self._shadow_quantizer not in {"deterministic", "stochastic"}:
+            raise ValueError(f"unknown Muon shadow quantizer: {self._shadow_quantizer}")
         self._shadow_parameters = {}
         for category, (name, parameter) in selected.items():
             reference = self.state[parameter].get(spec.name)
             if reference is None or reference.dtype != torch.float32:
                 raise AssertionError(f"Muon FP32 checkpoint state missing for {name}")
-            shadow_state = {}
-            init_fp8_state(shadow_state, spec, reference)
-            quantize_fp8_state_(shadow_state, spec, reference)
-            self._shadow_parameters[parameter] = {
+            info = {
                 "category": category,
                 "name": name,
-                "state": shadow_state,
             }
+            if self._shadow_quantizer == "deterministic":
+                shadow_state = {}
+                init_fp8_state(shadow_state, spec, reference)
+                quantize_fp8_state_(shadow_state, spec, reference)
+                info["state"] = shadow_state
+            else:
+                info["persistent"], _ = _stochastic_maxabs_roundtrip(
+                    reference, group_size=GROUP_SIZE, seed=_shadow_seed(name, 0)
+                )
+            self._shadow_parameters[parameter] = info
 
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("")
@@ -148,11 +201,30 @@ class MuonFP8ShadowDiagnostic(SplitSwiGLUTensorParallelMuon):
                     continue
                 grad = parameter.grad.detach()
                 reference_previous = self.state[parameter][spec.name]
-                shadow_previous = dequantize_fp8_state(info["state"], spec)
+                if self._shadow_quantizer == "deterministic":
+                    shadow_previous = dequantize_fp8_state(info["state"], spec)
+                else:
+                    shadow_previous = info["persistent"]
                 reference_new = torch.lerp(reference_previous, grad, 1 - beta)
                 shadow_new = torch.lerp(shadow_previous, grad, 1 - beta)
-                quantize_fp8_state_(info["state"], spec, shadow_new)
-                persisted_shadow = dequantize_fp8_state(info["state"], spec)
+                if self._shadow_quantizer == "deterministic":
+                    quantize_fp8_state_(info["state"], spec, shadow_new)
+                    persisted_shadow = dequantize_fp8_state(info["state"], spec)
+                    saturation_fraction = float(
+                        (info["state"][spec.name].float().abs() == fp8_max)
+                        .float()
+                        .mean()
+                    )
+                else:
+                    persisted_shadow, payload = _stochastic_maxabs_roundtrip(
+                        shadow_new,
+                        group_size=GROUP_SIZE,
+                        seed=_shadow_seed(info["name"], self._shadow_step),
+                    )
+                    info["persistent"] = persisted_shadow
+                    saturation_fraction = float(
+                        (payload.abs() == fp8_max).float().mean()
+                    )
                 reference_input = torch.lerp(grad, reference_new, beta)
                 shadow_input = torch.lerp(grad, shadow_new, beta)
                 state_metrics = _tensor_error_metrics(reference_new, persisted_shadow)
@@ -161,9 +233,7 @@ class MuonFP8ShadowDiagnostic(SplitSwiGLUTensorParallelMuon):
                     (reference_nonzero & (persisted_shadow == 0)).sum()
                     / reference_nonzero.sum().clamp_min(1)
                 )
-                state_metrics["saturation_fraction"] = float(
-                    (info["state"][spec.name].float().abs() == fp8_max).float().mean()
-                )
+                state_metrics["saturation_fraction"] = saturation_fraction
                 self._shadow_pending[parameter] = {
                     "info": info,
                     "reference_input": reference_input,
@@ -191,6 +261,7 @@ class MuonFP8ShadowDiagnostic(SplitSwiGLUTensorParallelMuon):
             "category": pending["info"]["category"],
             "parameter_name": pending["info"]["name"],
             "shape": list(parameter.shape),
+            "quantizer": self._shadow_quantizer,
             "state": pending["state"],
             "reference_replay": reference_replay,
             "pre_newton_schulz": pre_ns,

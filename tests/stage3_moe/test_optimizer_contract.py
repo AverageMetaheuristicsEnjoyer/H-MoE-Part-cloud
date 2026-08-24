@@ -18,6 +18,8 @@ from stage3_moe.muon import (
     SPLIT_SWIGLU_FC1,
     SplitSwiGLUTensorParallelMuon,
     _shadow_category,
+    _shadow_seed,
+    _stochastic_maxabs_roundtrip,
     _tensor_error_metrics,
     install_muon_contract,
     is_router_weight,
@@ -195,6 +197,25 @@ def test_shadow_diagnostic_categories_and_tensor_metrics():
     assert exact["cosine"] == pytest.approx(1.0)
     assert exact["relative_l2"] == 0.0
     assert exact["norm_ratio"] == 1.0
+
+
+def test_stochastic_shadow_rounding_is_reproducible_and_on_e4m3_grid():
+    exact = torch.tensor([448.0, 1.0, 1.125, -0.015625])
+    restored, payload = _stochastic_maxabs_roundtrip(exact, group_size=4, seed=7)
+    assert torch.equal(restored, exact)
+    assert torch.equal(payload, exact)
+
+    value = torch.full((128,), 1.0625)
+    value[0] = 448.0
+    first, first_payload = _stochastic_maxabs_roundtrip(value, group_size=128, seed=11)
+    replay, replay_payload = _stochastic_maxabs_roundtrip(value, group_size=128, seed=11)
+    other, _ = _stochastic_maxabs_roundtrip(value, group_size=128, seed=12)
+    assert torch.equal(first, replay)
+    assert torch.equal(first_payload, replay_payload)
+    assert not torch.equal(first, other)
+    assert torch.equal(first_payload.to(torch.float8_e4m3fn).float(), first_payload)
+    assert _shadow_seed("parameter", 3) == _shadow_seed("parameter", 3)
+    assert _shadow_seed("parameter", 3) != _shadow_seed("parameter", 4)
 
 
 def test_install_contract_selects_shadow_optimizer_only_for_fp32():
