@@ -353,7 +353,7 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   --dataloader-type single \
   --num-workers 2 \
   --no-create-attention-mask-in-dataloader \
-  --seed 1234 \
+  --seed "${STAGE3_MOE_SEED:-1234}" \
   --eval-interval 250 \
   --eval-iters 32 \
   --log-interval 10 \
