@@ -17,6 +17,7 @@ from stage3_moe.optimizer_states import (
     FP8StateOptimizerMixin,
     GROUP_SIZE,
     MUON_STATE_SPECS,
+    StateSpec,
     dequantize_fp8_state,
     init_fp8_state,
     quantize_fp8_state_,
@@ -160,11 +161,16 @@ class MuonFP8ShadowDiagnostic(SplitSwiGLUTensorParallelMuon):
         self._shadow_quantizer = os.environ.get(
             "STAGE3_MOE_MUON_SHADOW_QUANTIZER", "deterministic"
         )
-        if self._shadow_quantizer not in {"deterministic", "stochastic"}:
+        if self._shadow_quantizer not in {"deterministic", "dre", "stochastic"}:
             raise ValueError(f"unknown Muon shadow quantizer: {self._shadow_quantizer}")
         self._shadow_highest_ns = os.environ.get(
             "STAGE3_MOE_MUON_SHADOW_HIGHEST_NS", "0"
         ) == "1"
+        self._shadow_spec = spec
+        if self._shadow_quantizer == "dre":
+            self._shadow_spec = StateSpec(
+                spec.name, spec.signed, spec.dtype, "dre"
+            )
         self._shadow_parameters = {}
         for category, (name, parameter) in selected.items():
             reference = self.state[parameter].get(spec.name)
@@ -174,10 +180,10 @@ class MuonFP8ShadowDiagnostic(SplitSwiGLUTensorParallelMuon):
                 "category": category,
                 "name": name,
             }
-            if self._shadow_quantizer == "deterministic":
+            if self._shadow_quantizer != "stochastic":
                 shadow_state = {}
-                init_fp8_state(shadow_state, spec, reference)
-                quantize_fp8_state_(shadow_state, spec, reference)
+                init_fp8_state(shadow_state, self._shadow_spec, reference)
+                quantize_fp8_state_(shadow_state, self._shadow_spec, reference)
                 info["state"] = shadow_state
             else:
                 info["persistent"], _ = _stochastic_maxabs_roundtrip(
@@ -195,7 +201,7 @@ class MuonFP8ShadowDiagnostic(SplitSwiGLUTensorParallelMuon):
         if not hasattr(self, "_shadow_parameters"):
             return
         self._shadow_step += 1
-        spec = MUON_STATE_SPECS[0]
+        spec = self._shadow_spec
         fp8_max = float(torch.finfo(spec.dtype).max)
         for group in self.param_groups:
             beta = group["momentum"]
@@ -205,13 +211,13 @@ class MuonFP8ShadowDiagnostic(SplitSwiGLUTensorParallelMuon):
                     continue
                 grad = parameter.grad.detach()
                 reference_previous = self.state[parameter][spec.name]
-                if self._shadow_quantizer == "deterministic":
+                if self._shadow_quantizer != "stochastic":
                     shadow_previous = dequantize_fp8_state(info["state"], spec)
                 else:
                     shadow_previous = info["persistent"]
                 reference_new = torch.lerp(reference_previous, grad, 1 - beta)
                 shadow_new = torch.lerp(shadow_previous, grad, 1 - beta)
-                if self._shadow_quantizer == "deterministic":
+                if self._shadow_quantizer != "stochastic":
                     quantize_fp8_state_(info["state"], spec, shadow_new)
                     persisted_shadow = dequantize_fp8_state(info["state"], spec)
                     saturation_fraction = float(
