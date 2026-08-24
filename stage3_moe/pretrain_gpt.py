@@ -1,4 +1,5 @@
 import argparse
+import os
 import runpy
 import sys
 import time
@@ -146,12 +147,17 @@ def main():
 
     state_fp8 = stage3_args.stage3_arm.endswith("_state_fp8")
     is_muon = stage3_args.stage3_arm.startswith("muon_")
+    muon_shadow_path = os.environ.get("STAGE3_MOE_MUON_SHADOW_PATH")
+    if muon_shadow_path and (not is_muon or state_fp8):
+        raise ValueError("Muon FP8 shadow diagnostic requires a Muon FP32-state arm")
     if state_fp8:
         install_fp8_adamw()
     if is_muon:
         from stage3_moe.muon import install_muon_contract
 
-        install_muon_contract(fp8_states=state_fp8)
+        install_muon_contract(
+            fp8_states=state_fp8, shadow_states=bool(muon_shadow_path)
+        )
 
     from stage3_moe.memory_audit import install as install_memory_audit
     from stage3_moe.result_writer import install_probe
@@ -164,6 +170,10 @@ def main():
         program_start=PROGRAM_START,
         argv=mcore_argv,
     )
+    if muon_shadow_path:
+        from stage3_moe.muon import install_muon_shadow_probe
+
+        install_muon_shadow_probe(probe, Path(muon_shadow_path))
     install_memory_audit()
     if stage3_args.stage3_eval_downstream:
         install_downstream_eval(

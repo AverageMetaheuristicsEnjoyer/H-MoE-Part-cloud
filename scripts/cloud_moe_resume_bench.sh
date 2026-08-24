@@ -33,6 +33,12 @@ for arm in "$@"; do
       sed -E 's/.*iteration +([0-9]+)\/ *([0-9]+).*elapsed time per iteration \(ms\): ([0-9.]+).*/iter=\1\/\2 ms=\3/'
   fi
   [[ -f "$run_dir/results.jsonl" ]] && { echo "--- RESULT_JSONL $arm"; tail -1 "$run_dir/results.jsonl"; }
+  shadow="$run_dir/muon-fp8-shadow.jsonl"
+  if [[ -s $shadow ]]; then
+    echo "--- MUON_FP8_SHADOW rows=$(wc -l < "$shadow") sha256=$(sha256sum "$shadow" | awk '{print $1}')"
+    head -3 "$shadow"
+    tail -3 "$shadow"
+  fi
 done
 echo "EXIT=0"
 exit 0

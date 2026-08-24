@@ -155,7 +155,17 @@ case "$mode" in
     # which is a different regime: at iteration 2254 the router is balanced and the
     # expert GEMMs are small, and FP8 delayed scaling measures very differently there.
     # Resume the branch point, run a short window, never write a checkpoint.
-    train_iters=$((short_branch + ${STAGE3_MOE_BENCH_ITERS:-150}))
+    resume_bench_iters=${STAGE3_MOE_BENCH_ITERS:-150}
+    if [[ ${STAGE3_MOE_MUON_SHADOW:-0} == 1 ]]; then
+      [[ $arm == muon_bf16_state_fp32 ]] || {
+        echo "Muon FP8 shadow diagnostic requires muon_bf16_state_fp32" >&2
+        exit 2
+      }
+      resume_bench_iters=${STAGE3_MOE_BENCH_ITERS:-20}
+      probe_warmup=0
+      probe_measure=$resume_bench_iters
+    fi
+    train_iters=$((short_branch + resume_bench_iters))
     target_iters=$full_iters
     decay_iters=$full_decay_iters
     save_args=()
@@ -218,6 +228,12 @@ esac
 
 run_id="stage3-$arm-$mode${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
 mkdir -p "$log_root/$run_id" "$trunk_dir"
+if [[ ${STAGE3_MOE_MUON_SHADOW:-0} == 1 ]]; then
+  export STAGE3_MOE_MUON_SHADOW_PATH="$log_root/$run_id/muon-fp8-shadow.jsonl"
+  echo "MUON_FP8_SHADOW=$STAGE3_MOE_MUON_SHADOW_PATH"
+else
+  unset STAGE3_MOE_MUON_SHADOW_PATH
+fi
 export PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root"
 # Transformer Engine loads cudart and friends from the pip nvidia packages; without
 # these the run dies with "cudart shared object not found".

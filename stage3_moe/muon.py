@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -8,7 +10,13 @@ from megatron.core.optimizer.emerging_optimizers import (
 )
 from megatron.core.optimizer.optimizer_config import ParamKey, ParamWithNamePredicate
 
-from stage3_moe.optimizer_states import FP8StateOptimizerMixin, MUON_STATE_SPECS
+from stage3_moe.optimizer_states import (
+    FP8StateOptimizerMixin,
+    MUON_STATE_SPECS,
+    dequantize_fp8_state,
+    init_fp8_state,
+    quantize_fp8_state_,
+)
 
 
 SPLIT_SWIGLU_FC1 = "stage3_split_swiglu_fc1"
@@ -50,7 +58,181 @@ class FP8StateSplitSwiGLUTensorParallelMuon(
     state_specs = MUON_STATE_SPECS
 
 
-def install_muon_contract(*, fp8_states: bool) -> None:
+def _shadow_category(name: str) -> str | None:
+    if ".self_attention.linear_qkv.weight" in name:
+        return "attention_qkv"
+    if ".decoder.layers.0.mlp.linear_fc1.weight" in name:
+        return "dense_mlp_fc1"
+    if ".mlp.experts.linear_fc1.weight0" in name:
+        return "routed_expert_fc1"
+    return None
+
+
+def _tensor_error_metrics(reference: torch.Tensor, candidate: torch.Tensor) -> dict[str, float]:
+    reference = reference.float().reshape(-1)
+    candidate = candidate.float().reshape(-1)
+    reference_norm = torch.linalg.vector_norm(reference)
+    candidate_norm = torch.linalg.vector_norm(candidate)
+    denominator = reference_norm.clamp_min(1e-30)
+    cosine_denominator = (reference_norm * candidate_norm).clamp_min(1e-30)
+    values = torch.stack(
+        (
+            torch.dot(reference, candidate) / cosine_denominator,
+            torch.linalg.vector_norm(candidate - reference) / denominator,
+            candidate_norm / denominator,
+        )
+    ).cpu()
+    cosine, relative_l2, norm_ratio = (float(value) for value in values)
+    return {
+        "cosine": cosine,
+        "relative_l2": relative_l2,
+        "norm_ratio": norm_ratio,
+    }
+
+
+class MuonFP8ShadowDiagnostic(SplitSwiGLUTensorParallelMuon):
+    def configure_shadow(self, parameter_names: dict[int, str], path: Path) -> None:
+        if torch.distributed.is_initialized() and torch.distributed.get_world_size() != 1:
+            raise ValueError("Muon FP8 shadow diagnostic requires one process")
+
+        selected = {}
+        candidates = sorted(
+            (
+                name,
+                parameter,
+                _shadow_category(name),
+            )
+            for group in self.param_groups
+            for parameter in group["params"]
+            if (name := parameter_names.get(id(parameter))) is not None
+        )
+        for name, parameter, category in candidates:
+            if category is not None and category not in selected:
+                selected[category] = (name, parameter)
+        expected = {"attention_qkv", "dense_mlp_fc1", "routed_expert_fc1"}
+        if set(selected) != expected:
+            raise AssertionError(f"Muon FP8 shadow parameters missing: {sorted(expected - set(selected))}")
+
+        spec = MUON_STATE_SPECS[0]
+        self._shadow_parameters = {}
+        for category, (name, parameter) in selected.items():
+            reference = self.state[parameter].get(spec.name)
+            if reference is None or reference.dtype != torch.float32:
+                raise AssertionError(f"Muon FP32 checkpoint state missing for {name}")
+            shadow_state = {}
+            init_fp8_state(shadow_state, spec, reference)
+            quantize_fp8_state_(shadow_state, spec, reference)
+            self._shadow_parameters[parameter] = {
+                "category": category,
+                "name": name,
+                "state": shadow_state,
+            }
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+        self._shadow_path = path
+        self._shadow_step = 0
+        self._shadow_pending = {}
+
+    def _prepare_shadow_step(self) -> None:
+        if not hasattr(self, "_shadow_parameters"):
+            return
+        self._shadow_step += 1
+        spec = MUON_STATE_SPECS[0]
+        fp8_max = float(torch.finfo(spec.dtype).max)
+        for group in self.param_groups:
+            beta = group["momentum"]
+            for parameter in group["params"]:
+                info = self._shadow_parameters.get(parameter)
+                if info is None or parameter.grad is None:
+                    continue
+                grad = parameter.grad.detach()
+                reference_previous = self.state[parameter][spec.name]
+                shadow_previous = dequantize_fp8_state(info["state"], spec)
+                reference_new = torch.lerp(reference_previous, grad, 1 - beta)
+                shadow_new = torch.lerp(shadow_previous, grad, 1 - beta)
+                quantize_fp8_state_(info["state"], spec, shadow_new)
+                persisted_shadow = dequantize_fp8_state(info["state"], spec)
+                reference_input = torch.lerp(grad, reference_new, beta)
+                shadow_input = torch.lerp(grad, shadow_new, beta)
+                state_metrics = _tensor_error_metrics(reference_new, persisted_shadow)
+                reference_nonzero = reference_new != 0
+                state_metrics["underflow_fraction"] = float(
+                    (reference_nonzero & (persisted_shadow == 0)).sum()
+                    / reference_nonzero.sum().clamp_min(1)
+                )
+                state_metrics["saturation_fraction"] = float(
+                    (info["state"][spec.name].float().abs() == fp8_max).float().mean()
+                )
+                self._shadow_pending[parameter] = {
+                    "info": info,
+                    "reference_input": reference_input,
+                    "shadow_input": shadow_input,
+                    "state": state_metrics,
+                }
+
+    def orthogonalize(
+        self, parameter: torch.Tensor, grad: torch.Tensor, **kwargs: Any
+    ) -> torch.Tensor:
+        reference_update = super().orthogonalize(parameter, grad, **kwargs)
+        pending = getattr(self, "_shadow_pending", {}).pop(parameter, None)
+        if pending is None:
+            return reference_update
+
+        shadow_update = super().orthogonalize(
+            parameter, pending["shadow_input"], **kwargs
+        )
+        reference_replay = _tensor_error_metrics(grad, pending["reference_input"])
+        pre_ns = _tensor_error_metrics(grad, pending["shadow_input"])
+        post_ns = _tensor_error_metrics(reference_update, shadow_update)
+        record = {
+            "schema_version": 1,
+            "step": self._shadow_step,
+            "category": pending["info"]["category"],
+            "parameter_name": pending["info"]["name"],
+            "shape": list(parameter.shape),
+            "state": pending["state"],
+            "reference_replay": reference_replay,
+            "pre_newton_schulz": pre_ns,
+            "post_newton_schulz": post_ns,
+            "ns_relative_error_amplification": post_ns["relative_l2"]
+            / max(pre_ns["relative_l2"], 1e-30),
+        }
+        with self._shadow_path.open("a") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+        return reference_update
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        self._prepare_shadow_step()
+        return super().step(closure)
+
+
+def install_muon_shadow_probe(probe, path: Path) -> None:
+    import megatron.training.training as training
+
+    previous = training.setup_model_and_optimizer
+
+    def setup_with_shadow(*args, **kwargs):
+        model, optimizer, scheduler = previous(*args, **kwargs)
+        from stage3_moe.result_writer import _raw_optimizers
+
+        diagnostics = [
+            raw
+            for raw in _raw_optimizers(optimizer)
+            if isinstance(raw, MuonFP8ShadowDiagnostic)
+        ]
+        if len(diagnostics) != 1:
+            raise AssertionError(f"expected one Muon FP8 shadow optimizer, found {len(diagnostics)}")
+        diagnostics[0].configure_shadow(probe.parameter_names, path)
+        return model, optimizer, scheduler
+
+    training.setup_model_and_optimizer = setup_with_shadow
+
+
+def install_muon_contract(*, fp8_states: bool, shadow_states: bool = False) -> None:
+    if fp8_states and shadow_states:
+        raise ValueError("Muon FP8 shadow diagnostic requires FP32 optimizer state")
     entry = _EMERGING_OPTIMIZERS["muon"]
     overrides = dict(entry.default_param_overrides)
     overrides[
@@ -68,8 +250,9 @@ def install_muon_contract(*, fp8_states: bool) -> None:
         )
     ] = {SPLIT_SWIGLU_FC1: True}
     entry.default_param_overrides = overrides
-    entry.optimizer_cls = (
-        FP8StateSplitSwiGLUTensorParallelMuon
-        if fp8_states
-        else SplitSwiGLUTensorParallelMuon
-    )
+    if fp8_states:
+        entry.optimizer_cls = FP8StateSplitSwiGLUTensorParallelMuon
+    elif shadow_states:
+        entry.optimizer_cls = MuonFP8ShadowDiagnostic
+    else:
+        entry.optimizer_cls = SplitSwiGLUTensorParallelMuon

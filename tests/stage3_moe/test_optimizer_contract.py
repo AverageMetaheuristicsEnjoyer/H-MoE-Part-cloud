@@ -14,8 +14,11 @@ sys.path.insert(0, str(ROOT / "third_party" / "emerging-optimizers"))
 pytest.importorskip("triton")
 
 from stage3_moe.muon import (
+    MuonFP8ShadowDiagnostic,
     SPLIT_SWIGLU_FC1,
     SplitSwiGLUTensorParallelMuon,
+    _shadow_category,
+    _tensor_error_metrics,
     install_muon_contract,
     is_router_weight,
     is_swiglu_fc1_weight,
@@ -176,6 +179,35 @@ def test_install_contract_routes_router_to_adam_and_marks_fc1():
         assert {"optimizer": "adam"} in router_values
         assert {SPLIT_SWIGLU_FC1: True} in fc1_values
         assert entry.optimizer_cls.state_specs == MUON_STATE_SPECS
+    finally:
+        entry.optimizer_cls = old_cls
+        entry.default_param_overrides = old_overrides
+
+
+def test_shadow_diagnostic_categories_and_tensor_metrics():
+    assert _shadow_category("model.decoder.layers.0.self_attention.linear_qkv.weight") == "attention_qkv"
+    assert _shadow_category("model.decoder.layers.0.mlp.linear_fc1.weight") == "dense_mlp_fc1"
+    assert _shadow_category("model.decoder.layers.1.mlp.experts.linear_fc1.weight0") == "routed_expert_fc1"
+    assert _shadow_category("model.decoder.layers.1.mlp.router.weight") is None
+
+    reference = torch.tensor([1.0, -2.0, 3.0])
+    exact = _tensor_error_metrics(reference, reference)
+    assert exact["cosine"] == pytest.approx(1.0)
+    assert exact["relative_l2"] == 0.0
+    assert exact["norm_ratio"] == 1.0
+
+
+def test_install_contract_selects_shadow_optimizer_only_for_fp32():
+    from megatron.core.optimizer.emerging_optimizers import _EMERGING_OPTIMIZERS
+
+    entry = _EMERGING_OPTIMIZERS["muon"]
+    old_cls = entry.optimizer_cls
+    old_overrides = entry.default_param_overrides
+    try:
+        install_muon_contract(fp8_states=False, shadow_states=True)
+        assert entry.optimizer_cls is MuonFP8ShadowDiagnostic
+        with pytest.raises(ValueError, match="requires FP32 optimizer state"):
+            install_muon_contract(fp8_states=True, shadow_states=True)
     finally:
         entry.optimizer_cls = old_cls
         entry.default_param_overrides = old_overrides
