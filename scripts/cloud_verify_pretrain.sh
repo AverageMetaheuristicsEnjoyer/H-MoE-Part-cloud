@@ -65,19 +65,27 @@ for category in sorted({row["category"] for row in rows}):
             f"tail5:{statistics.fmean(vals[-5:]):.6g},max:{max(vals):.6g}"
         )
 
-    print(
-        f"    {category} steps={len(group)} "
-        + " ".join(
+    summaries = [
+        summary("state_rel", field("state", "relative_l2")),
+        summary("pre_ns_rel", field("pre_newton_schulz", "relative_l2")),
+        summary("post_ns_rel", field("post_newton_schulz", "relative_l2")),
+        summary("ns_amp", field("ns_relative_error_amplification")),
+        summary("saturation", field("state", "saturation_fraction")),
+        summary("underflow", field("state", "underflow_fraction")),
+        summary("replay_rel", field("reference_replay", "relative_l2")),
+    ]
+    if "post_newton_schulz_highest" in group[0]:
+        summaries.extend(
             [
-                summary("state_rel", field("state", "relative_l2")),
-                summary("pre_ns_rel", field("pre_newton_schulz", "relative_l2")),
-                summary("post_ns_rel", field("post_newton_schulz", "relative_l2")),
-                summary("ns_amp", field("ns_relative_error_amplification")),
-                summary("saturation", field("state", "saturation_fraction")),
-                summary("underflow", field("state", "underflow_fraction")),
-                summary("replay_rel", field("reference_replay", "relative_l2")),
+                summary("post_ns_highest_rel", field("post_newton_schulz_highest", "relative_l2")),
+                summary("ns_highest_amp", field("highest_ns_relative_error_amplification")),
+                summary("reference_medium_highest_rel", field("reference_medium_vs_highest", "relative_l2")),
+                summary("shadow_medium_highest_rel", field("shadow_medium_vs_highest", "relative_l2")),
             ]
         )
+    print(
+        f"    {category} steps={len(group)} "
+        + " ".join(summaries)
     )
 PYS
   fi

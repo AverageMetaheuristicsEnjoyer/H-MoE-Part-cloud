@@ -6,6 +6,7 @@ from typing import Any
 
 import torch
 
+from emerging_optimizers import utils
 from megatron.core.optimizer.emerging_optimizers import (
     TensorParallelMuon,
     _EMERGING_OPTIMIZERS,
@@ -161,6 +162,9 @@ class MuonFP8ShadowDiagnostic(SplitSwiGLUTensorParallelMuon):
         )
         if self._shadow_quantizer not in {"deterministic", "stochastic"}:
             raise ValueError(f"unknown Muon shadow quantizer: {self._shadow_quantizer}")
+        self._shadow_highest_ns = os.environ.get(
+            "STAGE3_MOE_MUON_SHADOW_HIGHEST_NS", "0"
+        ) == "1"
         self._shadow_parameters = {}
         for category, (name, parameter) in selected.items():
             reference = self.state[parameter].get(spec.name)
@@ -269,6 +273,28 @@ class MuonFP8ShadowDiagnostic(SplitSwiGLUTensorParallelMuon):
             "ns_relative_error_amplification": post_ns["relative_l2"]
             / max(pre_ns["relative_l2"], 1e-30),
         }
+        if self._shadow_highest_ns:
+            with utils.fp32_matmul_precision("highest"):
+                reference_highest = super().orthogonalize(parameter, grad, **kwargs)
+                shadow_highest = super().orthogonalize(
+                    parameter, pending["shadow_input"], **kwargs
+                )
+            post_ns_highest = _tensor_error_metrics(reference_highest, shadow_highest)
+            record.update(
+                {
+                    "post_newton_schulz_highest": post_ns_highest,
+                    "highest_ns_relative_error_amplification": post_ns_highest[
+                        "relative_l2"
+                    ]
+                    / max(pre_ns["relative_l2"], 1e-30),
+                    "reference_medium_vs_highest": _tensor_error_metrics(
+                        reference_highest, reference_update
+                    ),
+                    "shadow_medium_vs_highest": _tensor_error_metrics(
+                        shadow_highest, shadow_update
+                    ),
+                }
+            )
         with self._shadow_path.open("a") as handle:
             handle.write(json.dumps(record, sort_keys=True) + "\n")
         return reference_update
