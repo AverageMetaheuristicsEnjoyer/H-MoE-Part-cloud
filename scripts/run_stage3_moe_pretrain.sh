@@ -163,7 +163,24 @@ case "$mode" in
     # expert GEMMs are small, and FP8 delayed scaling measures very differently there.
     # Resume the branch point, run a short window, never write a checkpoint.
     resume_bench_iters=${STAGE3_MOE_BENCH_ITERS:-150}
+    resume_load=${STAGE3_MOE_RESUME_LOAD:-}
+    if [[ -n $resume_load ]]; then
+      resume_iter=${STAGE3_MOE_RESUME_ITER:?set STAGE3_MOE_RESUME_ITER with STAGE3_MOE_RESUME_LOAD}
+      [[ $resume_iter =~ ^[0-9]+$ ]] || {
+        echo "invalid resume checkpoint iteration: $resume_iter" >&2
+        exit 2
+      }
+      probe_warmup=0
+      probe_measure=$resume_bench_iters
+      eval_interval=1000000
+      eval_iters=0
+      dataset_args=(--train-data-path "$data_root/train")
+    fi
     if [[ ${STAGE3_MOE_MUON_SHADOW:-0} == 1 ]]; then
+      [[ -z $resume_load ]] || {
+        echo "Muon shadow and generic resume load cannot be combined" >&2
+        exit 2
+      }
       [[ $arm == muon_bf16_state_fp32 ]] || {
         echo "Muon FP8 shadow diagnostic requires muon_bf16_state_fp32" >&2
         exit 2
@@ -183,6 +200,8 @@ case "$mode" in
     fi
     if [[ ${STAGE3_MOE_MUON_SHADOW:-0} == 1 ]]; then
       train_iters=$((shadow_iter + resume_bench_iters))
+    elif [[ -n $resume_load ]]; then
+      train_iters=$((resume_iter + resume_bench_iters))
     else
       train_iters=$((short_branch + resume_bench_iters))
     fi
@@ -196,6 +215,8 @@ case "$mode" in
     load_args=(--load "$trunk_dir" --override-opt_param-scheduler)
     if [[ ${STAGE3_MOE_MUON_SHADOW:-0} == 1 ]]; then
       load_args=(--load "$shadow_load" --override-opt_param-scheduler)
+    elif [[ -n $resume_load ]]; then
+      load_args=(--load "$resume_load" --override-opt_param-scheduler)
     fi
     ;;
   eval-downstream)

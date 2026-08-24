@@ -11,10 +11,13 @@ export CURAND_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/curand
 export NVRTC_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cuda_nvrtc
 
 python - <<'PY'
+import copy
+
 import torch
 
 from megatron.core.optimizer.emerging_optimizers import _EMERGING_OPTIMIZERS
 from stage3_moe.muon import (
+    DRE2StateSplitSwiGLUTensorParallelMuon,
     MuonFP8ShadowDiagnostic,
     _shadow_category,
     _shadow_seed,
@@ -50,7 +53,40 @@ assert torch.equal(first_payload.to(torch.float8_e4m3fn).float(), first_payload)
 assert _shadow_seed("parameter", 3) == _shadow_seed("parameter", 3)
 assert _shadow_seed("parameter", 3) != _shadow_seed("parameter", 4)
 
+parameter = torch.nn.Parameter(torch.randn(256, 256, device="cuda"))
+optimizer = DRE2StateSplitSwiGLUTensorParallelMuon([parameter], lr=1e-3)
+optimizer.group_size = 256
+parameter.grad = torch.randn_like(parameter)
+optimizer.step()
+state = optimizer.state[parameter]
+assert state["momentum_buffer"].dtype == torch.float8_e4m3fn
+assert state["momentum_buffer_residual"].dtype == torch.float8_e4m3fn
+
+resumed_parameter = torch.nn.Parameter(parameter.detach().clone())
+resumed = DRE2StateSplitSwiGLUTensorParallelMuon([resumed_parameter], lr=1e-3)
+resumed.group_size = 256
+resumed.load_state_dict(copy.deepcopy(optimizer.state_dict()))
+resumed_state = resumed.state[resumed_parameter]
+assert all(
+    torch.equal(value, resumed_state[key])
+    for key, value in state.items()
+    if torch.is_tensor(value)
+)
+grad = torch.randn_like(parameter)
+parameter.grad = grad.clone()
+resumed_parameter.grad = grad.clone()
+optimizer.step()
+resumed.step()
+assert torch.equal(parameter, resumed_parameter)
+assert all(
+    torch.equal(value, resumed.state[resumed_parameter][key])
+    for key, value in optimizer.state[parameter].items()
+    if torch.is_tensor(value)
+)
+
 entry = _EMERGING_OPTIMIZERS["muon"]
+install_muon_contract(fp8_states=True, state_recipe="dre2", group_size=256)
+assert entry.optimizer_cls is DRE2StateSplitSwiGLUTensorParallelMuon
 install_muon_contract(fp8_states=False, shadow_states=True)
 assert entry.optimizer_cls is MuonFP8ShadowDiagnostic
 try:

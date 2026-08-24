@@ -14,6 +14,9 @@ sys.path.insert(0, str(ROOT / "third_party" / "emerging-optimizers"))
 pytest.importorskip("triton")
 
 from stage3_moe.muon import (
+    DRE2StateSplitSwiGLUTensorParallelMuon,
+    MUON_DRE2_RESIDUAL_SPEC,
+    MUON_DRE2_STATE_SPECS,
     MuonFP8ShadowDiagnostic,
     SPLIT_SWIGLU_FC1,
     SplitSwiGLUTensorParallelMuon,
@@ -51,6 +54,14 @@ def test_state_formats_are_hybrid_and_separate():
     assert [(s.name, s.dtype, s.recipe) for s in MUON_STATE_SPECS] == [
         ("momentum_buffer", torch.float8_e4m3fn, "maxabs")
     ]
+    assert [(s.name, s.dtype, s.recipe) for s in MUON_DRE2_STATE_SPECS] == [
+        ("momentum_buffer", torch.float8_e4m3fn, "dre")
+    ]
+    assert (
+        MUON_DRE2_RESIDUAL_SPEC.name,
+        MUON_DRE2_RESIDUAL_SPEC.dtype,
+        MUON_DRE2_RESIDUAL_SPEC.recipe,
+    ) == ("momentum_buffer_residual", torch.float8_e4m3fn, "dre")
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
@@ -93,6 +104,41 @@ def test_adam_hybrid_state_and_checkpoint_resume():
     resumed.load_state_dict(copy.deepcopy(optimizer.state_dict()))
     assert resumed.state[resumed_parameter]["exp_avg"].dtype == torch.float8_e4m3fn
     assert resumed.state[resumed_parameter]["exp_avg_sq"].dtype == torch.float8_e5m2
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_muon_dre2_state_and_checkpoint_resume():
+    parameter = torch.nn.Parameter(torch.randn(256, 256, device="cuda"))
+    optimizer = DRE2StateSplitSwiGLUTensorParallelMuon([parameter], lr=1e-3)
+    optimizer.group_size = 256
+    parameter.grad = torch.randn_like(parameter)
+    optimizer.step()
+    state = optimizer.state[parameter]
+    assert state["momentum_buffer"].dtype == torch.float8_e4m3fn
+    assert state["momentum_buffer_residual"].dtype == torch.float8_e4m3fn
+
+    resumed_parameter = torch.nn.Parameter(parameter.detach().clone())
+    resumed = DRE2StateSplitSwiGLUTensorParallelMuon([resumed_parameter], lr=1e-3)
+    resumed.group_size = 256
+    resumed.load_state_dict(copy.deepcopy(optimizer.state_dict()))
+    resumed_state = resumed.state[resumed_parameter]
+    assert all(
+        torch.equal(value, resumed_state[key])
+        for key, value in state.items()
+        if torch.is_tensor(value)
+    )
+
+    grad = torch.randn_like(parameter)
+    parameter.grad = grad.clone()
+    resumed_parameter.grad = grad.clone()
+    optimizer.step()
+    resumed.step()
+    assert torch.equal(parameter, resumed_parameter)
+    assert all(
+        torch.equal(value, resumed.state[resumed_parameter][key])
+        for key, value in optimizer.state[parameter].items()
+        if torch.is_tensor(value)
+    )
 
 
 def test_dequantize_chunks_cover_every_parameter_once():
@@ -164,6 +210,7 @@ def test_install_contract_routes_router_to_adam_and_marks_fc1():
     entry = _EMERGING_OPTIMIZERS["muon"]
     old_cls = entry.optimizer_cls
     old_overrides = entry.default_param_overrides
+    old_dre2_group_size = DRE2StateSplitSwiGLUTensorParallelMuon.group_size
     try:
         install_muon_contract(fp8_states=True)
         router = torch.nn.Parameter(torch.empty(64, 1024))
@@ -181,9 +228,13 @@ def test_install_contract_routes_router_to_adam_and_marks_fc1():
         assert {"optimizer": "adam"} in router_values
         assert {SPLIT_SWIGLU_FC1: True} in fc1_values
         assert entry.optimizer_cls.state_specs == MUON_STATE_SPECS
+        install_muon_contract(fp8_states=True, state_recipe="dre2", group_size=256)
+        assert entry.optimizer_cls is DRE2StateSplitSwiGLUTensorParallelMuon
+        assert entry.optimizer_cls.group_size == 256
     finally:
         entry.optimizer_cls = old_cls
         entry.default_param_overrides = old_overrides
+        DRE2StateSplitSwiGLUTensorParallelMuon.group_size = old_dre2_group_size
 
 
 def test_shadow_diagnostic_categories_and_tensor_metrics():

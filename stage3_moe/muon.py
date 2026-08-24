@@ -25,6 +25,12 @@ from stage3_moe.optimizer_states import (
 
 
 SPLIT_SWIGLU_FC1 = "stage3_split_swiglu_fc1"
+MUON_DRE2_STATE_SPECS = (
+    StateSpec("momentum_buffer", True, torch.float8_e4m3fn, "dre"),
+)
+MUON_DRE2_RESIDUAL_SPEC = StateSpec(
+    "momentum_buffer_residual", True, torch.float8_e4m3fn, "dre"
+)
 
 
 def is_router_weight(param: torch.Tensor, name: str) -> bool:
@@ -61,6 +67,34 @@ class FP8StateSplitSwiGLUTensorParallelMuon(
     FP8StateOptimizerMixin, SplitSwiGLUTensorParallelMuon
 ):
     state_specs = MUON_STATE_SPECS
+
+
+class DRE2StateSplitSwiGLUTensorParallelMuon(
+    FP8StateOptimizerMixin, SplitSwiGLUTensorParallelMuon
+):
+    state_specs = MUON_DRE2_STATE_SPECS
+    residual_state_spec = MUON_DRE2_RESIDUAL_SPEC
+    state_components = 2
+
+    def _restore_state(self, state, spec):
+        restored = super()._restore_state(state, spec)
+        restored.add_(
+            dequantize_fp8_state(
+                state, self.residual_state_spec, group_size=self.group_size
+            )
+        )
+        return restored
+
+    def _store_state(self, state, spec, value):
+        super()._store_state(state, spec, value)
+        primary = super()._restore_state(state, spec)
+        value.sub_(primary)
+        init_fp8_state(
+            state, self.residual_state_spec, value, group_size=self.group_size
+        )
+        quantize_fp8_state_(
+            state, self.residual_state_spec, value, group_size=self.group_size
+        )
 
 
 def _shadow_category(name: str) -> str | None:
@@ -417,9 +451,19 @@ def install_muon_shadow_probe(probe, path: Path) -> None:
     training.setup_model_and_optimizer = setup_with_shadow
 
 
-def install_muon_contract(*, fp8_states: bool, shadow_states: bool = False) -> None:
+def install_muon_contract(
+    *,
+    fp8_states: bool,
+    shadow_states: bool = False,
+    state_recipe: str = "maxabs",
+    group_size: int = GROUP_SIZE,
+) -> None:
     if fp8_states and shadow_states:
         raise ValueError("Muon FP8 shadow diagnostic requires FP32 optimizer state")
+    if state_recipe not in {"maxabs", "dre2"}:
+        raise ValueError(f"unknown Muon FP8 state recipe: {state_recipe}")
+    if state_recipe == "dre2" and group_size not in {GROUP_SIZE, 256}:
+        raise ValueError(f"unknown Muon DRE2 group size: {group_size}")
     entry = _EMERGING_OPTIMIZERS["muon"]
     overrides = dict(entry.default_param_overrides)
     overrides[
@@ -438,7 +482,11 @@ def install_muon_contract(*, fp8_states: bool, shadow_states: bool = False) -> N
     ] = {SPLIT_SWIGLU_FC1: True}
     entry.default_param_overrides = overrides
     if fp8_states:
-        entry.optimizer_cls = FP8StateSplitSwiGLUTensorParallelMuon
+        if state_recipe == "dre2":
+            DRE2StateSplitSwiGLUTensorParallelMuon.group_size = group_size
+            entry.optimizer_cls = DRE2StateSplitSwiGLUTensorParallelMuon
+        else:
+            entry.optimizer_cls = FP8StateSplitSwiGLUTensorParallelMuon
     elif shadow_states:
         entry.optimizer_cls = MuonFP8ShadowDiagnostic
     else:

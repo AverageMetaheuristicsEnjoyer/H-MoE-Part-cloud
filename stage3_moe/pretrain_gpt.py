@@ -155,8 +155,22 @@ def main():
     if is_muon:
         from stage3_moe.muon import install_muon_contract
 
+        state_recipe = "maxabs"
+        state_group_size = 128
+        if state_fp8:
+            state_recipe = os.environ.get(
+                "STAGE3_MOE_MUON_STATE_RECIPE", state_recipe
+            )
+            state_group_size = int(
+                os.environ.get(
+                    "STAGE3_MOE_MUON_STATE_GROUP_SIZE", str(state_group_size)
+                )
+            )
         install_muon_contract(
-            fp8_states=state_fp8, shadow_states=bool(muon_shadow_path)
+            fp8_states=state_fp8,
+            shadow_states=bool(muon_shadow_path),
+            state_recipe=state_recipe,
+            group_size=state_group_size,
         )
 
     from stage3_moe.memory_audit import install as install_memory_audit

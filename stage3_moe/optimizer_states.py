@@ -394,6 +394,13 @@ class FP8StateOptimizerMixin(FP8StateDictMixin):
     # which is what every measurement so far was taken with.
     dequantize_chunk = int(os.environ.get("STAGE3_MOE_FP8_DEQUANT_CHUNK", "0"))
 
+    def _restore_state(self, state, spec):
+        return dequantize_fp8_state(state, spec, group_size=self.group_size)
+
+    def _store_state(self, state, spec, value):
+        init_fp8_state(state, spec, value, group_size=self.group_size)
+        quantize_fp8_state_(state, spec, value, group_size=self.group_size)
+
     def _step_over(self, groups, closure):
         active = [
             (parameter, self.state[parameter])
@@ -405,9 +412,7 @@ class FP8StateOptimizerMixin(FP8StateDictMixin):
             for _, state in active:
                 for spec in self.state_specs:
                     if spec.name in state and state[spec.name].dtype in FP8_DTYPES:
-                        state[spec.name] = dequantize_fp8_state(
-                            state, spec, group_size=self.group_size
-                        )
+                        state[spec.name] = self._restore_state(state, spec)
 
         with torch.autograd.profiler.record_function("optimizer_math"):
             every_group = self.param_groups
@@ -423,10 +428,7 @@ class FP8StateOptimizerMixin(FP8StateDictMixin):
                     if spec.name not in state:
                         continue
                     value = state[spec.name]
-                    init_fp8_state(state, spec, value, group_size=self.group_size)
-                    quantize_fp8_state_(
-                        state, spec, value, group_size=self.group_size
-                    )
+                    self._store_state(state, spec, value)
         return loss
 
     def _param_group_chunks(self, chunk):

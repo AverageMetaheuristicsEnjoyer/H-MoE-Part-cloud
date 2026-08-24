@@ -113,7 +113,13 @@ def optimizer_state_ledger(optimizer, arm):
                 state_key = (
                     "metadata"
                     if key.startswith(METADATA_PREFIXES)
-                    else key if key in {"exp_avg", "exp_avg_sq", "momentum_buffer", "step"}
+                    else key if key in {
+                        "exp_avg",
+                        "exp_avg_sq",
+                        "momentum_buffer",
+                        "momentum_buffer_residual",
+                        "step",
+                    }
                     else "metadata"
                 )
                 row = rows[(role, state_key, str(value.dtype))]
@@ -133,6 +139,9 @@ def optimizer_state_ledger(optimizer, arm):
     )
     saw_adam = False
     saw_muon = False
+    muon_state_recipe = None
+    muon_state_group_size = None
+    muon_state_components = None
     for raw in raw_optimizers:
         role = "adamw_all" if adam_only else _role(raw)
         for state in raw.state.values():
@@ -147,7 +156,22 @@ def optimizer_state_ledger(optimizer, arm):
                 expected = torch.float8_e4m3fn if state_fp8 else torch.float32
                 if state["momentum_buffer"].dtype != expected:
                     raise AssertionError("Muon momentum precision contract failed")
-                if state_fp8 and any(key.startswith(("expand_", "sqrt_minmax_")) for key in state):
+                components = getattr(raw, "state_components", 1)
+                if state_fp8:
+                    muon_state_recipe = "dre2" if components == 2 else "maxabs"
+                    muon_state_group_size = raw.group_size
+                    muon_state_components = components
+                if state_fp8 and components == 2:
+                    residual = state.get("momentum_buffer_residual")
+                    if residual is None or residual.dtype != torch.float8_e4m3fn:
+                        raise AssertionError("Muon DRE2 residual precision contract failed")
+                    for name in ("momentum_buffer", "momentum_buffer_residual"):
+                        for prefix in ("scale_", "expand_", "sqrt_minmax_"):
+                            if prefix + name not in state:
+                                raise AssertionError("Muon DRE2 metadata contract failed")
+                elif state_fp8 and any(
+                    key.startswith(("expand_", "sqrt_minmax_")) for key in state
+                ):
                     raise AssertionError("Muon momentum must use maxabs, not DRE")
     if not saw_adam:
         raise AssertionError("no initialized Adam state found")
@@ -179,6 +203,9 @@ def optimizer_state_ledger(optimizer, arm):
         "metadata_bytes": metadata_bytes,
         "persistent_total_bytes": data_bytes + metadata_bytes,
         "master_parameter_bytes": master_bytes,
+        "muon_state_recipe": muon_state_recipe,
+        "muon_state_group_size": muon_state_group_size,
+        "muon_state_components": muon_state_components,
         "tensors": tensors,
     }
 

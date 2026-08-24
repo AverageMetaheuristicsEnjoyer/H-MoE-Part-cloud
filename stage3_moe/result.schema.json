@@ -171,7 +171,7 @@
       "required": ["group_role", "state_key", "dtype", "quantized", "numel", "bytes"],
       "properties": {
         "group_role": { "enum": ["adamw_all", "muon_matrix", "adamw_fallback"] },
-        "state_key": { "enum": ["exp_avg", "exp_avg_sq", "momentum_buffer", "metadata", "step"] },
+        "state_key": { "enum": ["exp_avg", "exp_avg_sq", "momentum_buffer", "momentum_buffer_residual", "metadata", "step"] },
         "dtype": { "type": "string", "minLength": 1 },
         "quantized": { "type": "boolean" },
         "numel": { "type": "integer", "minimum": 0 },
@@ -392,6 +392,9 @@
             "metadata_bytes": { "type": ["integer", "null"], "minimum": 0 },
             "persistent_total_bytes": { "type": ["integer", "null"], "minimum": 0 },
             "master_parameter_bytes": { "type": ["integer", "null"], "minimum": 0 },
+            "muon_state_recipe": { "enum": ["maxabs", "dre2", null] },
+            "muon_state_group_size": { "type": ["integer", "null"], "minimum": 1 },
+            "muon_state_components": { "type": ["integer", "null"], "minimum": 1 },
             "tensors": { "type": "array", "items": { "$ref": "#/$defs/stateTensor" } }
           }
         },
