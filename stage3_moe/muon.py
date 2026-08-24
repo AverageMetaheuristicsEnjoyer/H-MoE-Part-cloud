@@ -174,7 +174,7 @@ class MuonFP8ShadowDiagnostic(SplitSwiGLUTensorParallelMuon):
         self._shadow_group_size = int(
             os.environ.get("STAGE3_MOE_MUON_SHADOW_GROUP_SIZE", str(GROUP_SIZE))
         )
-        if self._shadow_group_size not in {32, GROUP_SIZE, 256, 512}:
+        if self._shadow_group_size not in {32, GROUP_SIZE, 256}:
             raise ValueError(
                 f"unknown Muon shadow group size: {self._shadow_group_size}"
             )
