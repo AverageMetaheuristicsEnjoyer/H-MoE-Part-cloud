@@ -25,17 +25,32 @@ export STAGE3_MOE_DATA_CACHE_PATH="/tmp/stage3-amax-pilot-cache-$$"
 
 for variant in "${variants[@]}"; do
   case $variant in
-    h16max|current|bf16) ;;
-    *) echo "variant must be h16max, current, or bf16" >&2; exit 2 ;;
+    h4max|h16max|h16recent|h64max|current|bf16) ;;
+    *) echo "unknown amax pilot variant: $variant" >&2; exit 2 ;;
   esac
   unset STAGE3_MOE_FP8_AMAX_HISTORY_LEN STAGE3_MOE_FP8_AMAX_COMPUTE_ALGO
   arm=${optimizer}_fp8gemm_state_fp32
-  if [[ $variant == h16max ]]; then
-    export STAGE3_MOE_FP8_AMAX_HISTORY_LEN=16
-    export STAGE3_MOE_FP8_AMAX_COMPUTE_ALGO=max
-  elif [[ $variant == bf16 ]]; then
-    arm=${optimizer}_bf16_state_fp32
-  fi
+  case $variant in
+    h4max)
+      export STAGE3_MOE_FP8_AMAX_HISTORY_LEN=4
+      export STAGE3_MOE_FP8_AMAX_COMPUTE_ALGO=max
+      ;;
+    h16max)
+      export STAGE3_MOE_FP8_AMAX_HISTORY_LEN=16
+      export STAGE3_MOE_FP8_AMAX_COMPUTE_ALGO=max
+      ;;
+    h16recent)
+      export STAGE3_MOE_FP8_AMAX_HISTORY_LEN=16
+      export STAGE3_MOE_FP8_AMAX_COMPUTE_ALGO=most_recent
+      ;;
+    h64max)
+      export STAGE3_MOE_FP8_AMAX_HISTORY_LEN=64
+      export STAGE3_MOE_FP8_AMAX_COMPUTE_ALGO=max
+      ;;
+    bf16)
+      arm=${optimizer}_bf16_state_fp32
+      ;;
+  esac
   export STAGE3_MOE_RUN_SUFFIX="$tag-$variant"
   echo "=== VARIANT $variant arm=$arm iters=$STAGE3_MOE_BENCH_ITERS ==="
   "$root/scripts/run_stage3_moe_pretrain.sh" "$arm" bench
