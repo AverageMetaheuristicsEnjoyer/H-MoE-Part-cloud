@@ -19,6 +19,7 @@ from megatron.core.optimizer.emerging_optimizers import _EMERGING_OPTIMIZERS
 from stage3_moe.muon import (
     DRE2StateSplitSwiGLUTensorParallelMuon,
     MuonFP8ShadowDiagnostic,
+    SplitSwiGLUTensorParallelMuon,
     _shadow_category,
     _shadow_seed,
     _stochastic_maxabs_roundtrip,
@@ -82,6 +83,54 @@ assert all(
     torch.equal(value, resumed.state[resumed_parameter][key])
     for key, value in optimizer.state[parameter].items()
     if torch.is_tensor(value)
+)
+
+torch.manual_seed(1234)
+reference_parameter = torch.nn.Parameter(torch.randn(256, 256, device="cuda"))
+dre2_parameter = torch.nn.Parameter(reference_parameter.detach().clone())
+reference_optimizer = SplitSwiGLUTensorParallelMuon(
+    [reference_parameter], lr=1.0, weight_decay=0.0
+)
+dre2_optimizer = DRE2StateSplitSwiGLUTensorParallelMuon(
+    [dre2_parameter], lr=1.0, weight_decay=0.0
+)
+dre2_optimizer.group_size = 256
+generator = torch.Generator(device="cuda")
+generator.manual_seed(5678)
+max_state_rel = 0.0
+max_update_rel = 0.0
+min_update_cos = 1.0
+for _ in range(1000):
+    grad = torch.randn(
+        reference_parameter.shape, device="cuda", generator=generator
+    )
+    reference_before = reference_parameter.detach().clone()
+    dre2_before = dre2_parameter.detach().clone()
+    reference_parameter.grad = grad.clone()
+    dre2_parameter.grad = grad.clone()
+    reference_optimizer.step()
+    dre2_optimizer.step()
+    reference_update = reference_before - reference_parameter
+    dre2_update = dre2_before - dre2_parameter
+    update_metrics = _tensor_error_metrics(reference_update, dre2_update)
+    max_update_rel = max(max_update_rel, update_metrics["relative_l2"])
+    min_update_cos = min(min_update_cos, update_metrics["cosine"])
+    reference_state = reference_optimizer.state[reference_parameter]["momentum_buffer"]
+    dre2_state = dre2_optimizer._restore_state(
+        dre2_optimizer.state[dre2_parameter], dre2_optimizer.state_specs[0]
+    )
+    max_state_rel = max(
+        max_state_rel,
+        _tensor_error_metrics(reference_state, dre2_state)["relative_l2"],
+    )
+assert max_state_rel <= 0.03
+assert max_update_rel <= 0.02
+assert min_update_cos >= 0.999
+print(
+    "MUON_DRE2_LONG_HORIZON=pass"
+    f" max_state_rel={max_state_rel:.6g}"
+    f" max_update_rel={max_update_rel:.6g}"
+    f" min_update_cos={min_update_cos:.6g}"
 )
 
 entry = _EMERGING_OPTIMIZERS["muon"]
