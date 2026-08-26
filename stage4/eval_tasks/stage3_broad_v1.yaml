@@ -1,7 +1,6 @@
 group: stage3_broad_v1
 task:
-  - task: blimp
-    num_fewshot: 0
+  - blimp
   - task: swag
     num_fewshot: 0
   - task: mnli

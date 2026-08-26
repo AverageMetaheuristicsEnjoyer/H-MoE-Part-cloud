@@ -62,7 +62,8 @@ for arm in "$@"; do
   rm -rf "$stage_dir"
   ln -s "$src" "$stage_dir"
   echo "=== ARM $arm endpoint=$(cat "$src/latest_checkpointed_iteration.txt") src=$src staged=$stage_dir ==="
-  STAGE3_MOE_EVAL_LOAD="$stage_dir" "$root/scripts/run_stage3_moe_pretrain.sh" "$arm" eval-downstream
+  STAGE3_MOE_PROPAGATE_EXIT=1 STAGE3_MOE_EVAL_LOAD="$stage_dir" \
+    "$root/scripts/run_stage3_moe_pretrain.sh" "$arm" eval-downstream
   echo "ARM_EXIT=$? arm=$arm"
   # The launcher only tails the last 150 lines of the train log and MCore's own
   # evaluation fills them, so the scores have to be pulled out explicitly.

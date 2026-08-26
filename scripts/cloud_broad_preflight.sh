@@ -13,7 +13,7 @@ fi
 
 cd "$root"
 PYTHONPATH="$root" python - <<'PY'
-from lm_eval.tasks import TaskManager
+from lm_eval.tasks import TaskManager, get_task_dict
 
 
 def leaves(tasks):
@@ -41,7 +41,8 @@ expected = {
 }
 
 manager = TaskManager(include_path="stage4/eval_tasks")
-tasks = list(leaves(manager.load_task_or_group(["stage3_broad_v1"])))
+task_dict = get_task_dict(["stage3_broad_v1"], manager)
+tasks = list(leaves(task_dict))
 assert len(tasks) == 80, len(tasks)
 blimp = 0
 for task in tasks:
