@@ -8,6 +8,10 @@ from stage3_moe.downstream_artifacts import collect_downstream
 
 class DownstreamArtifactsTest(unittest.TestCase):
     def test_collects_builtin_metrics_and_pools_mmlu_as_one_task(self):
+        class Scalar:
+            def item(self):
+                return 3
+
         output = {
             "results": {
                 "wikitext": {
@@ -39,7 +43,7 @@ class DownstreamArtifactsTest(unittest.TestCase):
             },
             "samples": {
                 "wikitext": [
-                    {"doc_id": 0, "bits_per_byte": (-10.0, 12), "target": "x"}
+                    {"doc_id": 0, "bits_per_byte": (-10.0, 12), "target": Scalar()}
                 ],
                 "mmlu_a": [{"doc_id": 0, "acc": 0.0}],
                 "mmlu_b": [{"doc_id": 0, "acc": 1.0}],
@@ -56,6 +60,7 @@ class DownstreamArtifactsTest(unittest.TestCase):
         mmlu_rows = [json.loads(line) for line in (root / "mmlu.jsonl").read_text().splitlines()]
         self.assertEqual([row["doc_id"] for row in mmlu_rows], ["mmlu_a:0", "mmlu_b:0"])
         wiki_row = json.loads((root / "wikitext.jsonl").read_text())
+        self.assertEqual(wiki_row["target"], 3)
         self.assertEqual(wiki_row["metrics"]["bits_per_byte"], [-10.0, 12])
 
 

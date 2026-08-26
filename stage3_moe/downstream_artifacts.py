@@ -53,6 +53,7 @@ def _write_artifact(path, samples, metrics, *, prefix_doc_id=False):
                         "metrics": values,
                     },
                     sort_keys=True,
+                    default=lambda value: value.item(),
                 )
                 + "\n"
             )
