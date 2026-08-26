@@ -10,6 +10,10 @@ data_root=${STAGE3_MOE_EXTENSION_ROOT:-/workspace-SR006.nfs2/hmoe-data/fineweb-e
 echo "=== FILESYSTEMS ==="
 df -h /home/jovyan /workspace-SR006.nfs2 /workspace-SR006.nfs3 2>&1
 df -i /home/jovyan /workspace-SR006.nfs2 /workspace-SR006.nfs3 2>&1
+echo "=== HOME USAGE ==="
+du -x -h --max-depth=1 /home/jovyan 2>/dev/null | sort -h | tail -20
+find /home/jovyan -xdev -type f -size +1G \
+  -printf '%TY-%Tm-%TdT%TH:%TM:%TS %s %p\n' 2>/dev/null | sort | tail -30
 
 echo "=== DATA ==="
 du -sh /home/jovyan/data/fineweb-edu-gpt2-megatron 2>/dev/null || echo "base-data-missing"

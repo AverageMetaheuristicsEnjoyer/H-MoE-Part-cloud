@@ -31,6 +31,11 @@ echo "=== PREFLIGHT ==="
 df -h /workspace-SR006.nfs2 /workspace-SR006.nfs3 /home/jovyan 2>&1
 df -i /workspace-SR006.nfs2 /workspace-SR006.nfs3 /home/jovyan 2>&1
 mkdir -p "$tools_root" "$output_root"
+cache_root="$tools_root/cache"
+mkdir -p "$cache_root/huggingface" "$cache_root/xdg"
+export HF_HOME="$cache_root/huggingface"
+export HF_HUB_CACHE="$HF_HOME/hub"
+export XDG_CACHE_HOME="$cache_root/xdg"
 unset PYTHONNOUSERSITE
 nvidia_lib_path=$(find /home/user/conda/lib/python3.12/site-packages/nvidia \
   /home/jovyan/.local-torch28/lib/python3.12/site-packages/nvidia \
