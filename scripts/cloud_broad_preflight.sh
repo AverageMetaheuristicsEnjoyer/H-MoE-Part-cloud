@@ -53,7 +53,9 @@ for task in tasks:
     else:
         shots, metrics = expected.pop(name)
     actual_metrics = sorted(task.higher_is_better())
-    assert task.get_config("num_fewshot") == shots, (name, task.get_config("num_fewshot"))
+    configured_shots = task.get_config("num_fewshot")
+    actual_shots = 0 if configured_shots is None else configured_shots
+    assert actual_shots == shots, (name, configured_shots)
     assert actual_metrics == metrics, (name, actual_metrics)
     print(f"TASK name={name} docs={len(task.eval_docs)} fewshot={shots} metrics={','.join(metrics)}")
 assert blimp == 67, blimp
