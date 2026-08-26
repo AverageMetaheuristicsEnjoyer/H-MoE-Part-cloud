@@ -53,3 +53,17 @@ def test_stage4_evaluation_config_has_paired_comparison_rules():
         "accuracy_test": "mcnemar_secondary",
         "continuous_metrics": "paired_bootstrap",
     }
+
+
+def test_broad_screen_is_frozen_before_scoring():
+    broad = json.loads(CONFIG.read_text())["broad_screen"]
+
+    assert broad["analysis_scope"] == "exploratory_posthoc_broad_v1"
+    assert broad["task_group"] == "stage3_broad_v1"
+    assert [task["name"] for task in broad["tasks"]] == [
+        "blimp", "swag", "mnli", "mnli_mismatch", "qnli", "qqp", "prost",
+        "toxigen", "ethics_cm", "moral_stories", "boolq", "race",
+        "lambada_openai", "pile_10k", "leaderboard_mmlu_pro",
+    ]
+    assert broad["log_samples"]
+    assert broad["preserve_per_example_outputs"]

@@ -60,6 +60,31 @@
     "log_samples": true,
     "preserve_per_example_outputs": true
   },
+  "broad_screen": {
+    "provider": "lm-eval",
+    "version": "0.4.11",
+    "analysis_scope": "exploratory_posthoc_broad_v1",
+    "task_group": "stage3_broad_v1",
+    "tasks": [
+      {"name": "blimp", "num_fewshot": 0, "metrics": ["acc"]},
+      {"name": "swag", "num_fewshot": 0, "metrics": ["acc", "acc_norm"]},
+      {"name": "mnli", "num_fewshot": 0, "metrics": ["acc"]},
+      {"name": "mnli_mismatch", "num_fewshot": 0, "metrics": ["acc"]},
+      {"name": "qnli", "num_fewshot": 0, "metrics": ["acc"]},
+      {"name": "qqp", "num_fewshot": 0, "metrics": ["acc"]},
+      {"name": "prost", "num_fewshot": 0, "metrics": ["acc", "acc_norm"]},
+      {"name": "toxigen", "num_fewshot": 0, "metrics": ["acc", "acc_norm"]},
+      {"name": "ethics_cm", "num_fewshot": 0, "metrics": ["acc"]},
+      {"name": "moral_stories", "num_fewshot": 0, "metrics": ["acc", "acc_norm"]},
+      {"name": "boolq", "num_fewshot": 0, "metrics": ["acc"]},
+      {"name": "race", "num_fewshot": 0, "metrics": ["acc"]},
+      {"name": "lambada_openai", "num_fewshot": 0, "metrics": ["acc"]},
+      {"name": "pile_10k", "num_fewshot": 0, "metrics": ["bits_per_byte"]},
+      {"name": "leaderboard_mmlu_pro", "num_fewshot": 5, "metrics": ["acc"]}
+    ],
+    "log_samples": true,
+    "preserve_per_example_outputs": true
+  },
   "comparison": {
     "pair_key": "task_and_doc_id",
     "bootstrap_confidence": 0.95,
