@@ -85,7 +85,7 @@ if [[ ! -f $output_root/data/train.bin || ! -f $output_root/data/train.idx || ! 
     --output-prefix "$output_root/data/train"
 fi
 
-"$venv/bin/python" "$root/scripts/gpt_dataset_smoke.py" \
+python "$root/scripts/gpt_dataset_smoke.py" \
   --megatron-root "$megatron" \
   --data-prefix "$output_root/data/train" \
   --samples 1750112 \
