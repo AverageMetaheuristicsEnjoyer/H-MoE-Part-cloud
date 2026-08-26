@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 
-import sys
+import ast
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
 
 
 ROOT = Path(__file__).parents[1]
-sys.path.insert(0, str(ROOT / "third_party" / "Megatron-LM"))
-
-from megatron.training import training
+training_path = ROOT / "third_party/Megatron-LM/megatron/training/training.py"
+tree = ast.parse(training_path.read_text(encoding="utf-8"))
+function = next(
+    node
+    for node in tree.body
+    if isinstance(node, ast.FunctionDef)
+    and node.name == "get_train_valid_test_num_samples"
+)
 
 
 args = SimpleNamespace(
@@ -24,8 +28,10 @@ args = SimpleNamespace(
     phase_transition_iterations=[13_794],
     iteration=13_794,
 )
-with patch.object(training, "get_args", return_value=args):
-    train_samples, _, _ = training.get_train_valid_test_num_samples()
+namespace = {"get_args": lambda: args}
+module = ast.Module(body=[function], type_ignores=[])
+exec(compile(module, str(training_path), "exec"), namespace)
+train_samples, _, _ = namespace["get_train_valid_test_num_samples"]()
 
 expected = (22_208 - 13_794) * 208
 if train_samples != expected:
