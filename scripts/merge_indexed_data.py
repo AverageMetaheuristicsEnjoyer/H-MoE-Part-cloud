@@ -43,6 +43,8 @@ def main():
         raise RuntimeError(
             f"Megatron commit is {revision}, expected {MEGATRON_COMMIT}"
         )
+    sys.modules["transformer_engine"] = None
+    sys.modules["transformer_engine_torch"] = None
     sys.path.insert(0, str(megatron_root))
     from megatron.core.datasets import indexed_dataset
 
