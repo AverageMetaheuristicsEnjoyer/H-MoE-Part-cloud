@@ -41,6 +41,7 @@ nvidia_lib_path=$(find /home/user/conda/lib/python3.12/site-packages/nvidia \
   /home/jovyan/.local-torch28/lib/python3.12/site-packages/nvidia \
   -mindepth 2 -maxdepth 2 -type d -name lib -print 2>/dev/null | paste -sd: - || true)
 export LD_LIBRARY_PATH=${nvidia_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+export CUDNN_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cudnn
 
 if [[ -f $output_root/artifact-manifest.json ]]; then
   python "$root/scripts/finalize_time_match_data.py" --output-root "$output_root" --plan "$plan"
