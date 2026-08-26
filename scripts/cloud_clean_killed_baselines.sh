@@ -21,7 +21,6 @@ targets=(
 )
 
 echo "=== before ==="; df -h "$root" | tail -1
-du -sh "$root"/* 2>/dev/null
 
 for t in "${targets[@]}"; do
   arm=${t%%:*}; want=${t##*:}
@@ -34,11 +33,10 @@ for t in "${targets[@]}"; do
     echo "SKIP $arm: tracker is $have, expected $want -- not the dead run, leaving it"
     continue
   fi
-  echo "REMOVE $arm at iteration $have ($(du -sh "$d" 2>/dev/null | cut -f1))"
+  echo "REMOVE $arm at iteration $have"
   rm -rf "$d"
 done
 
 echo "=== after ==="; df -h "$root" | tail -1
-du -sh "$root"/* 2>/dev/null
 echo "EXIT=0"
 exit 0
