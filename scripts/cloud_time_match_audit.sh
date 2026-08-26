@@ -37,7 +37,12 @@ echo "=== CREDENTIAL PRESENCE ==="
 [[ -s /home/jovyan/.cache/huggingface/token ]] && echo "hf-token-present" || echo "hf-token-missing"
 echo "=== PHASE CONTRACT ==="
 cd "$root"
+unset PYTHONNOUSERSITE
+nvidia_lib_path=$(find /home/user/conda/lib/python3.12/site-packages/nvidia \
+  -mindepth 2 -maxdepth 2 -type d -name lib -print 2>/dev/null | paste -sd: - || true)
+export LD_LIBRARY_PATH=${nvidia_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 python scripts/phase_transition_smoke.py
-echo "PHASE_TEST_EXIT=$?"
-echo "EXIT=0"
-exit 0
+code=$?
+echo "PHASE_TEST_EXIT=$code"
+echo "EXIT=$code"
+exit "$code"
