@@ -27,6 +27,7 @@ def main():
             training["shard_end_exclusive"],
         )
     ]
+    previous_training_paths = plan.get("previous_training", [])
     development_paths = plan["development"]
     final_paths = plan["final"]
     development_target = plan["development_minimum_indexed_tokens"]
@@ -34,14 +35,19 @@ def main():
     assert development_target > 0
     assert final_target > development_target
 
+    previous_training_set = set(previous_training_paths)
     training_set = set(training_paths)
     development_set = set(development_paths)
     final_set = set(final_paths)
     assert len(training_set) == len(training_paths)
+    assert len(previous_training_set) == len(previous_training_paths)
+    assert previous_training_set.isdisjoint(training_set)
+    assert previous_training_set.isdisjoint(development_set)
+    assert previous_training_set.isdisjoint(final_set)
     assert training_set.isdisjoint(development_set)
     assert training_set.isdisjoint(final_set)
     assert development_set.isdisjoint(final_set)
-    all_paths = training_paths + development_paths + final_paths
+    all_paths = previous_training_paths + training_paths + development_paths + final_paths
     assert len(all_paths) == 100
 
     api = HfApi()
@@ -60,7 +66,8 @@ def main():
     assert all(resolved[path].size > 0 and resolved[path].lfs for path in all_paths)
 
     print(
-        f"source_plan=pass train_candidates={len(training_paths)}"
+        f"source_plan=pass previous_training={len(previous_training_paths)}"
+        f" train_candidates={len(training_paths)}"
         f" development={len(development_paths)} final={len(final_paths)}"
         f" development_target={development_target} final_target={final_target}"
         f" revision={resolved_revision}"

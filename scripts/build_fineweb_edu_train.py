@@ -105,7 +105,11 @@ def main():
         raise RuntimeError("unsupported source-plan schema")
     if training["selection"] != "smallest whole-file prefix covering the target":
         raise RuntimeError("unsupported training selection policy")
-    target = training["base_target_indexed_tokens"]
+    target = training.get(
+        "extension_target_indexed_tokens", training.get("base_target_indexed_tokens")
+    )
+    if target is None:
+        raise RuntimeError("training target is missing")
     args.output_root.mkdir(parents=True, exist_ok=True)
     converter = Path(__file__).with_name("prepare_fineweb_edu_datatrove.py")
 

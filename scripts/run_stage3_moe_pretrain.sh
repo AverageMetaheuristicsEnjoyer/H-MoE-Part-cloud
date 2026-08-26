@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 3 MoE matched pretraining, WSD trunk-and-branch.
 #
-#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench|eval-downstream
+#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench|time-match|time-match-smoke|eval-downstream
 #
 # smoke exercises save and resume; bench measures throughput and peak memory with no
 # checkpoint traffic; resume-bench does the same from the trunk branch point, so the
@@ -15,14 +15,15 @@
 # shorter budget just branches off earlier and runs its own decay tail.
 set -euo pipefail
 
-arm=${1:?usage: run_stage3_moe_pretrain.sh ARM full|trunk|decay-1p2b|smoke|bench|resume-bench}
-mode=${2:?usage: run_stage3_moe_pretrain.sh ARM full|trunk|decay-1p2b|smoke|bench|resume-bench}
+arm=${1:?usage: run_stage3_moe_pretrain.sh ARM MODE}
+mode=${2:?usage: run_stage3_moe_pretrain.sh ARM MODE}
 root=$(cd "$(dirname "$0")/.." && pwd)
 source "$root/configs/stage3-moe-1p029b.sh"
 
 # --- budget, in steps of 208 x 2048 = 425,984 loss tokens ---
 full_iters=17242          # 7,344,816,128 tokens = 1C for this MoE
 full_decay_iters=3448     # final 20%, starts at step 13,795
+time_match_branch=13794
 warmup_iters=173          # first 1%
 short_iters=2818          # 1,200,422,912 tokens
 short_decay_iters=564     # final 20% of the short budget
@@ -31,6 +32,9 @@ short_branch=$((short_iters - short_decay_iters))   # 2254
 global_batch=208
 micro_batch=${STAGE3_MOE_MICRO_BATCH:-4}            # 4 x DP2 x accum26 = 208
 data_root=${STAGE3_MOE_DATA_ROOT:-/home/jovyan/data/fineweb-edu-gpt2-megatron/data}
+train_data_prefix=${STAGE3_MOE_TRAIN_DATA_PREFIX:-$data_root/train}
+valid_data_prefix=${STAGE3_MOE_VALID_DATA_PREFIX:-$data_root/development}
+test_data_prefix=${STAGE3_MOE_TEST_DATA_PREFIX:-$data_root/final}
 ckpt_root=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs3/hmoe-checkpoints/stage3}
 log_root=${STAGE3_MOE_LOG_ROOT:-/home/jovyan/hmoe-cloud/pretrain}
 
@@ -53,6 +57,7 @@ decay_dir="$ckpt_root/1p2b/$arm"
 
 run_id_eval="stage3-$arm-$mode${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
 eval_args=()
+phase_args=()
 full_dir="$ckpt_root/${STAGE3_MOE_FULL_DIR:-1c}/$arm"
 
 case "$mode" in
@@ -152,6 +157,33 @@ case "$mode" in
     # (start_wd = end_wd = 0.1) and every LR argument matches the trunk, so overriding
     # rebuilds the identical schedule; num_steps still comes from the checkpoint.
     load_args=(--load "$trunk_dir" --override-opt_param-scheduler)
+    ;;
+  time-match|time-match-smoke)
+    case "$arm" in
+      adamw_fp8gemm_state_fp32) target_iters=19570 ;;
+      muon_fp8gemm_state_fp32) target_iters=22208 ;;
+      *) echo "time-match is only defined for the two FP8-GEMM arms" >&2; exit 2 ;;
+    esac
+    [[ -n ${STAGE3_MOE_TRAIN_DATA_PREFIX:-} ]] || {
+      echo "time-match requires STAGE3_MOE_TRAIN_DATA_PREFIX" >&2
+      exit 2
+    }
+    decay_iters=$full_decay_iters
+    phase_args=(--phase-transition-iterations "$time_match_branch")
+    if [[ $mode == time-match ]]; then
+      train_iters=$target_iters
+      time_match_dir="$ckpt_root/time-match/$arm"
+      mkdir -p "$time_match_dir"
+      save_args=(--save "$time_match_dir" --save-interval 363 --save-retain-interval 13794)
+      load_args=(--load "$time_match_dir" --override-opt_param-scheduler)
+    else
+      train_iters=$((time_match_branch + 1))
+      time_match_source=${STAGE3_MOE_TIME_MATCH_SOURCE:?set STAGE3_MOE_TIME_MATCH_SOURCE to the checkpoint directory}
+      save_args=()
+      load_args=(--load "$time_match_source" --override-opt_param-scheduler)
+      probe_warmup=0
+      probe_measure=1
+    fi
     ;;
   eval-downstream)
     # Score a finished checkpoint. --skip-train makes MCore build the model, load the
@@ -265,7 +297,9 @@ export STAGE3_MOE_SITE=cloudru
 export STAGE3_MOE_IMAGE="${MLSUB_IMAGE:-torch28}"
 export STAGE3_MOE_CONFIG_SHA256=$(sha256sum "$root/configs/stage3-moe-1p029b.sh" | awk '{print $1}')
 export STAGE3_MOE_DATA_MANIFEST_SHA256=$(
-  if [[ -f "$data_root/../artifact-manifest.json" ]]; then
+  if [[ -n ${STAGE3_MOE_DATA_MANIFEST_PATH:-} ]]; then
+    sha256sum "$STAGE3_MOE_DATA_MANIFEST_PATH" | awk '{print $1}'
+  elif [[ -f "$data_root/../artifact-manifest.json" ]]; then
     sha256sum "$data_root/../artifact-manifest.json" | awk '{print $1}'
   else
     printf '%s' 'AverageMetaheuristicsEnjoyer/fineweb-edu-gpt2-megatron' | sha256sum | awk '{print $1}'
@@ -279,6 +313,7 @@ export STAGE3_MOE_DRIVER=$(nvidia-smi --query-gpu=driver_version --format=csv,no
 export STAGE3_MOE_CUBLASLT=$(python -c 'import transformer_engine_torch as t; print(t.get_cublasLt_version())' 2>/dev/null || echo unknown)
 export STAGE3_MOE_GPU_CLEAN_BEFORE=1 STAGE3_MOE_GPU_CLEAN_DURING=1 STAGE3_MOE_GPU_CLEAN_AFTER=1
 echo "ARM=$arm MODE=$mode GPUS=$gpu_count micro_batch=$micro_batch global_batch=$global_batch"
+echo "DATA train=$train_data_prefix valid=$valid_data_prefix test=$test_data_prefix"
 echo "FP8_DEQUANT_CHUNK=${STAGE3_MOE_FP8_DEQUANT_CHUNK:-0} (0 = every state in FP32 at once)"
 echo "SCHEDULE target_iters=$target_iters decay_iters=$decay_iters warmup=$warmup_iters train_iters=$train_iters"
 echo "CKPT save=${save_args[*]} load=${load_args[*]}"
@@ -316,11 +351,12 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   --micro-batch-size "$micro_batch" \
   --global-batch-size "$global_batch" \
   --train-iters "$train_iters" \
+  "${phase_args[@]}" \
   --tokenizer-type NullTokenizer --vocab-size 50257 \
   --null-tokenizer-eod-id 50256 --null-tokenizer-pad-id -1 \
-  --train-data-path "$data_root/train" \
-  --valid-data-path "$data_root/development" \
-  --test-data-path "$data_root/final" \
+  --train-data-path "$train_data_prefix" \
+  --valid-data-path "$valid_data_prefix" \
+  --test-data-path "$test_data_prefix" \
   --dataloader-type single \
   --num-workers 2 \
   --no-create-attention-mask-in-dataloader \
@@ -349,5 +385,8 @@ if [[ $mode == smoke && ${STAGE3_MOE_KEEP_SMOKE_CKPT:-0} != 1 ]]; then
   echo "SMOKE_CKPT=removing $smoke_dir"
   rm -rf "$smoke_dir"
   df -h "$ckpt_root" | tail -1
+fi
+if [[ ${STAGE3_MOE_PROPAGATE_EXIT:-0} == 1 ]]; then
+  exit "$code"
 fi
 exit 0

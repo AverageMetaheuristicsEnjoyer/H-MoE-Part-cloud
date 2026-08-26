@@ -1,0 +1,46 @@
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+
+ROOT = Path(__file__).parents[2]
+sys.path.insert(0, str(ROOT / "third_party" / "Megatron-LM"))
+
+from megatron.training import training
+
+
+def test_iteration_schedule_sizes_and_resets_extension_phase(monkeypatch):
+    args = SimpleNamespace(
+        train_samples=None,
+        train_iters=22_208,
+        global_batch_size=208,
+        full_validation=False,
+        skip_train=False,
+        eval_interval=250,
+        start_eval_at_iter=None,
+        eval_iters=32,
+        phase_transition_iterations=[13_794],
+        iteration=13_794,
+    )
+    monkeypatch.setattr(training, "get_args", lambda: args)
+
+    train_samples, _, _ = training.get_train_valid_test_num_samples()
+
+    assert train_samples == (22_208 - 13_794) * 208
+
+
+def test_phase_local_sampler_offset_starts_at_zero():
+    source = (ROOT / "third_party/Megatron-LM/megatron/training/training.py").read_text()
+
+    assert "consumed_train_samples_in_current_phase = (args.iteration - last_transition) * args.global_batch_size" in source
+
+
+def test_time_match_schedule_and_data_capacity_are_pinned():
+    launcher = (ROOT / "scripts/run_stage3_moe_pretrain.sh").read_text()
+    plan = (ROOT / "configs/fineweb_edu_time_match_extension_plan.json").read_text()
+
+    assert "adamw_fp8gemm_state_fp32) target_iters=19570" in launcher
+    assert "muon_fp8gemm_state_fp32) target_iters=22208" in launcher
+    assert 'phase_args=(--phase-transition-iterations "$time_match_branch")' in launcher
+    assert '"extension_target_indexed_tokens": 3584229377' in plan
+    assert '"shard_start_inclusive": 8' in plan
