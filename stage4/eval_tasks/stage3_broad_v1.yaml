@@ -1,30 +1,21 @@
 group: stage3_broad_v1
 task:
   - blimp
-  - task: swag
-    num_fewshot: 0
-  - task: mnli
-    num_fewshot: 0
-  - task: mnli_mismatch
-    num_fewshot: 0
-  - task: qnli
-    num_fewshot: 0
+  - swag
+  - mnli
+  - mnli_mismatch
+  - qnli
   - task: qqp
     num_fewshot: 0
     metric_list:
       - metric: acc
         aggregation: mean
         higher_is_better: true
-  - task: prost
-    num_fewshot: 0
-  - task: toxigen
-    num_fewshot: 0
-  - task: moral_stories
-    num_fewshot: 0
-  - task: boolq
-    num_fewshot: 0
-  - task: race
-    num_fewshot: 0
+  - prost
+  - toxigen
+  - moral_stories
+  - boolq
+  - race
   - task: lambada_openai
     num_fewshot: 0
     metric_list:
@@ -37,7 +28,6 @@ task:
       - metric: bits_per_byte
         aggregation: bits_per_byte
         higher_is_better: false
-  - task: leaderboard_mmlu_pro
-    num_fewshot: 5
+  - leaderboard_mmlu_pro
 metadata:
   version: 1.0
