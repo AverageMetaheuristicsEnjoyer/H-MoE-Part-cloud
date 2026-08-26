@@ -23,7 +23,6 @@ tracker="$dst/latest_checkpointed_iteration.txt"
 for path in "$extension_root/data/train.bin" "$extension_root/data/train.idx" "$extension_root/artifact-manifest.json"; do
   [[ -f $path ]] || { echo "extension data is incomplete: $path" >&2; exit 2; }
 done
-[[ -d $src ]] || { echo "pre-decay checkpoint is missing: $src" >&2; exit 2; }
 [[ -s /home/jovyan/.wandb-key || -n ${WANDB_API_KEY:-} ]] || {
   echo "online W&B credential is missing" >&2
   exit 2
@@ -38,6 +37,7 @@ if [[ -f $tracker ]]; then
   fi
   load="$dst"
 else
+  [[ -d $src ]] || { echo "pre-decay checkpoint is missing: $src" >&2; exit 2; }
   mkdir -p "$initial_load" "$dst"
   if [[ ! -d $initial_load/iter_0013794 ]]; then
     cp -al "$src" "$initial_load/" || exit 2
