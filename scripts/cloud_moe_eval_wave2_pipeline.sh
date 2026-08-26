@@ -99,6 +99,43 @@ for arm in "${arms[@]}"; do
 done
 if [[ $failed -eq 0 ]]; then
   echo "PIPELINE_STATUS=COMPLETE optimizer=$optimizer"
+  state_dir="$STAGE3_MOE_LOG_ROOT/wave2-1c-v1-state"
+  mkdir -p "$state_dir"
+  touch "$state_dir/$optimizer.done"
+  if [[ -f $state_dir/adamw.done && -f $state_dir/muon.done ]] && mkdir "$state_dir/finalize.lock" 2>/dev/null; then
+    echo "=== FINALIZING BOTH OPTIMIZERS ==="
+    STAGE3_MOE_RESULTS_ROOT="$STAGE3_MOE_LOG_ROOT" \
+      "$root/scripts/cloud_finalize.sh" eval-downstream-wave2-1c-v1
+    python - "$STAGE3_MOE_LOG_ROOT" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+treatments = (
+    "adamw_bf16_state_fp8",
+    "adamw_fp8gemm_state_fp32",
+    "muon_bf16_state_fp8",
+    "muon_fp8gemm_state_fp32",
+)
+for arm in treatments:
+    path = root / f"stage3-{arm}-eval-downstream-wave2-1c-v1" / "results.jsonl"
+    records = [
+        json.loads(line)
+        for line in path.read_text().splitlines()
+        if line.strip() and json.loads(line).get("record_type") == "run"
+    ]
+    assert len(records) == 1
+    inference = records[0]["measurement"]["inference"]
+    assert inference is not None and len(inference["downstream"]) == 6
+print("FINALIZE_GATE=PASS pairs=4 metrics_per_pair=6")
+PY
+    if [[ $? -eq 0 ]]; then
+      touch "$state_dir/finalized.done"
+    else
+      echo "FINALIZE_GATE=FAIL"
+    fi
+  fi
 else
   echo "PIPELINE_STATUS=FAILED optimizer=$optimizer"
 fi
