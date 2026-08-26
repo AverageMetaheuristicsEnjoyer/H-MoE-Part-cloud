@@ -17,7 +17,7 @@ if [[ -z $want ]]; then
   find "$ck" -maxdepth 3 -type d -name "iter_*" 2>/dev/null | head
   echo
 fi
-echo "=== volume ==="; df -h /workspace-SR006.nfs3 | tail -1
+echo "=== volume ==="; df -h "$ck" | tail -1
 echo
 echo
 if [ -f /home/jovyan/.wandb-key ]; then echo "=== wandb key: present ==="; else echo "=== wandb key: absent -> runs are offline ==="; fi
