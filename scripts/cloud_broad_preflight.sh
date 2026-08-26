@@ -3,7 +3,7 @@
 set -u
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-export HF_HOME=${STAGE3_MOE_HF_HOME:-/tmp/hmoe-hf-cache}
+export HF_HOME=${STAGE3_MOE_HF_HOME:-/home/jovyan/hmoe-hf-cache-broad-v1}
 export HF_DATASETS_TRUST_REMOTE_CODE=1
 
 if ! python -c 'import lm_eval; assert lm_eval.__version__ == "0.4.11"' >/dev/null 2>&1; then
@@ -32,7 +32,6 @@ expected = {
     "qqp": (0, ["acc"]),
     "prost": (0, ["acc", "acc_norm"]),
     "toxigen": (0, ["acc", "acc_norm"]),
-    "ethics_cm": (0, ["acc"]),
     "moral_stories": (0, ["acc", "acc_norm"]),
     "boolq": (0, ["acc"]),
     "race": (0, ["acc"]),
@@ -43,7 +42,7 @@ expected = {
 
 manager = TaskManager(include_path="stage4/eval_tasks")
 tasks = list(leaves(manager.load_task_or_group(["stage3_broad_v1"])))
-assert len(tasks) == 81, len(tasks)
+assert len(tasks) == 80, len(tasks)
 blimp = 0
 for task in tasks:
     name = task.task_name

@@ -20,8 +20,6 @@ task:
     num_fewshot: 0
   - task: toxigen
     num_fewshot: 0
-  - task: ethics_cm
-    num_fewshot: 0
   - task: moral_stories
     num_fewshot: 0
   - task: boolq

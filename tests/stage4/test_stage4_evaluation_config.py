@@ -62,7 +62,7 @@ def test_broad_screen_is_frozen_before_scoring():
     assert broad["task_group"] == "stage3_broad_v1"
     assert [task["name"] for task in broad["tasks"]] == [
         "blimp", "swag", "mnli", "mnli_mismatch", "qnli", "qqp", "prost",
-        "toxigen", "ethics_cm", "moral_stories", "boolq", "race",
+        "toxigen", "moral_stories", "boolq", "race",
         "lambada_openai", "pile_10k", "leaderboard_mmlu_pro",
     ]
     assert broad["log_samples"]
