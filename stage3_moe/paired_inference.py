@@ -85,8 +85,27 @@ def _load_per_example(result_path, task, expected_sha256):
     return rows
 
 
+def _bootstrap_aggregates(values, index, metric):
+    import numpy as np
+
+    values = np.asarray(values, dtype=float)
+    if values.ndim == 1:
+        means = values[index].mean(axis=1)
+        return np.exp(-means) if metric == "perplexity" else means
+    if values.ndim != 2 or values.shape[1] != 2:
+        return None
+    weighted_means = (
+        values[index, 0].sum(axis=1) / values[index, 1].sum(axis=1)
+    )
+    if metric in ("word_perplexity", "byte_perplexity"):
+        return np.exp(-weighted_means)
+    if metric == "bits_per_byte":
+        return -weighted_means / math.log(2)
+    return None
+
+
 def _paired_bootstrap(baseline_values, treatment_values, higher_is_better,
-                      iterations=2000, seed=1234):
+                      metric=None, iterations=2000, seed=1234):
     """One-sided 95% bounds on relative degradation, resampling whole documents.
 
     The pairing key is the document (`pair_key: task_and_doc_id`), so baseline and
@@ -95,14 +114,16 @@ def _paired_bootstrap(baseline_values, treatment_values, higher_is_better,
     """
     import numpy as np
 
-    baseline = np.asarray(baseline_values, dtype=float)
-    treatment = np.asarray(treatment_values, dtype=float)
-    if baseline.size < 2:
+    if len(baseline_values) < 2:
         return None
     generator = np.random.default_rng(seed)
-    index = generator.integers(0, baseline.size, size=(iterations, baseline.size))
-    baseline_means = baseline[index].mean(axis=1)
-    treatment_means = treatment[index].mean(axis=1)
+    index = generator.integers(
+        0, len(baseline_values), size=(iterations, len(baseline_values))
+    )
+    baseline_means = _bootstrap_aggregates(baseline_values, index, metric)
+    treatment_means = _bootstrap_aggregates(treatment_values, index, metric)
+    if baseline_means is None or treatment_means is None:
+        return None
     with np.errstate(divide="ignore", invalid="ignore"):
         if higher_is_better:
             degradation = (baseline_means - treatment_means) / np.abs(baseline_means)
@@ -171,12 +192,17 @@ def downstream_intervals(replicates):
             baseline_values = [value for value, _ in paired]
             treatment_values = [value for _, value in paired]
             interval = _paired_bootstrap(
-                baseline_values, treatment_values, treatment_item["higher_is_better"]
+                baseline_values,
+                treatment_values,
+                treatment_item["higher_is_better"],
+                metric=metric,
             )
             if interval is None:
                 continue
             intervals[key] = interval
-            if set(baseline_values) <= {0.0, 1.0} and set(treatment_values) <= {0.0, 1.0}:
+            if all(value in (0.0, 1.0) for value in baseline_values) and all(
+                value in (0.0, 1.0) for value in treatment_values
+            ):
                 secondary[key] = mcnemar(baseline_values, treatment_values)
     expected = {
         (item["task"], item["metric"])

@@ -1,20 +1,17 @@
-"""Score the downstream suite with the live MCore model.
+"""Score downstream suites with the live MCore model.
 
-Every primary task in `stage4/eval_tasks` is `output_type: multiple_choice`, so lm-eval
-only ever asks for `loglikelihood`. Serving that from the model MCore just loaded keeps the
-forward identical to the one the run was trained and validated with -- a conversion to
-another runtime would put an unmeasured difference between the arms being compared.
+Serving lm-eval from the model MCore just loaded keeps the forward identical to the one the
+run was trained and validated with -- a conversion to another runtime would put an
+unmeasured difference between the arms being compared.
 
 The training data is pre-tokenized GPT-2 (`NullTokenizer`, vocab 50257), so scoring text
 needs the real GPT-2 tokenizer; its ids are the ones the model was trained on.
 """
 
-import hashlib
-import json
-from pathlib import Path
-
 import torch
 from lm_eval.api.model import LM
+
+from stage3_moe.downstream_artifacts import collect_downstream
 
 # A multiple of 16 satisfies both halves of TE's rule for any batch size.
 FP8_ALIGNMENT = 16
@@ -110,23 +107,38 @@ class MCoreLM(LM):
         return results
 
     def loglikelihood_rolling(self, requests, **kwargs):
-        results = []
-        for request in requests:
+        from lm_eval.utils import get_rolling_token_windows, make_disjoint_window
+
+        encoded = []
+        totals = [0.0] * len(requests)
+        for request_index, request in enumerate(requests):
             (text,) = request.args
-            ids = [self.eot_token_id] + self.tok_encode(text)
-            total = 0.0
-            # Disjoint windows: cheap, and the secondary rolling tasks only need a total.
-            for start in range(0, len(ids) - 1, self.max_length):
-                window = ids[start : start + self.max_length + 1]
-                if len(window) < 2:
-                    break
-                logprobs = self._forward_logprobs([window[:-1]])
-                targets = torch.tensor(window[1:], device=logprobs.device)
-                total += float(
-                    logprobs[0, : len(targets), :].gather(1, targets.unsqueeze(-1)).sum()
+            windows = map(
+                make_disjoint_window,
+                get_rolling_token_windows(
+                    token_list=self.tok_encode(text),
+                    prefix_token=self.eot_token_id,
+                    max_seq_len=self.max_length,
+                    context_len=1,
+                ),
+            )
+            for context, continuation in windows:
+                encoded.append(
+                    (request_index, context + continuation, len(context))
                 )
-            results.append(total)
-        return results
+
+        encoded.sort(key=lambda item: len(item[1]))
+        for start in range(0, len(encoded), self.batch_size):
+            chunk = encoded[start : start + self.batch_size]
+            inputs = [ids[:-1] for _, ids, _ in chunk]
+            logprobs = self._forward_logprobs(inputs)
+            for row, (request_index, ids, split) in enumerate(chunk):
+                targets = torch.tensor(ids[split:], device=logprobs.device)
+                span = logprobs[row, split - 1 : len(ids) - 1, :]
+                totals[request_index] += float(
+                    span.gather(1, targets.unsqueeze(-1)).sum()
+                )
+        return totals
 
     def generate_until(self, requests, **kwargs):
         raise NotImplementedError("the basic_v2 suite is multiple-choice only")
@@ -153,49 +165,7 @@ def run_suite(model, *, tasks, include_path, artifact_dir, batch_size=8, limit=N
         verbosity="WARNING",
     )
 
-    artifact_dir = Path(artifact_dir)
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    downstream = []
-    for task, metrics in sorted(output["results"].items()):
-        samples = output.get("samples", {}).get(task, [])
-        artifact = artifact_dir / f"{task}.jsonl"
-        with artifact.open("w") as handle:
-            for sample in samples:
-                # doc_id pairs a baseline example with its treatment counterpart, which is
-                # what the paired comparison keys on.
-                handle.write(
-                    json.dumps(
-                        {
-                            "doc_id": sample.get("doc_id"),
-                            "target": sample.get("target"),
-                            "resps": sample.get("filtered_resps", sample.get("resps")),
-                            "metrics": {
-                                key: sample[key] for key in sample if key.endswith("_v2")
-                            },
-                        },
-                        sort_keys=True,
-                    )
-                    + "\n"
-                )
-        digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
-        for key, value in sorted(metrics.items()):
-            if "," not in key:
-                continue
-            metric = key.split(",")[0]
-            if not metric.endswith("_v2") or not isinstance(value, (int, float)):
-                continue
-            downstream.append(
-                {
-                    "task": task,
-                    "metric": metric,
-                    # bpb is a cost, everything else here is a score.
-                    "higher_is_better": not metric.startswith("bpb"),
-                    "value": float(value),
-                    "per_example_artifact_sha256": digest,
-                }
-            )
-    summary = artifact_dir / "downstream.json"
-    summary.write_text(json.dumps(downstream, indent=1, sort_keys=True))
+    downstream = collect_downstream(output, artifact_dir)
     print(f"DOWNSTREAM_ARTIFACTS={artifact_dir} n_metrics={len(downstream)}", flush=True)
     for item in downstream:
         print(f"DOWNSTREAM {item['task']} {item['metric']}={item['value']:.6f}", flush=True)

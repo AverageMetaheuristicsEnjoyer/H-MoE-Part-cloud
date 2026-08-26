@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Score finished endpoints on the basic_v2 downstream suite.
+# Score finished endpoints with the requested downstream suite.
 #   mlsub run ... --entry scripts/cloud_moe_eval.sh --gpus 1 --image torch28 --args "ARM [ARM ...]"
 #
 # Both arms of a comparison belong in ONE job: pair_results requires the two records to
@@ -27,7 +27,7 @@ nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
 df -h "$HF_HOME" | tail -1
 echo "EVAL roots=${eval_roots[*]} tasks=${STAGE3_MOE_EVAL_TASKS:-basic_v2 default} limit=${STAGE3_MOE_EVAL_LIMIT:-none}"
 
-if ! python -c 'import lm_eval' >/dev/null 2>&1; then
+if ! python -c 'import lm_eval; assert lm_eval.__version__ == "0.4.11"' >/dev/null 2>&1; then
   echo "=== installing lm-eval ==="
   # Pin torch so pip cannot pull a different build over the image's; the local +cu128
   # segment still satisfies the pin.

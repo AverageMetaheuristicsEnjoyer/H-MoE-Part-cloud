@@ -23,31 +23,38 @@
   "secondary": {
     "provider": "lm-eval",
     "version": "0.4.11",
+    "analysis_scope": "exploratory_posthoc_wave2",
+    "task_group": "stage3_wave2",
     "tasks": [
       {
         "name": "wikitext",
         "num_fewshot": 0,
-        "type": "loglikelihood_rolling"
+        "type": "loglikelihood_rolling",
+        "metrics": ["bits_per_byte"]
       },
       {
         "name": "c4",
         "num_fewshot": 0,
-        "type": "loglikelihood_rolling"
+        "type": "loglikelihood_rolling",
+        "metrics": ["bits_per_byte"]
       },
       {
         "name": "winogrande",
         "num_fewshot": 5,
-        "type": "multiple_choice"
+        "type": "multiple_choice",
+        "metrics": ["acc"]
       },
       {
         "name": "openbookqa",
         "num_fewshot": 5,
-        "type": "multiple_choice"
+        "type": "multiple_choice",
+        "metrics": ["acc", "acc_norm"]
       },
       {
         "name": "mmlu",
         "num_fewshot": 5,
-        "type": "multiple_choice"
+        "type": "multiple_choice",
+        "metrics": ["acc"]
       }
     ],
     "log_samples": true,

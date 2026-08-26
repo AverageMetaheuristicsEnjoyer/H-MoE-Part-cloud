@@ -1,5 +1,6 @@
 import hashlib
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -91,6 +92,15 @@ class BootstrapTest(unittest.TestCase):
 
     def test_too_few_documents(self):
         self.assertIsNone(_paired_bootstrap([1.0], [1.0], True))
+
+    def test_bits_per_byte_resamples_loglikelihood_and_byte_count_together(self):
+        baseline = [(-math.log(2) * count, count) for count in (10, 20, 30, 40)]
+        treatment = [(-1.02 * math.log(2) * count, count) for count in (10, 20, 30, 40)]
+        low, high = _paired_bootstrap(
+            baseline, treatment, False, metric="bits_per_byte"
+        )
+        self.assertAlmostEqual(low, 0.02, places=6)
+        self.assertAlmostEqual(high, 0.02, places=6)
 
 
 class DownstreamIntervalsTest(unittest.TestCase):

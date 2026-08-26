@@ -186,7 +186,12 @@ Three things that are easy to get wrong:
 
 - **A finished mb=16 bf16 baseline** — the only thing that separates FP8 GEMM from
   micro-batch in the compute-axis numbers above. ~32.5 h (AdamW) / ~42.7 h (Muon) on one GPU.
-- **Wave 2 downstream** (`wikitext`, `c4`, `winogrande`, `openbookqa`, `mmlu`) needs
-  `run_suite` to collect non-`_v2` metrics first; today they would score and be dropped.
+- **Wave 2 downstream is exploratory/post-hoc** and does not replace the preregistered
+  wave-1 gate. Its protocol was frozen before scoring: the same six final 1C endpoints;
+  `wikitext` and `c4` `bits_per_byte` at 0-shot; `winogrande` accuracy, `openbookqa`
+  accuracy and normalized accuracy, and aggregate `mmlu` accuracy at 5-shot. Accuracy
+  uses paired document bootstrap with McNemar as a secondary test; bpb resamples matched
+  documents and recomputes the official pooled-by-byte aggregate. A limited run is smoke
+  only and must not be reported as a Wave 2 result.
 - The paired CI provenance caveat from the 1.2B round: `build_inference` computes one
   downstream block per replicate group. With one replicate per pair here, it does not bite.

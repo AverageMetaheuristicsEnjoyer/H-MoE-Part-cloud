@@ -24,12 +24,21 @@ def test_stage4_evaluation_config_is_pinned_and_complete():
     secondary = config["secondary"]
     assert secondary["provider"] == "lm-eval"
     assert secondary["version"] == "0.4.11"
+    assert secondary["analysis_scope"] == "exploratory_posthoc_wave2"
+    assert secondary["task_group"] == "stage3_wave2"
     assert [task["name"] for task in secondary["tasks"]] == [
         "wikitext",
         "c4",
         "winogrande",
         "openbookqa",
         "mmlu",
+    ]
+    assert [task["metrics"] for task in secondary["tasks"]] == [
+        ["bits_per_byte"],
+        ["bits_per_byte"],
+        ["acc"],
+        ["acc", "acc_norm"],
+        ["acc"],
     ]
     assert secondary["log_samples"]
     assert secondary["preserve_per_example_outputs"]
