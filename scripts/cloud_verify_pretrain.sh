@@ -74,12 +74,13 @@ for line in open(sys.argv[1]):
     t = m["timing"]
     step, full = t["optimizer_step_seconds"], t["full_step_seconds"]
     share = f"{step / full:.3f}" if step and full else "na"
+    tok_s = "na" if t["tokens_per_second"] is None else f'{t["tokens_per_second"]:.0f}'
     print(f"  SUMMARY {d['arm_id']} mb={n['micro_batch_sequences_per_gpu']}"
           f" gb={n['global_batch_sequences']}"
           f" max_alloc={m['memory']['max_allocated_bytes']}"
           f" max_resvd={m['memory']['max_reserved_bytes']}"
           f" persistent={d['optimizer_state']['persistent_total_bytes']}"
-          f" tok_s={t['tokens_per_second']:.0f}"
+          f" tok_s={tok_s}"
           f" opt_s={step} full_s={full} opt_share={share}")
 PYX
   fi
