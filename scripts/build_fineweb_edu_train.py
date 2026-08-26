@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -123,6 +124,9 @@ def main():
     ):
         source_path = training["path_template"].format(shard=shard)
         shard_dir = args.output_root / f"train-shard-{shard:05d}"
+        if shard_dir.exists() and not (shard_dir / "manifest.json").is_file():
+            print(f"discarding_incomplete_shard={shard_dir}", flush=True)
+            shutil.rmtree(shard_dir)
         existed = shard_dir.exists()
         if not existed:
             subprocess.run(
