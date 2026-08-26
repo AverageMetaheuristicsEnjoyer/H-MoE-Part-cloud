@@ -49,6 +49,7 @@ fi
 
 export STAGE3_MOE_MICRO_BATCH=16
 export STAGE3_MOE_PROPAGATE_EXIT=1
+export STAGE3_MOE_CKPT_ROOT="$dst_root"
 export STAGE3_MOE_TRAIN_DATA_PREFIX="$extension_root/data/train"
 export STAGE3_MOE_DATA_MANIFEST_PATH="$extension_root/artifact-manifest.json"
 export STAGE3_MOE_TIME_MATCH_LOAD="$load"
