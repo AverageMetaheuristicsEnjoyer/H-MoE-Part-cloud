@@ -4,7 +4,7 @@ set -u
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 src_root=${STAGE3_MOE_SRC_CKPT_ROOT:-/workspace-SR006.nfs3/hmoe-checkpoints/stage3}
-dst_root=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs3/hmoe-checkpoints/stage3-time-match}
+dst_root=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs2/hmoe-checkpoints/stage3-time-match}
 data_root=${STAGE3_MOE_EXTENSION_ROOT:-/workspace-SR006.nfs2/hmoe-data/fineweb-edu-time-match-extension}
 
 echo "=== FILESYSTEMS ==="
@@ -37,7 +37,7 @@ echo "=== CREDENTIAL PRESENCE ==="
 [[ -s /home/jovyan/.cache/huggingface/token ]] && echo "hf-token-present" || echo "hf-token-missing"
 echo "=== PHASE CONTRACT ==="
 cd "$root"
-python -m pytest -q tests/stage3_moe/test_phase_transition.py
+python scripts/phase_transition_smoke.py
 echo "PHASE_TEST_EXIT=$?"
 echo "EXIT=0"
 exit 0

@@ -175,7 +175,7 @@ case "$mode" in
       time_match_dir="$ckpt_root/time-match/$arm"
       mkdir -p "$time_match_dir"
       save_args=(--save "$time_match_dir" --save-interval 363 --save-retain-interval 13794)
-      load_args=(--load "$time_match_dir" --override-opt_param-scheduler)
+      load_args=(--load "${STAGE3_MOE_TIME_MATCH_LOAD:-$time_match_dir}" --override-opt_param-scheduler)
     else
       train_iters=$((time_match_branch + 1))
       time_match_source=${STAGE3_MOE_TIME_MATCH_SOURCE:?set STAGE3_MOE_TIME_MATCH_SOURCE to the checkpoint directory}

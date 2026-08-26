@@ -12,6 +12,21 @@ megatron="$tools_root/Megatron-LM"
 datatrove_commit=87f7bad5c4a56ec648265fbf0b91d7d226bad428
 megatron_commit=571370c829ca768fe37244f4e2e7f28d8accc4ab
 
+cleanup_intermediates() {
+  python - "$output_root/shards" <<'PY'
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+removed = 0
+for path in root.glob("train-shard-*/tokens/*"):
+    if path.is_file() and path.suffix in {".bin", ".idx"}:
+        removed += path.stat().st_size
+        path.unlink()
+print(f"removed_intermediate_bytes={removed}")
+PY
+}
+
 echo "=== PREFLIGHT ==="
 df -h /workspace-SR006.nfs2 /workspace-SR006.nfs3 /home/jovyan 2>&1
 df -i /workspace-SR006.nfs2 /workspace-SR006.nfs3 /home/jovyan 2>&1
@@ -19,6 +34,7 @@ mkdir -p "$tools_root" "$output_root"
 
 if [[ -f $output_root/artifact-manifest.json ]]; then
   python "$root/scripts/finalize_time_match_data.py" --output-root "$output_root" --plan "$plan"
+  cleanup_intermediates
   echo "DATA_ALREADY_READY"
   exit 0
 fi
@@ -67,6 +83,7 @@ cat "$output_root/gpt-dataset-smoke.log"
 "$venv/bin/python" "$root/scripts/finalize_time_match_data.py" \
   --output-root "$output_root" \
   --plan "$plan"
+cleanup_intermediates
 
 echo "=== COMPLETE ==="
 du -sh "$output_root" "$tools_root" 2>/dev/null

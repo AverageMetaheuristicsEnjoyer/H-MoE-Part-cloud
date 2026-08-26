@@ -12,9 +12,11 @@ esac
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 src_root=${STAGE3_MOE_SRC_CKPT_ROOT:-/workspace-SR006.nfs3/hmoe-checkpoints/stage3}
-dst_root=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs3/hmoe-checkpoints/stage3-time-match}
+load_root=${STAGE3_MOE_LOAD_CKPT_ROOT:-/workspace-SR006.nfs3/hmoe-checkpoints/stage3-time-match-source}
+dst_root=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs2/hmoe-checkpoints/stage3-time-match}
 extension_root=${STAGE3_MOE_EXTENSION_ROOT:-/workspace-SR006.nfs2/hmoe-data/fineweb-edu-time-match-extension}
 src="$src_root/trunk/$arm/iter_0013794"
+initial_load="$load_root/$arm"
 dst="$dst_root/time-match/$arm"
 tracker="$dst/latest_checkpointed_iteration.txt"
 
@@ -34,22 +36,22 @@ if [[ -f $tracker ]]; then
     echo "ALREADY_COMPLETE arm=$arm iteration=$iteration"
     exit 0
   fi
+  load="$dst"
 else
-  mkdir -p "$dst"
-  if [[ $(stat -c %d "$src") == $(stat -c %d "$dst") ]]; then
-    cp -al "$src" "$dst/" || exit 2
-  else
-    cp -a "$src" "$dst/.iter_0013794.partial" || exit 2
-    mv "$dst/.iter_0013794.partial" "$dst/iter_0013794" || exit 2
+  mkdir -p "$initial_load" "$dst"
+  if [[ ! -d $initial_load/iter_0013794 ]]; then
+    cp -al "$src" "$initial_load/" || exit 2
   fi
-  echo 13794 > "$tracker"
-  echo "SEEDED arm=$arm source=$src destination=$dst"
+  echo 13794 > "$initial_load/latest_checkpointed_iteration.txt"
+  load="$initial_load"
+  echo "INITIAL_LOAD arm=$arm source=$src load=$load save=$dst"
 fi
 
 export STAGE3_MOE_MICRO_BATCH=16
 export STAGE3_MOE_PROPAGATE_EXIT=1
 export STAGE3_MOE_TRAIN_DATA_PREFIX="$extension_root/data/train"
 export STAGE3_MOE_DATA_MANIFEST_PATH="$extension_root/artifact-manifest.json"
+export STAGE3_MOE_TIME_MATCH_LOAD="$load"
 export STAGE3_MOE_RUN_SUFFIX=${STAGE3_MOE_RUN_SUFFIX:-wallclock-v1}
 export STAGE3_MOE_LOG_ROOT=${STAGE3_MOE_LOG_ROOT:-/workspace-SR006.nfs2/hmoe-cloud/pretrain}
 export WANDB_BASE_URL=${WANDB_BASE_URL:-https://wandb-radfan.ru}
