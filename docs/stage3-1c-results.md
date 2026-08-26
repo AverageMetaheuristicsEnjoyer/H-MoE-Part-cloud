@@ -193,5 +193,14 @@ Three things that are easy to get wrong:
   uses paired document bootstrap with McNemar as a secondary test; bpb resamples matched
   documents and recomputes the official pooled-by-byte aggregate. A limited run is smoke
   only and must not be reported as a Wave 2 result.
+  - Checkpoint audit `9ac93231` found all six `iter_0017242` endpoints. CPU preflight
+    `22482bc0` loaded 61 leaf tasks, confirmed the shot counts and metric set, warmed the
+    shared cache, and passed the artifact/paired-inference tests; C4 is the pinned first
+    validation shard with 45,576 documents.
+  - Self-gated jobs `c3dbf837` (AdamW) and `2d9cd16a` (Muon) were submitted on 2026-08-26.
+    Each scores a two-example all-task smoke first and aborts unless the six expected
+    metrics, hashes, value shapes and row counts pass. Only then does it score its three
+    full endpoints under suffix `wave2-1c-v1`. The second optimizer to finish takes an
+    atomic finalize lock and writes all four paired intervals.
 - The paired CI provenance caveat from the 1.2B round: `build_inference` computes one
   downstream block per replicate group. With one replicate per pair here, it does not bite.
