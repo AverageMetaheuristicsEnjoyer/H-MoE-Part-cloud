@@ -38,6 +38,8 @@ for d in "$lg"/*/; do
     # A running job's own log is unreadable through the platform API, so the last
     # progress line here is the only way to see how far a live run has got.
     grep -E "iteration +[0-9]+/" "$newest" 2>/dev/null | tail -1 | cut -c1-420 | sed 's/^/    /'
+    tr '\r' '\n' <"$newest" | grep -aE "Running (loglikelihood|loglikelihood_rolling) requests" \
+      | tail -1 | cut -c1-420 | sed 's/^/    /'
   fi
   # wandb names an offline run dir offline-run-*, an online one run-*; its size says
   # whether history is actually being recorded.
