@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -216,16 +215,22 @@ def main() -> int:
         return 0
 
     exhausted: set[tuple[str, str]] = set()
+    # A broken arm -- a bad config, a missing optimizer -- fails identically at every
+    # micro-batch, and each attempt costs a process start and a Megatron init. Stop it
+    # here; a resubmission retries, because a failed point is never reused.
+    broken: set[tuple[str, str]] = set()
     for model in models:
         for micro_batch in micro_batches:
             for arm in arms:
                 key = (model, arm)
                 path = point_path(results_root, model, arm, micro_batch)
                 expected = controls(args, model, micro_batch)
-                if key in exhausted:
-                    log(f"skip {model}/{arm}/mb{micro_batch}: a smaller micro-batch ran out of memory")
+                if key in exhausted or key in broken:
+                    reason = "ran out of memory" if key in exhausted else "failed"
+                    status = "skipped_after_oom" if key in exhausted else "skipped_after_failure"
+                    log(f"skip {model}/{arm}/mb{micro_batch}: a smaller micro-batch {reason}")
                     write_point(path, {"model": model, "arm": arm, "micro_batch": micro_batch,
-                                       "controls": expected, "status": "skipped_after_oom"})
+                                       "controls": expected, "status": status})
                     continue
                 existing = None if args.rerun else stored_point(path, expected)
                 if existing is not None:
@@ -240,6 +245,8 @@ def main() -> int:
                 log(f"  -> {payload['status']} in {payload['wall_seconds']:.0f}s")
                 if payload["status"] == "oom":
                     exhausted.add(key)
+                elif payload["status"] == "failed":
+                    broken.add(key)
     return 0
 
 

@@ -153,3 +153,45 @@ def test_export_row_leaves_an_oom_point_blank_rather_than_zero():
     ).split("\t")
     assert row[4] == "oom"
     assert row[5:] == [""] * 6
+
+
+def test_a_broken_arm_is_abandoned_instead_of_retried_at_every_batch(tmp_path, monkeypatch):
+    attempted = []
+
+    def fake_run_point(parsed, model, arm, micro_batch):
+        attempted.append((arm, micro_batch))
+        return {
+            "model": model,
+            "arm": arm,
+            "micro_batch": micro_batch,
+            "controls": membench_sweep.controls(parsed, model, micro_batch),
+            "status": "failed" if arm.startswith("muon") else "complete",
+            "wall_seconds": 1.0,
+            "record": {},
+        }
+
+    monkeypatch.setattr(membench_sweep, "run_point", fake_run_point)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["membench_sweep.py",
+         "--models", "1p029b",
+         "--arms", "adamw_bf16_state_fp32,muon_bf16_state_fp32",
+         "--micro-batches", "1,2,4",
+         "--results-root", str(tmp_path / "r"), "--log-root", str(tmp_path / "l")],
+    )
+    assert membench_sweep.main() == 0
+
+    assert [batch for arm, batch in attempted if arm.startswith("muon")] == [1]
+    assert [batch for arm, batch in attempted if arm.startswith("adamw")] == [1, 2, 4]
+    skipped = json.loads(
+        (tmp_path / "r" / "runs" / "1p029b-muon_bf16_state_fp32-mb4.json").read_text()
+    )
+    assert skipped["status"] == "skipped_after_failure"
+
+
+def test_a_skipped_point_is_not_reused_as_a_measurement(tmp_path):
+    parsed = args(tmp_path)
+    path = membench_sweep.point_path(parsed.results_root, "1p029b", "muon_bf16_state_fp32", 4)
+    expected = membench_sweep.controls(parsed, "1p029b", 4)
+    membench_sweep.write_point(path, {"status": "skipped_after_failure", "controls": expected})
+    assert membench_sweep.stored_point(path, expected) is None
