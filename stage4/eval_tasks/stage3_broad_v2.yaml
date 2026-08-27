@@ -183,6 +183,6 @@ task:
   - leaderboard_bbh_tracking_shuffled_objects_three_objects
   - leaderboard_bbh_web_of_lies
   - wikitext
-  - mediqa_qa2019_perplexity
+  - stage3_mediqa_qa2019_bpb
 metadata:
   version: 1.0
