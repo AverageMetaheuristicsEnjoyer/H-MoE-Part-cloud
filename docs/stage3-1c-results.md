@@ -127,6 +127,68 @@ applies to this whole table.
 - Each pair is one replicate, so `memory_allocated_ratio_ci95` and `e2e_wct_ratio_ci95` are
   null. The downstream CIs are paired per document and need no replicates.
 
+## Exploratory broad screen — scored 2026-08-26 to 2026-08-27
+
+This is a post-hoc screen for lm-eval tasks on which the relative degradation is below 1 %.
+The suite was frozen before any full score was observed: 80 task leaves and 18 reported
+metrics from BLiMP, SWAG, MNLI, MNLI mismatch, QNLI, QQP, PROST, ToxiGen, Moral Stories,
+BoolQ, RACE-high, LAMBADA OpenAI, Pile-10k and MMLU-Pro. Accuracy metrics use a paired
+document bootstrap with exact McNemar as a secondary check; Pile-10k `bits_per_byte`
+resamples matched documents and recomputes the pooled-by-byte aggregate.
+
+Jobs `0c413148` (AdamW, 8 h 34 min) and `828d0baf` (Muon, 6 h 57 min) scored the same six
+final 1C endpoints as wave 1. All six arms exited 0 and wrote 18 metrics plus per-example
+artifact hashes. CPU finalization job `eb0ce0f3` wrote all four paired intervals.
+
+Positive gap means worse; negative means the treatment improved. “Point <=1 %” is the
+one-sided screen the project gate uses. “CI <1 %” is the stronger result whose paired
+one-sided 95 % upper bound is itself below 1 %.
+
+| axis | point <=1 % | paired CI upper <1 % |
+|---|---:|---:|
+| AdamW, FP8 optimizer state | 14 / 18 | 11 / 18 |
+| Muon, FP8 optimizer state | 12 / 18 | 7 / 18 |
+| AdamW, FP8 GEMM | 8 / 18 | 7 / 18 |
+| Muon, FP8 GEMM | 11 / 18 | 5 / 18 |
+
+### Compute axis — broad screen
+
+The table gives baseline -> FP8-GEMM values, signed relative gap, then the paired 95 %
+degradation interval. Lower is better only for Pile-10k bpb; all other metrics are accuracy.
+
+| metric | AdamW bf16 -> FP8 GEMM; gap [CI95] | Muon bf16 -> FP8 GEMM; gap [CI95] |
+|---|---|---|
+| BLiMP acc | 0.8233 -> 0.7782; +5.475 % [+5.162, +5.777] | 0.8157 -> 0.8181; **-0.293 % [-0.574, -0.020]** |
+| BoolQ acc | 0.5006 -> 0.4945; +1.222 % [-2.226, +4.584] | 0.5547 -> 0.5180; +6.615 % [+3.158, +9.689] |
+| LAMBADA acc | 0.3227 -> 0.3078; +4.630 % [+2.014, +7.199] | 0.3328 -> 0.3313; +0.466 % [-2.218, +2.958] |
+| MMLU-Pro acc | 0.1120 -> 0.1115; +0.445 % [-4.151, +4.845] | 0.1153 -> 0.1179; -2.307 % [-7.778, +2.664] |
+| MNLI acc | 0.3342 -> 0.3461; **-3.567 % [-6.187, -0.892]** | 0.3460 -> 0.3496; -1.031 % [-4.008, +1.624] |
+| MNLI mismatch acc | 0.3467 -> 0.3550; **-2.376 % [-5.103, +0.029]** | 0.3476 -> 0.3516; -1.141 % [-3.587, +1.490] |
+| Moral Stories acc | 0.5366 -> 0.5431; **-1.211 % [-1.944, -0.506]** | 0.5370 -> 0.5319; +0.947 % [+0.123, +1.733] |
+| Moral Stories acc_norm | 0.5486 -> 0.5564; **-1.428 % [-2.334, -0.498]** | 0.5475 -> 0.5417; +1.050 % [+0.077, +2.072] |
+| Pile-10k bpb | 1.1849 -> 1.2224; +3.168 % [+2.818, +3.710] | 1.1449 -> 1.1668; +1.915 % [+1.609, +2.368] |
+| PROST acc | 0.2343 -> 0.2563; **-9.410 % [-11.944, -7.023]** | 0.2428 -> 0.2810; **-15.714 % [-18.341, -13.238]** |
+| PROST acc_norm | 0.3120 -> 0.3046; +2.378 % [+0.974, +3.712] | 0.3297 -> 0.3237; +1.829 % [+0.417, +3.237] |
+| QNLI acc | 0.4983 -> 0.5136; **-3.086 % [-5.740, -0.475]** | 0.4951 -> 0.5160; **-4.214 % [-6.921, -1.844]** |
+| QQP acc | 0.3914 -> 0.3765; +3.804 % [+2.992, +4.575] | 0.4159 -> 0.4297; **-3.313 % [-4.450, -2.105]** |
+| RACE-high acc | 0.3100 -> 0.2947; +4.938 % [-0.327, +10.299] | 0.3139 -> 0.3110; +0.915 % [-4.944, +6.534] |
+| SWAG acc | 0.4266 -> 0.4176; +2.109 % [+1.387, +2.783] | 0.4291 -> 0.4224; +1.561 % [+0.893, +2.275] |
+| SWAG acc_norm | 0.5711 -> 0.5583; +2.232 % [+1.562, +2.863] | 0.5752 -> 0.5577; +3.042 % [+2.365, +3.754] |
+| ToxiGen acc | 0.5021 -> 0.4117; +18.008 % [+11.332, +24.793] | 0.4160 -> 0.3957; +4.859 % [-0.255, +9.763] |
+| ToxiGen acc_norm | 0.4319 -> 0.4319; **0.000 % [0.000, 0.000]** | 0.4319 -> 0.4319; **0.000 % [0.000, 0.000]** |
+
+There are real per-metric hits, but the strict all-metric verdict remains fail. The only
+strong hits shared by both FP8-GEMM arms are QNLI accuracy, PROST raw accuracy and ToxiGen
+normalized accuracy. All three need a caveat: QNLI is around binary chance, PROST raw
+accuracy is around four-way chance and disagrees with its normalized metric, and ToxiGen
+normalized accuracy is exactly unchanged across the pair. Muon's BLiMP result is the cleanest
+non-chance hit; it improves by 0.293 % with the entire paired interval below zero, but AdamW
+BLiMP degrades by 5.475 %.
+
+This screen therefore finds benchmarks that satisfy the numerical 1 % criterion, but it
+does not make the preregistered gate pass and must not be reported as if the suite had been
+chosen before the experiment.
+
 ## The numbers themselves
 
 [`stage3-1c-downstream.json`](stage3-1c-downstream.json) holds all 54 metric values at full
@@ -134,6 +196,10 @@ precision, each arm's validation loss, the paired 95 % degradation intervals on 
 treatment arms, and the SHA-256 of every per-example artifact they were computed from. It was
 lifted off the volume with `scripts/cloud_dump_downstream.sh`; the tables above are the same
 numbers rounded.
+
+[`stage3-1c-broad-v1.json`](stage3-1c-broad-v1.json) is the corresponding full-precision
+ledger for the exploratory broad screen: 108 values, all four paired interval sets and every
+per-example artifact hash.
 
 **Nothing logs these scores anywhere else.** `run_suite` writes them to the run directory and
 no code path pushes them to W&B, so before this file the only copy was on nfs2.
@@ -186,21 +252,7 @@ Three things that are easy to get wrong:
 
 - **A finished mb=16 bf16 baseline** — the only thing that separates FP8 GEMM from
   micro-batch in the compute-axis numbers above. ~32.5 h (AdamW) / ~42.7 h (Muon) on one GPU.
-- **Wave 2 downstream is exploratory/post-hoc** and does not replace the preregistered
-  wave-1 gate. Its protocol was frozen before scoring: the same six final 1C endpoints;
-  `wikitext` and `c4` `bits_per_byte` at 0-shot; `winogrande` accuracy, `openbookqa`
-  accuracy and normalized accuracy, and aggregate `mmlu` accuracy at 5-shot. Accuracy
-  uses paired document bootstrap with McNemar as a secondary test; bpb resamples matched
-  documents and recomputes the official pooled-by-byte aggregate. A limited run is smoke
-  only and must not be reported as a Wave 2 result.
-  - Checkpoint audit `9ac93231` found all six `iter_0017242` endpoints. CPU preflight
-    `22482bc0` loaded 61 leaf tasks, confirmed the shot counts and metric set, warmed the
-    shared cache, and passed the artifact/paired-inference tests; C4 is the pinned first
-    validation shard with 45,576 documents.
-  - Self-gated jobs `c3dbf837` (AdamW) and `2d9cd16a` (Muon) were submitted on 2026-08-26.
-    Each scores a two-example all-task smoke first and aborts unless the six expected
-    metrics, hashes, value shapes and row counts pass. Only then does it score its three
-    full endpoints under suffix `wave2-1c-v1`. The second optimizer to finish takes an
-    atomic finalize lock and writes all four paired intervals.
+- The original narrow Wave 2 was stopped before producing a reportable full result. The
+  completed broad screen above supersedes it for exploratory task selection.
 - The paired CI provenance caveat from the 1.2B round: `build_inference` computes one
   downstream block per replicate group. With one replicate per pair here, it does not bite.

@@ -1,0 +1,571 @@
+{
+  "budget": "1C, iteration 17242, 7,344,816,128 tokens per arm",
+  "scored": "2026-08-26 to 2026-08-27",
+  "suite": "exploratory broad_v1; 80 lm-eval task leaves, 18 reported metrics",
+  "source": "/home/jovyan/hmoe-cloud/pretrain/stage3-<arm>-eval-downstream-broad-v1-1c/",
+  "protocol": "Post-hoc screen frozen before scoring. Accuracy uses paired document bootstrap with exact McNemar secondary; Pile-10k bits_per_byte uses paired document bootstrap and the pooled-by-byte aggregate.",
+  "arms": {
+    "adamw_bf16_state_fp32": {
+      "run_id": "stage3-adamw_bf16_state_fp32-eval-downstream-broad-v1-1c",
+      "loss": {
+        "training": null,
+        "validation": 2.6754770278930664
+      },
+      "metrics": {
+        "blimp/acc": 0.8232686567164179,
+        "boolq/acc": 0.500611620795107,
+        "lambada_openai/acc": 0.32272462643120514,
+        "leaderboard_mmlu_pro/acc": 0.11203457446808511,
+        "mnli/acc": 0.33418237391747324,
+        "mnli_mismatch/acc": 0.34672497965825877,
+        "moral_stories/acc": 0.5365833333333333,
+        "moral_stories/acc_norm": 0.5485833333333333,
+        "pile_10k/bits_per_byte": 1.184903469327024,
+        "prost/acc": 0.23425491033304868,
+        "prost/acc_norm": 0.31201964133219473,
+        "qnli/acc": 0.4982610287387882,
+        "qqp/acc": 0.3913925302992827,
+        "race/acc": 0.31004784688995213,
+        "swag/acc": 0.42657202839148256,
+        "swag/acc_norm": 0.5710786763970809,
+        "toxigen/acc": 0.502127659574468,
+        "toxigen/acc_norm": 0.4319148936170213
+      },
+      "paired_degradation_ci95_vs": null,
+      "paired_degradation_ci95": null,
+      "per_example_artifact_sha256": {
+        "blimp": "fc6c7b871a00e3cc8b6df0113be0e24a751dded71092e99337e1491f0553b121",
+        "boolq": "05060bdbc97833885bb56d6aa9cb52010bff678c4426fe5a21472f8e7f3267de",
+        "lambada_openai": "8af0637207c1108d441e16de98aba068adcd7cad8006ea2c7e1f044d5682b640",
+        "leaderboard_mmlu_pro": "683ae9ac3275704663735070f17ec9fdcc7c9ff897f5119cd2d599cc8fe9a9f5",
+        "mnli": "597c382e3dec7d0d33846be154c9913e65d49b61d99e560589803b4c33d0cb2a",
+        "mnli_mismatch": "676535b128656a3a91f93abb32fc6c448cae57968c9d910ce114367fd4431c96",
+        "moral_stories": "f6a88ec963b299b6dff9423d05e0a408684f442594d9e0943cc7f6543c9582c9",
+        "pile_10k": "de6f6311cb0655190acb16589c27955828aef0ded1a9e82fb171dc2dbe2071eb",
+        "prost": "8f73135630f97ea894d6fc3ad4154ee934d1af79c9c1b836a8a6756837ab167a",
+        "qnli": "f8f7940c9cba2c8ca22e62f64b82e5a0de82d6fe957a0aa89bd7ce818a300df2",
+        "qqp": "1fe302df0d5380cd680166ad5a7558ad0cb708aa6e7020cc28cb9a5af6d73724",
+        "race": "be7a0f6df2215bc08ad5be2c57e24f28f3bd4eec97f45c5e344678f768c2ce23",
+        "swag": "3447ae26c1e876ca48fc5d15f9d7b44c658ed2141500d890c61fff46d5efe3cd",
+        "toxigen": "fa04d5affc082c1f40811905f0dba548cb1d74cdd309384f5c438adfd28ce1c0"
+      }
+    },
+    "adamw_bf16_state_fp8": {
+      "run_id": "stage3-adamw_bf16_state_fp8-eval-downstream-broad-v1-1c",
+      "loss": {
+        "training": null,
+        "validation": 2.6942224502563477
+      },
+      "metrics": {
+        "blimp/acc": 0.8166119402985075,
+        "boolq/acc": 0.5522935779816514,
+        "lambada_openai/acc": 0.30991655346400154,
+        "leaderboard_mmlu_pro/acc": 0.11120345744680851,
+        "mnli/acc": 0.33937850229240957,
+        "mnli_mismatch/acc": 0.35028478437754274,
+        "moral_stories/acc": 0.5403333333333333,
+        "moral_stories/acc_norm": 0.55125,
+        "pile_10k/bits_per_byte": 1.1913829632858184,
+        "prost/acc": 0.23852476515798463,
+        "prost/acc_norm": 0.3041737830913749,
+        "qnli/acc": 0.5061321618158521,
+        "qqp/acc": 0.40791491466732627,
+        "race/acc": 0.31100478468899523,
+        "swag/acc": 0.41952414275717287,
+        "swag/acc_norm": 0.5606817954613615,
+        "toxigen/acc": 0.5606382978723404,
+        "toxigen/acc_norm": 0.4308510638297872
+      },
+      "paired_degradation_ci95_vs": "stage3-adamw_bf16_state_fp32-eval-downstream-broad-v1-1c",
+      "paired_degradation_ci95": {
+        "blimp/acc": [
+          0.005369186150444154,
+          0.010876784703604146
+        ],
+        "boolq/acc": [
+          -0.14428018837788165,
+          -0.06578667072428482
+        ],
+        "lambada_openai/acc": [
+          0.01295099459084491,
+          0.06622762059970166
+        ],
+        "leaderboard_mmlu_pro/acc": [
+          -0.044596330856222874,
+          0.05643665575112569
+        ],
+        "mnli/acc": [
+          -0.03625041895185858,
+          0.004280508662941976
+        ],
+        "mnli_mismatch/acc": [
+          -0.031060648134048217,
+          0.00934680281971794
+        ],
+        "moral_stories/acc": [
+          -0.014679358922956224,
+          0.0007673008581398965
+        ],
+        "moral_stories/acc_norm": [
+          -0.012981558910458518,
+          0.0037850130079870015
+        ],
+        "pile_10k/bits_per_byte": [
+          0.00004270685852228375,
+          0.009464000908675186
+        ],
+        "prost/acc": [
+          -0.040813453610955244,
+          0.004089604591836752
+        ],
+        "prost/acc_norm": [
+          0.011544679374307141,
+          0.03885210822895626
+        ],
+        "qnli/acc": [
+          -0.03583567684170932,
+          0.0032561505065122455
+        ],
+        "qqp/acc": [
+          -0.05352549477792389,
+          -0.03209400809095717
+        ],
+        "race/acc": [
+          -0.06269644205799887,
+          0.054062194724845226
+        ],
+        "swag/acc": [
+          0.009518872345641523,
+          0.023274939833035135
+        ],
+        "swag/acc_norm": [
+          0.011663854955519548,
+          0.024358012628944475
+        ],
+        "toxigen/acc": [
+          -0.19787455673758855,
+          -0.040072160288641225
+        ],
+        "toxigen/acc_norm": [
+          -0.004807692307692315,
+          0.009829220174047772
+        ]
+      },
+      "per_example_artifact_sha256": {
+        "blimp": "7f51b7e73357603c18f7d8030668764bf2290515248d4bed6bd8a7cdb7fef701",
+        "boolq": "1bd807a14eb132583195344e5507e8297a5e580ce68eabbfc60b077aac54d4a1",
+        "lambada_openai": "a39da8609cea86dcce161e0bdc98b6116938363cb8093117a63ef9a2e30726b3",
+        "leaderboard_mmlu_pro": "f4d29ef41bcd06827aa4f9343edc445b8e8cab33eaa3c6d84dcc69beb6014c6b",
+        "mnli": "5cd0cf56a4d70212a573cd4aec19001a4b17309fc1e59a36d34723abd0dcac5a",
+        "mnli_mismatch": "2a92aac39af34abd1bc14692c04d0dfc3ee673e845a6e1ee16c61fa51294444e",
+        "moral_stories": "69ef3cef571556f7bf045f86da71cd8b32596674f44d47a08d00dd145ed3924b",
+        "pile_10k": "7dbbb18590587851e7067d2b41f1d4599ec00d304f8f165a59abdc6c5465e7f0",
+        "prost": "c8b756d77ce1a01658cccd556dab3dc5af28fe4f7f121e040d8331b1d3e2549a",
+        "qnli": "91f843676d1e1c9b091fa0baa6d65c3f86a42d811228a25d9491eaaa0020116b",
+        "qqp": "a4b3cb9689392cf4ee62919951814bc69d8a302210a6745217ca8bbd7d37a002",
+        "race": "a305611b0f265cfffbb582eec12d18556ef945851e4cbbd57dd146e85cd90a87",
+        "swag": "4016bed0fe066d0b6dffeddcf703d3ae14281e06ecc34ec4aaed9a0bea9cb645",
+        "toxigen": "799667095901bebfc5725ddf5ed9cf375c3b30b57ba997db3e6e918b43594e1f"
+      }
+    },
+    "adamw_fp8gemm_state_fp32": {
+      "run_id": "stage3-adamw_fp8gemm_state_fp32-eval-downstream-broad-v1-1c",
+      "loss": {
+        "training": null,
+        "validation": 2.724433660507202
+      },
+      "metrics": {
+        "blimp/acc": 0.7781940298507463,
+        "boolq/acc": 0.4944954128440367,
+        "lambada_openai/acc": 0.30778187463613427,
+        "leaderboard_mmlu_pro/acc": 0.11153590425531915,
+        "mnli/acc": 0.34610290371879776,
+        "mnli_mismatch/acc": 0.3549633848657445,
+        "moral_stories/acc": 0.5430833333333334,
+        "moral_stories/acc_norm": 0.5564166666666667,
+        "pile_10k/bits_per_byte": 1.222444840644705,
+        "prost/acc": 0.2562980358667805,
+        "prost/acc_norm": 0.3046007685738685,
+        "qnli/acc": 0.5136371956800293,
+        "qqp/acc": 0.37650259708137523,
+        "race/acc": 0.29473684210526313,
+        "swag/acc": 0.4175747275817255,
+        "swag/acc_norm": 0.558332500249925,
+        "toxigen/acc": 0.4117021276595745,
+        "toxigen/acc_norm": 0.4319148936170213
+      },
+      "paired_degradation_ci95_vs": "stage3-adamw_bf16_state_fp32-eval-downstream-broad-v1-1c",
+      "paired_degradation_ci95": {
+        "blimp/acc": [
+          0.05162300244045695,
+          0.05776754260454651
+        ],
+        "boolq/acc": [
+          -0.022255913699285878,
+          0.04584492272492761
+        ],
+        "lambada_openai/acc": [
+          0.02013736564607225,
+          0.07198887938856156
+        ],
+        "leaderboard_mmlu_pro/acc": [
+          -0.041512963009296334,
+          0.04845318228818914
+        ],
+        "mnli/acc": [
+          -0.06186534483221845,
+          -0.008917960450433403
+        ],
+        "mnli_mismatch/acc": [
+          -0.051033688618093244,
+          0.00028911130155535354
+        ],
+        "moral_stories/acc": [
+          -0.01943656110998926,
+          -0.005057465663183428
+        ],
+        "moral_stories/acc_norm": [
+          -0.023342742837245065,
+          -0.0049832412976974095
+        ],
+        "pile_10k/bits_per_byte": [
+          0.028178913880425538,
+          0.03709873036650272
+        ],
+        "prost/acc": [
+          -0.11943712026142202,
+          -0.0702289952479334
+        ],
+        "prost/acc_norm": [
+          0.009735236842880848,
+          0.03712116400289965
+        ],
+        "qnli/acc": [
+          -0.057399171221376805,
+          -0.004753112404716892
+        ],
+        "qqp/acc": [
+          0.02991919947244557,
+          0.045745759135655775
+        ],
+        "race/acc": [
+          -0.003268509589628142,
+          0.10299204671297683
+        ],
+        "swag/acc": [
+          0.013869772963283301,
+          0.027834890495938062
+        ],
+        "swag/acc_norm": [
+          0.015617423764440001,
+          0.028634148780792096
+        ],
+        "toxigen/acc": [
+          0.11332277526395183,
+          0.24793473106625114
+        ],
+        "toxigen/acc_norm": [
+          0,
+          0
+        ]
+      },
+      "per_example_artifact_sha256": {
+        "blimp": "fe7bc212d2f23a65192862a15ab3868ddb04a58718818f108fb5af70e42a5726",
+        "boolq": "aebc47f6ada8866809a916b6c45fd5e7dcdbd1a01baf73531f7a4d6a765c467a",
+        "lambada_openai": "f4287f5de5ceea2df66a51cf71c2d47fa404fadefa922bf744726c37cc0f15ee",
+        "leaderboard_mmlu_pro": "79742f3a6a71daf817fcc24907330e5709fb19e21be1f50ad45239c27df8a718",
+        "mnli": "5bc4b8e92a1cfc0a75c0320ac28db0ffd72d0568e1fd3c56eacdd5a6abe49f37",
+        "mnli_mismatch": "13d1f0c1f49bea85787cc30f5f5c239335386da18dadf82a37095516214fe0f8",
+        "moral_stories": "0c7ae538ac439c20a06de152c47a121979f99597c714c13d0f0e052d257e9d70",
+        "pile_10k": "eb8b64e01c2bdadc8376877e3a471c7d2cf2576cb84f0fc37d9dbc1134fd6851",
+        "prost": "741a0ba35fe6fafee2da5ff958c4e7c00a0a5c3c45b7ab36c76e4b53bf4e493d",
+        "qnli": "1da45e6c808923d8fb5f287af6a3451917a2dd438e5e32e987a47572753ca0f2",
+        "qqp": "9be6e00bf02380fec1b310be8e57ac98308718511a0461c90a23785f3ec16856",
+        "race": "6bea9b5c8952f4593c29a0d4cd4efee90904c0381b6410b69eede5c2404f17d2",
+        "swag": "bcff3b5dd1f65878334c5771b94b1c967e78b201790befa61e3cff9ad172fad5",
+        "toxigen": "88e95ae8f7a01e438b2d696ce19ab919ea2595c05886a70f2bcdaad698d4bda9"
+      }
+    },
+    "muon_bf16_state_fp32": {
+      "run_id": "stage3-muon_bf16_state_fp32-eval-downstream-broad-v1-1c",
+      "loss": {
+        "training": null,
+        "validation": 2.6501781940460205
+      },
+      "metrics": {
+        "blimp/acc": 0.8157462686567164,
+        "boolq/acc": 0.5547400611620795,
+        "lambada_openai/acc": 0.33281583543566856,
+        "leaderboard_mmlu_pro/acc": 0.11527593085106383,
+        "mnli/acc": 0.346001018848701,
+        "mnli_mismatch/acc": 0.34764035801464604,
+        "moral_stories/acc": 0.537,
+        "moral_stories/acc_norm": 0.5475,
+        "pile_10k/bits_per_byte": 1.144856838672601,
+        "prost/acc": 0.24284799316823227,
+        "prost/acc_norm": 0.3296861656703672,
+        "qnli/acc": 0.49514918542925135,
+        "qqp/acc": 0.41590403165965867,
+        "race/acc": 0.3138755980861244,
+        "swag/acc": 0.42912126362091374,
+        "swag/acc_norm": 0.5751774467659702,
+        "toxigen/acc": 0.41595744680851066,
+        "toxigen/acc_norm": 0.4319148936170213
+      },
+      "paired_degradation_ci95_vs": null,
+      "paired_degradation_ci95": null,
+      "per_example_artifact_sha256": {
+        "blimp": "744fe482dc6d429ba6d51c002acbe0c9f95b09c480fda55888e5488e55c33373",
+        "boolq": "aea505f126b2de990665998f6b3d995ab8512068dfb1dbe7014e52ae72034c25",
+        "lambada_openai": "98af379d9e58e1374af8392582feb247a08ff2af923b8a2f7b18c1869aec14e9",
+        "leaderboard_mmlu_pro": "d603fb6743c0cd05e8b704a97443e6fa351be10ae0e094349526ea4d2d0c7736",
+        "mnli": "67222c7162bd675908ac310eb750b287354e20b895f642033f6095305076f074",
+        "mnli_mismatch": "635c86e69b2a24634afcbed9e6fdfd6d662235547ba22955b5ac1fe6b6af2989",
+        "moral_stories": "ee5acbfc73c1d1d2c0caced640d7fb597ef9cf70945cad6abcf96dd07b95f706",
+        "pile_10k": "fbbf58d4522522fafffb8e8807d15bdee1c920b41e00676aee2e8e56c89d0cc1",
+        "prost": "fbbf42581aa5de71cefc8c1ed48db7ad3d4b843e4aa4d52fe683f19e9ece9bbf",
+        "qnli": "935978d01cf2a3f2e4cf31852e31c4e1b5f6d4bf2877562ae8ace9d83e62539c",
+        "qqp": "9aca91ac0a63f04d49947dcf07e9ccae9f266637f02fd03d267644cf2a7e6fbc",
+        "race": "a16566542d05490dc54aaca9667be1e4045a40292a0026d655da48529bc66e0e",
+        "swag": "e014f7da3b589dcf788b408f78ff806184bef8857ac2d53cb0dcfcef19efc367",
+        "toxigen": "fe365875ea3c683cc8eb1e3b3547bfac063027113d2d399fc16640dc40806a14"
+      }
+    },
+    "muon_bf16_state_fp8": {
+      "run_id": "stage3-muon_bf16_state_fp8-eval-downstream-broad-v1-1c",
+      "loss": {
+        "training": null,
+        "validation": 2.648576021194458
+      },
+      "metrics": {
+        "blimp/acc": 0.8068507462686567,
+        "boolq/acc": 0.563914373088685,
+        "lambada_openai/acc": 0.3347564525519115,
+        "leaderboard_mmlu_pro/acc": 0.10995678191489362,
+        "mnli/acc": 0.36352521650534897,
+        "mnli_mismatch/acc": 0.3575061025223759,
+        "moral_stories/acc": 0.5388333333333334,
+        "moral_stories/acc_norm": 0.5520833333333334,
+        "pile_10k/bits_per_byte": 1.1596573031066821,
+        "prost/acc": 0.22854397950469685,
+        "prost/acc_norm": 0.30614859094790775,
+        "qnli/acc": 0.49368478857770454,
+        "qqp/acc": 0.4221122928518427,
+        "race/acc": 0.30813397129186604,
+        "swag/acc": 0.4266220133959812,
+        "swag/acc_norm": 0.5723283015095472,
+        "toxigen/acc": 0.4776595744680851,
+        "toxigen/acc_norm": 0.4319148936170213
+      },
+      "paired_degradation_ci95_vs": "stage3-muon_bf16_state_fp32-eval-downstream-broad-v1-1c",
+      "paired_degradation_ci95": {
+        "blimp/acc": [
+          0.008225710610414395,
+          0.013666615366847575
+        ],
+        "boolq/acc": [
+          -0.04927729610935342,
+          0.01300320316548118
+        ],
+        "lambada_openai/acc": [
+          -0.032467727702243675,
+          0.02056262400866662
+        ],
+        "leaderboard_mmlu_pro/acc": [
+          0,
+          0.08674856140540957
+        ],
+        "mnli/acc": [
+          -0.06782316396579341,
+          -0.03411322309879052
+        ],
+        "mnli_mismatch/acc": [
+          -0.04269015383601798,
+          -0.013543905746736709
+        ],
+        "moral_stories/acc": [
+          -0.01019541322181349,
+          0.0037101737569532364
+        ],
+        "moral_stories/acc_norm": [
+          -0.01741614754818768,
+          0.001046417028828008
+        ],
+        "pile_10k/bits_per_byte": [
+          0.004605070854582541,
+          0.028395408653291286
+        ],
+        "prost/acc": [
+          0.03945303743555257,
+          0.07874050005224224
+        ],
+        "prost/acc_norm": [
+          0.0602721265460724,
+          0.08266480673839255
+        ],
+        "qnli/acc": [
+          -0.023140634408364367,
+          0.02746491071515044
+        ],
+        "qqp/acc": [
+          -0.025691462185431533,
+          -0.003671235255024417
+        ],
+        "race/acc": [
+          -0.03703703703703696,
+          0.07100591715976341
+        ],
+        "swag/acc": [
+          -0.0005800733450221871,
+          0.01254418416285793
+        ],
+        "swag/acc_norm": [
+          -0.001399598494762621,
+          0.011342478222673922
+        ],
+        "toxigen/acc": [
+          -0.2548152111872146,
+          -0.04952713431720531
+        ],
+        "toxigen/acc_norm": [
+          0,
+          0
+        ]
+      },
+      "per_example_artifact_sha256": {
+        "blimp": "8190ac10de95d93bc10769b8d2e6d5c7f5a135cc3ed185971f6f22bc9fae5e1c",
+        "boolq": "3bbb853ec5326764400c86852fc71dcd29e4b80898e9bb8a45acb94b003d8380",
+        "lambada_openai": "c2253233c76aeab8901a2823ff246635cc3b06ac4c19ce4593a2369f74da257d",
+        "leaderboard_mmlu_pro": "48fad5c85040af505c6590c78db9ae69300f4ada82fe2eea7358f8b9235c942e",
+        "mnli": "2af117a7f3adc4e8a48f3bd18f616e7ce2bc02b6e07b37b409b269577cbcded2",
+        "mnli_mismatch": "7911c14ec485faa1eadec871630ecc71fc359f322920336ef8cde80b6275427d",
+        "moral_stories": "d02504b7eeb13f8c83417c1a64e932257cc4595f0210411509868fde0402cb2f",
+        "pile_10k": "6d0a55dd47428d53de31451dbf4633368a8fbe35d4f4491c24870c96239db5b9",
+        "prost": "efc387bf9b667425d171f0a9d64ffbb6fd46e09848682fd48b1d098c9861f8ce",
+        "qnli": "4c174df335fca6f24d282fdcf4a5bf75171824fb36522b5b5f587370ff9c9274",
+        "qqp": "0d9f02207bf045c2999db2a92b9de9aa893766d1f8da9f144bf5f29007b4f3f2",
+        "race": "0f5ab81d3c30f10d5fb4c89903d354c0884e95ce0c63502bb6454d894a0599d2",
+        "swag": "9f00681c4bee7baf5e85e834ce9f44b2d522db4e89f024de0e47bcc2f2eb1a36",
+        "toxigen": "ddfa1951732fce9454d7d80b6f51a8b05b2a17f3105fe47cc204f6baae134f9a"
+      }
+    },
+    "muon_fp8gemm_state_fp32": {
+      "run_id": "stage3-muon_fp8gemm_state_fp32-eval-downstream-broad-v1-1c",
+      "loss": {
+        "training": null,
+        "validation": 2.682025671005249
+      },
+      "metrics": {
+        "blimp/acc": 0.8181343283582089,
+        "boolq/acc": 0.5180428134556575,
+        "lambada_openai/acc": 0.3312633417426742,
+        "leaderboard_mmlu_pro/acc": 0.11793550531914894,
+        "mnli/acc": 0.3495669893020886,
+        "mnli_mismatch/acc": 0.35160699755899105,
+        "moral_stories/acc": 0.5319166666666667,
+        "moral_stories/acc_norm": 0.54175,
+        "pile_10k/bits_per_byte": 1.166779887999447,
+        "prost/acc": 0.28100982066609737,
+        "prost/acc_norm": 0.32365499573014517,
+        "qnli/acc": 0.5160168405637928,
+        "qqp/acc": 0.4296809300024734,
+        "race/acc": 0.31100478468899523,
+        "swag/acc": 0.42242327301809457,
+        "swag/acc_norm": 0.5576826951914425,
+        "toxigen/acc": 0.39574468085106385,
+        "toxigen/acc_norm": 0.4319148936170213
+      },
+      "paired_degradation_ci95_vs": "stage3-muon_bf16_state_fp32-eval-downstream-broad-v1-1c",
+      "paired_degradation_ci95": {
+        "blimp/acc": [
+          -0.0057440876182606555,
+          -0.0002009923692265312
+        ],
+        "boolq/acc": [
+          0.031580225793283415,
+          0.0968872264474529
+        ],
+        "lambada_openai/acc": [
+          -0.022182954570922654,
+          0.02958115641967122
+        ],
+        "leaderboard_mmlu_pro/acc": [
+          -0.07777772137315452,
+          0.026638688584259874
+        ],
+        "mnli/acc": [
+          -0.04007648522673779,
+          0.01624224246882842
+        ],
+        "mnli_mismatch/acc": [
+          -0.03586620567948383,
+          0.014901417977472763
+        ],
+        "moral_stories/acc": [
+          0.0012280331923731976,
+          0.017332542583319416
+        ],
+        "moral_stories/acc_norm": [
+          0.000766166445679546,
+          0.020723077114237386
+        ],
+        "pile_10k/bits_per_byte": [
+          0.01608997038263427,
+          0.02367648713224765
+        ],
+        "prost/acc": [
+          -0.18340786060562927,
+          -0.1323757987277877
+        ],
+        "prost/acc_norm": [
+          0.004169172149668811,
+          0.03236871276652161
+        ],
+        "qnli/acc": [
+          -0.06921120257141422,
+          -0.018443118779360494
+        ],
+        "qqp/acc": [
+          -0.04450260360777586,
+          -0.021052507790909645
+        ],
+        "race/acc": [
+          -0.04943583543979193,
+          0.0653448916737468
+        ],
+        "swag/acc": [
+          0.008928665272238609,
+          0.022753661546765017
+        ],
+        "swag/acc_norm": [
+          0.02365038592265235,
+          0.037539051087685425
+        ],
+        "toxigen/acc": [
+          -0.0025513466256068284,
+          0.09762531328320798
+        ],
+        "toxigen/acc_norm": [
+          0,
+          0
+        ]
+      },
+      "per_example_artifact_sha256": {
+        "blimp": "b7943f7783e07cec08311048fa1b80692c9fa49e09b8e876d587e87056ab6d2d",
+        "boolq": "52df38b5fa7f97f793fc0b2e2dda40940ab9406e7ac80830d60862c7dbc44ee0",
+        "lambada_openai": "2adfe51b3000c0786d6f1398412747e387806587d2d4b6916dfc967fae6e3874",
+        "leaderboard_mmlu_pro": "159f5eeb49cb213bea79156a73baf221a9116b7fba1fbb64f709deeef2119d36",
+        "mnli": "454dce2639f8127c5915d0899da2bb10b9419b9200f2a27e47b96b0e7f1c51e8",
+        "mnli_mismatch": "886622ca36256c9d1e2f47efca528b7912424fb127d3b2c594d113fd5f4d165b",
+        "moral_stories": "ed0d20ee4624c0d62ab71c9117c216aba8b11f78d69b6dd998802a027e0729b1",
+        "pile_10k": "0bd5119c622edaf37877b25e25b814256fcdf28e3339791ba71fe53bbe39f65c",
+        "prost": "5520376099a10aba73eeceeb6ee0886d77f436273f8e5d060daff496ec4e9775",
+        "qnli": "5d70fec40b0968370c25de0cb8ec904df9e0b359811d4b335ba7702b6164ba85",
+        "qqp": "d0940841f4ec577ae20249fea65d65f3adeca16b654cdecadfb63f2f72bde46f",
+        "race": "e38c9a02325be42489bc87f1dcbdb81e9d4181ea9837b4faff1cd8aba7f5dd00",
+        "swag": "a9a1c586abbcc4fc1ab17e626bc3c4ee8f4e5164e64ff9c7bfc11864b1762d0e",
+        "toxigen": "f95560bc21a190ba0d4dc0950ca0ba319edf0f372eb660b9138b5142015b9a0c"
+      }
+    }
+  }
+}
