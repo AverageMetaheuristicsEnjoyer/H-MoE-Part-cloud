@@ -182,12 +182,7 @@ task:
   - leaderboard_bbh_tracking_shuffled_objects_seven_objects
   - leaderboard_bbh_tracking_shuffled_objects_three_objects
   - leaderboard_bbh_web_of_lies
-  - task: wikitext
-    num_fewshot: 0
-    metric_list:
-      - metric: bits_per_byte
-        aggregation: bits_per_byte
-        higher_is_better: false
+  - wikitext
   - mediqa_qa2019_perplexity
 metadata:
   version: 1.0
