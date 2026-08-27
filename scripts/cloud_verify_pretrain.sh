@@ -77,7 +77,7 @@ for line in open(sys.argv[1]):
         continue
     d = json.loads(line)
     m, n = d["measurement"], d["denominators"]
-    t = m["timing"]
+    t, r = m["timing"], m["routing"]
     step, full = t["optimizer_step_seconds"], t["full_step_seconds"]
     share = f"{step / full:.3f}" if step and full else "na"
     tok_s = "na" if t["tokens_per_second"] is None else f'{t["tokens_per_second"]:.0f}'
@@ -87,7 +87,11 @@ for line in open(sys.argv[1]):
           f" max_resvd={m['memory']['max_reserved_bytes']}"
           f" persistent={d['optimizer_state']['persistent_total_bytes']}"
           f" tok_s={tok_s}"
-          f" opt_s={step} full_s={full} opt_share={share}")
+          f" opt_s={step} full_s={full} opt_share={share}"
+          f" route_min_mean={r['minimum_to_mean']}"
+          f" route_max_mean={r['maximum_to_mean']}"
+          f" route_cv={r['coefficient_of_variation']}"
+          f" dropped={r['dropped_tokens']}")
 PYX
   fi
 done
