@@ -15,6 +15,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
+from lm_eval import utils
 from lm_eval.tasks import TaskManager
 
 
@@ -53,7 +54,7 @@ for name in manager.all_subtasks:
     if entry["type"] == "python_task":
         counts["python_task"] += 1
         continue
-    config = manager._get_config(name)
+    config = utils.load_yaml_config(entry["yaml_path"], mode="simple")
     output_type = config.get("output_type", "unknown")
     counts[output_type] += 1
     if output_type not in {"multiple_choice", "loglikelihood_rolling"}:
