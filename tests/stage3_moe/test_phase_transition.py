@@ -55,6 +55,8 @@ def test_fixed_lm_eval_never_trains_and_resets_eval_samplers():
     assert "--no-load-optim --no-load-rng --skip-train" in block
     assert 'STAGE3_MOE_MICRO_BATCH=16' in cloud
     assert 'STAGE3_MOE_MATCHED_EVAL_REPEATS:-2' in cloud
+    assert 'STAGE3_MOE_MATCHED_SKIP_REFERENCES:-0' in cloud
+    assert 'eval_one extension_decay adamw_fp8gemm_state_fp32 "$control" 17242' in cloud
 
 
 def test_extension_decay_control_starts_decay_at_phase_boundary():

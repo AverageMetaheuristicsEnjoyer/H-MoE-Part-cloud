@@ -11,6 +11,8 @@ stage_dir=/tmp/stage3-matched-lm-eval
 bf16=${STAGE3_MOE_MATCHED_BF16:-/workspace-SR006.nfs2/hmoe-checkpoints/stage3-1c-mb4/1c/adamw_bf16_state_fp32}
 original=${STAGE3_MOE_MATCHED_ORIGINAL:-/workspace-SR006.nfs3/hmoe-checkpoints/stage3/trunk/adamw_fp8gemm_state_fp32}
 time_match=${STAGE3_MOE_MATCHED_TIME_MATCH:-/home/jovyan/hmoe-checkpoints/stage3-time-match/time-match/adamw_fp8gemm_state_fp32}
+control=${STAGE3_MOE_MATCHED_CONTROL:-}
+skip_references=${STAGE3_MOE_MATCHED_SKIP_REFERENCES:-0}
 
 nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
 echo "MATCHED_LM_EVAL tag=$tag repeats=$repeats micro_batch=16 eval_iters=32"
@@ -57,8 +59,13 @@ eval_one() {
   done
 }
 
-eval_one bf16 adamw_bf16_state_fp32 "$bf16" 17242 || exit $?
-eval_one original adamw_fp8gemm_state_fp32 "$original" 17242 || exit $?
-eval_one time_match adamw_fp8gemm_state_fp32 "$time_match" 19570 || exit $?
+if [[ $skip_references != 1 ]]; then
+  eval_one bf16 adamw_bf16_state_fp32 "$bf16" 17242 || exit $?
+  eval_one original adamw_fp8gemm_state_fp32 "$original" 17242 || exit $?
+  eval_one time_match adamw_fp8gemm_state_fp32 "$time_match" 19570 || exit $?
+fi
+if [[ -n $control ]]; then
+  eval_one extension_decay adamw_fp8gemm_state_fp32 "$control" 17242 || exit $?
+fi
 
 echo "EXIT=0"
