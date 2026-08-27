@@ -188,11 +188,6 @@ task:
       - metric: bits_per_byte
         aggregation: bits_per_byte
         higher_is_better: false
-  - task: mediqa_qa2019_perplexity
-    num_fewshot: 0
-    metric_list:
-      - metric: bits_per_byte
-        aggregation: bits_per_byte
-        higher_is_better: false
+  - mediqa_qa2019_perplexity
 metadata:
   version: 1.0
