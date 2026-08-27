@@ -64,6 +64,7 @@ def test_extension_decay_control_starts_decay_at_phase_boundary():
     block = launcher.split("  extension-decay-control)", 1)[1].split("  eval-lm-fixed)", 1)[0]
     assert "target_iters=$full_iters" in block
     assert "decay_iters=$full_decay_iters" in block
+    assert '--save-interval "$full_iters" --no-save-optim --no-save-rng' in block
     assert 'phase_args=(--phase-transition-iterations "$time_match_branch")' in block
     assert 'source_dir/iter_0013794' in cloud
     assert 'STAGE3_MOE_TRAIN_DATA_PREFIX="$extension_root/data/train"' in cloud

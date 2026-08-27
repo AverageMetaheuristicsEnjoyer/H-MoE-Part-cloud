@@ -200,7 +200,7 @@ case "$mode" in
     phase_args=(--phase-transition-iterations "$time_match_branch")
     control_dir="$ckpt_root/extension-decay-control/$arm"
     mkdir -p "$control_dir"
-    save_args=(--save "$control_dir" --save-interval 363 --save-retain-interval 13794)
+    save_args=(--save "$control_dir" --save-interval "$full_iters" --no-save-optim --no-save-rng)
     control_load=${STAGE3_MOE_EXTENSION_DECAY_LOAD:?set STAGE3_MOE_EXTENSION_DECAY_LOAD to the checkpoint directory}
     load_args=(--load "$control_load" --override-opt_param-scheduler)
     ;;
