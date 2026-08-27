@@ -208,6 +208,25 @@ case "$mode" in
     control_load=${STAGE3_MOE_EXTENSION_DECAY_LOAD:?set STAGE3_MOE_EXTENSION_DECAY_LOAD to the checkpoint directory}
     load_args=(--load "$control_load" --override-opt_param-scheduler)
     ;;
+  time-match-stretched-decay)
+    [[ $arm == adamw_fp8gemm_state_fp32 ]] || {
+      echo "time-match-stretched-decay is only defined for AdamW FP8-GEMM" >&2
+      exit 2
+    }
+    [[ -n ${STAGE3_MOE_TRAIN_DATA_PREFIX:-} ]] || {
+      echo "time-match-stretched-decay requires STAGE3_MOE_TRAIN_DATA_PREFIX" >&2
+      exit 2
+    }
+    train_iters=19570
+    target_iters=$train_iters
+    decay_iters=$((train_iters - time_match_branch))
+    phase_args=(--phase-transition-iterations "$time_match_branch")
+    stretched_dir="$ckpt_root/time-match-stretched/$arm"
+    mkdir -p "$stretched_dir"
+    save_args=(--save "$stretched_dir" --save-interval "$train_iters" --no-save-optim --no-save-rng)
+    stretched_load=${STAGE3_MOE_STRETCHED_LOAD:?set STAGE3_MOE_STRETCHED_LOAD to the checkpoint directory}
+    load_args=(--load "$stretched_load" --override-opt_param-scheduler)
+    ;;
   eval-lm-fixed)
     # Model-only evaluation on the first validation and test windows. --skip-train
     # makes both samplers start at zero instead of restoring consumed_valid_samples.

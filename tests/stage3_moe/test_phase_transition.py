@@ -72,3 +72,17 @@ def test_extension_decay_control_starts_decay_at_phase_boundary():
     assert 'source_dir/iter_0013794' in cloud
     assert 'STAGE3_MOE_TRAIN_DATA_PREFIX="$extension_root/data/train"' in cloud
     assert "phase_boundary=11466 sampler_offset_steps=2328 decay_steps=3448" in cloud
+
+
+def test_time_match_stretched_decay_uses_the_whole_extension_phase():
+    launcher = (ROOT / "scripts/run_stage3_moe_pretrain.sh").read_text()
+    cloud = (ROOT / "scripts/cloud_moe_time_match_stretched_decay.sh").read_text()
+
+    block = launcher.split("  time-match-stretched-decay)", 1)[1].split("  eval-lm-fixed)", 1)[0]
+    assert "train_iters=19570" in block
+    assert 'decay_iters=$((train_iters - time_match_branch))' in block
+    assert 'phase_args=(--phase-transition-iterations "$time_match_branch")' in block
+    assert '--save-interval "$train_iters" --no-save-optim --no-save-rng' in block
+    assert 'source_dir/iter_0013794' in cloud
+    assert 'STAGE3_MOE_TRAIN_DATA_PREFIX="$extension_root/data/train"' in cloud
+    assert "phase_boundary=13794 sampler_offset_steps=0 decay_steps=5776" in cloud
