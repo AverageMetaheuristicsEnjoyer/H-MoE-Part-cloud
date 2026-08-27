@@ -27,6 +27,7 @@ for d in "$lg"/*/; do
   [ -d "$d" ] || continue
   case "$d" in *"$want"*) ;; *) continue ;; esac
   echo "--- $d"
+  du -sh "$d" 2>/dev/null | sed 's/^/  SIZE /'
   ls -la "$d" | head -8
   # Whether a resume actually loaded is decided at startup, so it never shows up
   # in the tail the launcher prints.

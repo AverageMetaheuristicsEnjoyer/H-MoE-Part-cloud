@@ -319,7 +319,10 @@ def main(argv=None):
         for _, treatment_path, baseline, treatment in replicates:
             block = dict(summary, baseline_run_id=baseline["run_id"])
             treatment["measurement"]["inference"] = block
-            Path(treatment_path).write_text(json.dumps(treatment, sort_keys=True) + "\n")
+            target = Path(treatment_path)
+            temporary = target.with_suffix(target.suffix + ".tmp")
+            temporary.write_text(json.dumps(treatment, sort_keys=True) + "\n")
+            temporary.replace(target)
         print(f"  wrote inference into {len(replicates)} treatment records")
     return 0
 
