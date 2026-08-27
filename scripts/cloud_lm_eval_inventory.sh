@@ -13,13 +13,41 @@ cd "$root"
 PYTHONPATH="$root" python - <<'PY'
 import json
 from collections import Counter
+from pathlib import Path
 
 from lm_eval.tasks import TaskManager
 
 
 manager = TaskManager(include_path="stage4/eval_tasks")
 counts = Counter()
+families = Counter()
 compatible = []
+candidate_families = {
+    "anli",
+    "bbq",
+    "c4",
+    "commonsense_qa",
+    "crows_pairs",
+    "glue",
+    "hendrycks_ethics",
+    "logiqa",
+    "logiqa2",
+    "mathqa",
+    "mc_taco",
+    "openbookqa",
+    "paloma",
+    "pile",
+    "pubmedqa",
+    "sciq",
+    "siqa",
+    "storycloze",
+    "super_glue",
+    "truthfulqa",
+    "wikitext",
+    "winogender",
+    "winogrande",
+    "wsc273",
+}
 for name in manager.all_subtasks:
     entry = manager.task_index[name]
     if entry["type"] == "python_task":
@@ -30,9 +58,16 @@ for name in manager.all_subtasks:
     counts[output_type] += 1
     if output_type not in {"multiple_choice", "loglikelihood_rolling"}:
         continue
+    path = Path(entry["yaml_path"])
+    parts = path.parts
+    family = parts[parts.index("tasks") + 1] if "tasks" in parts else "project"
+    families[family] += 1
+    if family not in candidate_families:
+        continue
     compatible.append(
         {
             "task": name,
+            "family": family,
             "output_type": output_type,
             "dataset_path": config.get("dataset_path"),
             "dataset_name": config.get("dataset_name"),
@@ -51,7 +86,9 @@ print(
             "tags": len(manager.all_tags),
             "subtasks": len(manager.all_subtasks),
             "output_types": dict(sorted(counts.items())),
-            "compatible": len(compatible),
+            "compatible": sum(families.values()),
+            "families": dict(sorted(families.items())),
+            "listed_candidates": len(compatible),
         },
         sort_keys=True,
     )
