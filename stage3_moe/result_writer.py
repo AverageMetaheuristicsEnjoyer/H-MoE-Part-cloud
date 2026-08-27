@@ -19,6 +19,7 @@ from stage3_moe import (
     ACTIVE_PARAMETERS,
     ADAMW_FALLBACK_PARAMETERS,
     MUON_MATRIX_PARAMETERS,
+    SHAPE,
     TOTAL_PARAMETERS,
 )
 
@@ -274,10 +275,14 @@ def parameter_group_ledger(optimizer, arm, parameter_names):
     if not adam_only and fc1_names != split_fc1_names:
         missing = sorted(fc1_names - split_fc1_names)
         raise AssertionError(f"Muon SwiGLU FC1 split flag missing for {missing[:3]}")
-    if not adam_only and global_fc1 != 1 + 17 * 65:
-        raise AssertionError(f"expected 1106 Muon SwiGLU FC1 weights, found {global_fc1}")
-    if not adam_only and len(router_names) != 17:
-        raise AssertionError(f"expected 17 MoE router weights, found {len(router_names)}")
+    if not adam_only and global_fc1 != SHAPE.swiglu_fc1_weights:
+        raise AssertionError(
+            f"expected {SHAPE.swiglu_fc1_weights} Muon SwiGLU FC1 weights, found {global_fc1}"
+        )
+    if not adam_only and len(router_names) != SHAPE.moe_layers:
+        raise AssertionError(
+            f"expected {SHAPE.moe_layers} MoE router weights, found {len(router_names)}"
+        )
     if not adam_only and router_names != fallback_router_names:
         raise AssertionError("not every router weight is in the AdamW fallback group")
     if sum(global_counts.values()) != TOTAL_PARAMETERS:
@@ -292,7 +297,10 @@ def parameter_group_ledger(optimizer, arm, parameter_names):
     active.update(
         {"adamw_all": ACTIVE_PARAMETERS}
         if adam_only
-        else {"muon_matrix": 176_160_768, "adamw_fallback": 104_082_944}
+        else {
+            "muon_matrix": SHAPE.muon_matrix_active,
+            "adamw_fallback": ADAMW_FALLBACK_PARAMETERS,
+        }
     )
     return [
         {
