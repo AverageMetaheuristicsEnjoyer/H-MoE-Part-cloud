@@ -5,6 +5,7 @@ set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
 export HF_HOME=${STAGE3_MOE_HF_HOME:-/home/jovyan/hmoe-hf-cache-broad-v1}
 export HF_DATASETS_TRUST_REMOTE_CODE=1
+export HF_DATASETS_DISABLE_PROGRESS_BARS=1
 
 if ! python -c 'import lm_eval; assert lm_eval.__version__ == "0.4.11"' >/dev/null 2>&1; then
   printf 'torch==2.8.0\n' > /tmp/eval-constraints.txt
@@ -39,19 +40,22 @@ candidates = [
 ]
 manager = TaskManager(include_path="stage4/eval_tasks")
 passed = 0
+lines = []
 for candidate in candidates:
     try:
         tasks = list(leaves(get_task_dict([candidate], manager)))
         docs = sum(len(task.eval_docs) for task in tasks)
         metrics = sorted({metric for task in tasks for metric in task.higher_is_better()})
         output_types = sorted({task.get_config("output_type") for task in tasks})
-        print(
+        lines.append(
             f"PASS candidate={candidate} leaves={len(tasks)} docs={docs} "
             f"output={','.join(output_types)} metrics={','.join(metrics)}"
         )
         passed += 1
     except Exception as error:
-        print(f"FAIL candidate={candidate} error={type(error).__name__}:{error}")
+        lines.append(f"FAIL candidate={candidate} error={type(error).__name__}:{error}")
+for line in lines:
+    print(line)
 print(f"PREFLIGHT candidates={len(candidates)} passed={passed} failed={len(candidates) - passed}")
 PY
 code=$?

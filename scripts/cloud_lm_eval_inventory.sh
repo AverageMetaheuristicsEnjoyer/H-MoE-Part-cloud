@@ -57,7 +57,7 @@ for name in manager.all_subtasks:
     config = utils.load_yaml_config(entry["yaml_path"], mode="simple")
     output_type = config.get("output_type", "unknown")
     counts[output_type] += 1
-    if output_type not in {"multiple_choice", "loglikelihood_rolling"}:
+    if output_type not in {"loglikelihood", "multiple_choice", "loglikelihood_rolling"}:
         continue
     path = Path(entry["yaml_path"])
     parts = path.parts
