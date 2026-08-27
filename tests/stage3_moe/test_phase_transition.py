@@ -65,6 +65,8 @@ def test_extension_decay_control_starts_decay_at_phase_boundary():
     assert "target_iters=$full_iters" in block
     assert "decay_iters=$full_decay_iters" in block
     assert '--save-interval "$full_iters" --no-save-optim --no-save-rng' in block
-    assert 'phase_args=(--phase-transition-iterations "$time_match_branch")' in block
+    assert 'control_phase_start=$((time_match_branch - time_match_plateau_iters))' in block
+    assert 'phase_args=(--phase-transition-iterations "$control_phase_start")' in block
     assert 'source_dir/iter_0013794' in cloud
     assert 'STAGE3_MOE_TRAIN_DATA_PREFIX="$extension_root/data/train"' in cloud
+    assert "phase_boundary=11466 sampler_offset_steps=2328 decay_steps=3448" in cloud

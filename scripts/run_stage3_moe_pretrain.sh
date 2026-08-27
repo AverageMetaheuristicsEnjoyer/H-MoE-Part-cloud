@@ -24,6 +24,7 @@ source "$root/configs/stage3-moe-1p029b.sh"
 full_iters=17242          # 7,344,816,128 tokens = 1C for this MoE
 full_decay_iters=3448     # final 20%, starts at step 13,795
 time_match_branch=13794
+time_match_plateau_iters=2328
 warmup_iters=173          # first 1%
 short_iters=2818          # 1,200,422,912 tokens
 short_decay_iters=564     # final 20% of the short budget
@@ -197,7 +198,10 @@ case "$mode" in
     train_iters=$full_iters
     target_iters=$full_iters
     decay_iters=$full_decay_iters
-    phase_args=(--phase-transition-iterations "$time_match_branch")
+    # Construct the same 5,776-step extension dataset as time-match and start at
+    # local offset 2,328, so both decay tails consume exactly the same data batches.
+    control_phase_start=$((time_match_branch - time_match_plateau_iters))
+    phase_args=(--phase-transition-iterations "$control_phase_start")
     control_dir="$ckpt_root/extension-decay-control/$arm"
     mkdir -p "$control_dir"
     save_args=(--save "$control_dir" --save-interval "$full_iters" --no-save-optim --no-save-rng)

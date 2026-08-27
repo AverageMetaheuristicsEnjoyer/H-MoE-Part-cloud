@@ -23,6 +23,7 @@ done
 }
 
 echo "CONTROL source=$source_dir destination=$dst data=$extension_root/data/train"
+echo "CONTROL_MATCH phase_boundary=11466 sampler_offset_steps=2328 decay_steps=3448"
 df -h "$source_dir" "$dst_root" "$extension_root" 2>/dev/null | grep -v '^Filesystem'
 if [[ -f $dst_tracker ]]; then
   iteration=$(cat "$dst_tracker")
