@@ -44,3 +44,14 @@ def test_time_match_schedule_and_data_capacity_are_pinned():
     assert 'phase_args=(--phase-transition-iterations "$time_match_branch")' in launcher
     assert '"extension_target_indexed_tokens": 3584229377' in plan
     assert '"shard_start_inclusive": 8' in plan
+
+
+def test_fixed_lm_eval_never_trains_and_resets_eval_samplers():
+    launcher = (ROOT / "scripts/run_stage3_moe_pretrain.sh").read_text()
+    cloud = (ROOT / "scripts/cloud_moe_matched_lm_eval.sh").read_text()
+
+    block = launcher.split("  eval-lm-fixed)", 1)[1].split("  eval-downstream)", 1)[0]
+    assert "train_iters=1" in block
+    assert "--no-load-optim --no-load-rng --skip-train" in block
+    assert 'STAGE3_MOE_MICRO_BATCH=16' in cloud
+    assert 'STAGE3_MOE_MATCHED_EVAL_REPEATS:-2' in cloud

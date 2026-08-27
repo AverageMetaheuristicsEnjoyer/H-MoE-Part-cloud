@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 3 MoE matched pretraining, WSD trunk-and-branch.
 #
-#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench|time-match|time-match-smoke|eval-downstream
+#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench|time-match|time-match-smoke|eval-lm-fixed|eval-downstream
 #
 # smoke exercises save and resume; bench measures throughput and peak memory with no
 # checkpoint traffic; resume-bench does the same from the trunk branch point, so the
@@ -184,6 +184,20 @@ case "$mode" in
       probe_warmup=0
       probe_measure=1
     fi
+    ;;
+  eval-lm-fixed)
+    # Model-only evaluation on the first validation and test windows. --skip-train
+    # makes both samplers start at zero instead of restoring consumed_valid_samples.
+    # train_iters only sizes an unused train dataset in this mode.
+    train_iters=1
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    eval_load=${STAGE3_MOE_EVAL_LOAD:?set STAGE3_MOE_EVAL_LOAD to the checkpoint directory}
+    save_args=()
+    load_args=(--load "$eval_load" --no-load-optim --no-load-rng --skip-train
+               --override-opt_param-scheduler)
+    probe_warmup=0
+    probe_measure=1
     ;;
   eval-downstream)
     # Score a finished checkpoint. --skip-train makes MCore build the model, load the
