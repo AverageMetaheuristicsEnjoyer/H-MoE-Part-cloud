@@ -62,6 +62,19 @@ MODEL_SHAPES = {
             muon_matrix=924_844_032,
             adamw_fallback=104_082_944,
         ),
+        # docs/membench.md -- Ling 2.0's own 256-expert sparsity at this budget, and
+        # otherwise the 1.029B arm exactly: 3.5x the optimizer state, +1.2% compute.
+        ModelShape(
+            name="3p599b",
+            layers=18,
+            dense_layers=1,
+            routed_experts=256,
+            shared_experts=1,
+            total=3_599_183_360,
+            active=283_586_048,
+            muon_matrix=3_491_758_080,
+            adamw_fallback=107_425_280,
+        ),
         # docs/membench.md -- the same expert width and top-k at 128 routed experts and
         # 20 layers: twice the optimizer state at almost unchanged active compute.
         ModelShape(

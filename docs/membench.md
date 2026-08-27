@@ -14,7 +14,7 @@ other and be read the same way.
 | | |
 |---|---|
 | Axes | model shape x arm x micro-batch |
-| Model shapes | `1p029b`, `2p094b` (below) |
+| Model shapes | `1p029b`, `2p094b`, `3p599b` (below) |
 | Arms | the six of `stage3_moe.ARMS`: {AdamW, Muon} x {bf16 baseline, FP8 GEMM, FP8 state} |
 | Micro-batch | 1, 2, 4, 8, 16 |
 | Tokens per optimizer step | **fixed at 16 sequences x 2,048 = 32,768**, accumulation traded against the micro-batch |
@@ -45,25 +45,30 @@ are measured cold, because only one of them has a checkpoint to resume from.
 The corpus is real (`--train-data-path`). It is not optional: on mock data the AdamW
 router collapses and the step time drifts through the measured window.
 
-## The two model shapes
+## The three model shapes
 
 `1p029b` is the shape all six 1C arms were trained at: 18 layers, hidden 1,024, 64
 routed experts of width 256 plus one shared, top-8. `docs/design.md` derives it.
 
-`2p094b` changes exactly two things: 64 -> 128 routed experts, 18 -> 20 layers.
-Everything else is held: hidden 1,024, expert width 256, top-8, one shared expert,
-head dim 128, GQA 8/2, dense SwiGLU 2,816, GPT-2 50,257, sequence 2,048.
+The other two widen the expert bank and nothing else that matters. Held across all
+three: hidden 1,024, expert width 256, top-8, one shared expert, head dim 128, GQA
+8/2, dense SwiGLU 2,816, GPT-2 50,257, sequence 2,048. `3p599b` also holds the depth
+at 18, so it and `1p029b` differ in exactly one thing; `2p094b` moves depth as well.
 
-| | `1p029b` | `2p094b` |
-|---|---:|---:|
-| Layers (dense + MoE) | 1 + 17 | 1 + 19 |
-| Routed experts | 64 | 128 |
-| Total parameters | 1,028,926,976 | 2,094,088,192 |
-| Active parameters/token | 280,243,712 | 301,023,232 |
-| Total / active | 3.67x | 6.96x |
-| Expert-bank activation `(8+1)/(E+1)` | 13.85% | 6.98% |
-| Granularity `G = 2*d_model/d_expert` | 8 | 8 |
-| Muon matrix / AdamW fallback | 924,844,032 / 104,082,944 | 1,988,624,384 / 105,463,808 |
+| | `1p029b` | `2p094b` | `3p599b` |
+|---|---:|---:|---:|
+| Layers (dense + MoE) | 1 + 17 | 1 + 19 | 1 + 17 |
+| Routed experts | 64 | 128 | 256 |
+| Total parameters | 1,028,926,976 | 2,094,088,192 | 3,599,183,360 |
+| Active parameters/token | 280,243,712 | 301,023,232 | 283,586,048 |
+| Total / active | 3.67x | 6.96x | 12.69x |
+| Expert-bank activation `(8+1)/(E+1)` | 13.85% | 6.98% | **3.50%** |
+| Granularity `G = 2*d_model/d_expert` | 8 | 8 | 8 |
+| Muon matrix / AdamW fallback | 924,844,032 / 104,082,944 | 1,988,624,384 / 105,463,808 | 3,491,758,080 / 107,425,280 |
+
+3.50% is Ling 2.0's own activation ratio, and 12.69x total/active is within reach of
+Ling-mini-2.0's 11.4x. Across the three the optimizer state triples while the compute
+moves 1.2%, which is the separation the whole sweep is built on.
 
 ### Why that shape
 
@@ -87,15 +92,17 @@ experts at fixed `G = 8` is exactly the axis that study says matters, and it lan
 expert-bank activation ratio at 6.98%, inside the 4.7-10.9% band the Ling fits were
 validated over -- where `1p029b`'s 13.85% sits outside it.
 
-Two shapes were rejected:
+`3p599b` was very nearly rejected on an estimate that turned out to be wrong. Before
+anything was measured, its FP32 AdamW footprint was put at roughly 72 GB before a
+single activation -- at or past the 80 GB wall at the bottom of the batch ramp, which
+would have left the baseline column all OOM. The first measured points give the real
+slope: **18.25 GB per billion parameters plus a 2.33 GB intercept** at micro-batch 1
+(21.112 GB at 1.029B, 40.556 GB at 2.094B), so 3.599B lands near 68 GB and fits. The
+wall is expected somewhere around micro-batch 16 instead, and where exactly is a
+result rather than a guess.
 
-- **256 routed experts at hidden 1,024** (3.60B total, 3.50% activation) reproduces
-  Ling's own sparsity exactly, and is the shape to prefer if the card were larger.
-  With the non-distributed optimizer its FP32 AdamW state alone is 28.8 GB and the
-  parameter-proportional footprint is around 72 GB before a single activation, so the
-  bf16/FP32-state baseline -- the arm every ratio is taken against -- would be at or
-  past the 80 GB wall at the bottom of the batch ramp. A table whose baseline column
-  is all OOM measures nothing.
+One shape was rejected:
+
 - **Widening to hidden 1,536** keeps `G = 8` at expert width 384 but multiplies the
   expert bank so fast that a 64-expert model is already 2.96B total with 0.68B active;
   the active compute grows with it and the shape confounds the two axes it was chosen
