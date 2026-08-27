@@ -63,16 +63,30 @@ LOG="$LOGS/$(date -u +%F_%H%M%S)-$$.log"
     echo "nvidia-smi unavailable"
   df -h "$ROOT" | tail -1
 
-  # The launcher reads the corpus from here; a MoE step timed on mock data measures a
-  # collapsed router instead of the model, so the real corpus is not optional.
-  data_root=${STAGE3_MOE_DATA_ROOT:-/home/jovyan/data/fineweb-edu-gpt2-megatron/data}
-  if [ ! -f "$data_root/train.bin" ]; then
-    echo "FATAL: no training corpus at $data_root"
-    exit 3
-  fi
-  echo "data: $data_root ($(stat -c %s "$data_root/train.bin") bytes)"
+  # Train comes from the extension corpus on nfs2 -- FineWeb-Edu 100BT shards 8-11,
+  # the same one the causal control reads -- and not from the 15 GB copy of shards 0-7
+  # on /home/jovyan. The measurement does not depend on which of the two it is: a
+  # membench point runs 17 steps on a freshly initialized router. What it buys is that
+  # the sweep survives a cleanup of the volume that has no free space, including the
+  # resubmission that finishes it. Validation and test stay where they are; together
+  # they are 216 MB.
+  train_prefix=${STAGE3_MOE_TRAIN_DATA_PREFIX:-/workspace-SR006.nfs2/hmoe-data/fineweb-edu-time-match-extension/data/train}
+  eval_root=${STAGE3_MOE_DATA_ROOT:-/home/jovyan/data/fineweb-edu-gpt2-megatron/data}
+  manifest=${STAGE3_MOE_DATA_MANIFEST_PATH:-$(dirname "$(dirname "$train_prefix")")/artifact-manifest.json}
+  for required in "$train_prefix.bin" "$train_prefix.idx" \
+                  "$eval_root/development.bin" "$eval_root/final.bin" "$manifest"; do
+    if [ ! -f "$required" ]; then
+      echo "FATAL: missing $required"
+      exit 3
+    fi
+  done
+  echo "train: $train_prefix ($(stat -c %s "$train_prefix.bin") bytes)"
+  echo "eval:  $eval_root"
+  echo "manifest: $manifest"
 
-  export STAGE3_MOE_DATA_ROOT="$data_root"
+  export STAGE3_MOE_DATA_ROOT="$eval_root"
+  export STAGE3_MOE_TRAIN_DATA_PREFIX="$train_prefix"
+  export STAGE3_MOE_DATA_MANIFEST_PATH="$manifest"
   python3 stage3_moe/membench_sweep.py \
     --results-root "$RESULTS" \
     --log-root "$RUNS" \
