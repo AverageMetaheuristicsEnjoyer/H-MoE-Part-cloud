@@ -374,6 +374,14 @@ echo "FP8_DEQUANT_CHUNK=${STAGE3_MOE_FP8_DEQUANT_CHUNK:-0} (0 = every state in F
 echo "SCHEDULE target_iters=$target_iters decay_iters=$decay_iters warmup=$warmup_iters train_iters=$train_iters"
 echo "CKPT save=${save_args[*]} load=${load_args[*]}"
 
+# MCore materializes its document/sample/shuffle indexes beside the corpus unless
+# told otherwise, and /home/jovyan -- where the corpus lives -- has no free space,
+# so the build dies with ENOSPC before the first step. One shared cache directory on
+# a writable volume also keeps a sweep from rebuilding the index at every point.
+data_cache=${STAGE3_MOE_DATA_CACHE:-$log_root/data-cache}
+mkdir -p "$data_cache"
+echo "DATA_CACHE=$data_cache"
+
 train_log="$log_root/$run_id/train-$(date -u +%Y%m%dT%H%M%SZ).log"
 echo "TRAIN_LOG=$train_log"
 set +e
@@ -414,6 +422,7 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   --valid-data-path "$valid_data_prefix" \
   --test-data-path "$test_data_prefix" \
   --dataloader-type single \
+  --data-cache-path "$data_cache" \
   --num-workers 2 \
   --no-create-attention-mask-in-dataloader \
   --seed 1234 \
