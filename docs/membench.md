@@ -42,24 +42,8 @@ for the 1.029B arms and why its numbers, not these, belong in a throughput claim
 These numbers are a like-for-like surface across shapes and batch sizes; both shapes
 are measured cold, because only one of them has a checkpoint to resume from.
 
-### Which corpus, and why it does not matter much
-
-Train is read from the extension corpus on nfs2 --
-`/workspace-SR006.nfs2/hmoe-data/fineweb-edu-time-match-extension/data/train.{bin,idx}`,
-FineWeb-Edu 100BT shards 8-11, the one the causal control reads. Validation and test
-stay at `/home/jovyan/data/fineweb-edu-gpt2-megatron/data/{development,final}.{bin,idx}`,
-216 MB together. The 15.1 GB copy of the original Stage 3 train (shards 0-7) on
-`/home/jovyan` is therefore not a dependency of this sweep.
-
-Which of the two corpora a point reads has no measurable effect on it: 17 steps, one
-tokenizer, one sequence length, a router that has learned nothing either way. What the
-nfs2 prefix buys is that the sweep survives a cleanup of the volume with no free space,
-including the resubmission that finishes it. Each point's own record carries the
-`data_manifest_sha256` it ran against, so a table assembled across a change of corpus
-says so rather than hiding it.
-
-Mock data is a different matter and is not used: on it the AdamW router collapses and
-the step time drifts through the measured window.
+The corpus is real (`--train-data-path`). It is not optional: on mock data the AdamW
+router collapses and the step time drifts through the measured window.
 
 ## The two model shapes
 
