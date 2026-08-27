@@ -24,16 +24,19 @@ for root in /home/jovyan /workspace-SR006.nfs2 /workspace-SR006.nfs3; do
 done
 
 echo
-echo "=== MoE training data (the bench needs it; mock data breaks MoE timing) ==="
-for candidate in /home/jovyan/data/fineweb-edu-gpt2-megatron/data \
-                 /workspace-SR006.nfs2/hmoe-data /workspace-SR006.nfs3/hmoe-data; do
-  echo "--- $candidate"
-  ls -la "$candidate" 2>&1 | head -12
-done
+echo "=== every Megatron .bin/.idx pair reachable, wherever it lives ==="
+# The MoE bench reads one corpus. If a second copy of it already sits on a volume
+# with room, the 15 GB on the full volume is reclaimable rather than load-bearing.
+for root in /home/jovyan /workspace-SR006.nfs2 /workspace-SR006.nfs3; do
+  find "$root" -maxdepth 6 -name '*.bin' -size +100M -printf '%10s %p\n' 2>/dev/null
+done | sort -rn | head -20
 
 echo
-echo "=== dense fineweb shards (colleague's cloud runs read these) ==="
-ls -la /workspace-SR006.nfs2/dimativator/fineweb-edu-100BT-16shards 2>&1 | head -8
+echo "=== dimativator (dense fineweb shards live somewhere under here) ==="
+for root in /workspace-SR006.nfs2/dimativator /workspace-SR006.nfs3/dimativator; do
+  echo "--- $root"
+  du -sh "$root"/* 2>/dev/null | sort -h | tail -12
+done
 
 echo
 echo "=== pip caches per image ==="
