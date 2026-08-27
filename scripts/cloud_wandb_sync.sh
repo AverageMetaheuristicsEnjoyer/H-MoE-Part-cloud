@@ -9,14 +9,17 @@
 set -u
 
 : "${WANDB_API_KEY:?set WANDB_API_KEY with mlsub run --env}"
+sync_root=${WANDB_SYNC_ROOT:-/home/jovyan/hmoe-cloud}
+want=${1:-}
 echo "WANDB_BASE_URL=${WANDB_BASE_URL:-https://api.wandb.ai}"
+echo "SYNC_ROOT=$sync_root FILTER=$want"
 
 unset PYTHONNOUSERSITE
 export WANDB_MODE=online
 python -c 'import wandb' 2>/dev/null || pip install --user -q wandb
 python -c 'import wandb; print("wandb=", wandb.__version__)'
 
-mapfile -t runs < <(find /home/jovyan/hmoe-cloud -maxdepth 5 -type d -name 'offline-run-*' 2>/dev/null | sort)
+mapfile -t runs < <(find "$sync_root" -maxdepth 5 -type d -name 'offline-run-*' 2>/dev/null | sort)
 echo "OFFLINE_RUNS=${#runs[@]}"
 if [[ ${#runs[@]} -eq 0 ]]; then
   echo "nothing to sync"; echo "EXIT=0"; exit 0
@@ -24,6 +27,7 @@ fi
 
 ok=0; failed=0
 for d in "${runs[@]}"; do
+  case "$d" in *"$want"*) ;; *) continue ;; esac
   # .synced is wandb's own marker; skip what has already gone across.
   if [[ -f "$d/.synced" ]]; then
     echo "SKIP already synced: $d"
