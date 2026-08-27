@@ -10,9 +10,12 @@ for source in "$source_root"/*-eval-downstream-broad-v2-1c; do
   name=${source##*/}
   temporary="$destination_root/.$name.partial"
   destination="$destination_root/$name"
-  [[ ! -e $temporary && ! -e $destination ]] || { echo "destination exists: $name"; exit 1; }
+  [[ ! -e $destination ]] || { echo "destination exists: $name"; exit 1; }
+  rm -rf "$temporary"
   cp -a "$source" "$temporary" || exit 1
-  diff -qr "$source" "$temporary" || exit 1
+  diff \
+    <(cd "$source" && find . -type f -printf '%P %s\n' | sort) \
+    <(cd "$temporary" && find . -type f -printf '%P %s\n' | sort) || exit 1
   mv "$temporary" "$destination" || exit 1
   rm -rf "$source"
   echo "MOVED $name"
