@@ -35,6 +35,9 @@ for d in "$lg"/*/; do
     echo "  LOG $newest"
     grep -iE "loading checkpoint|could not find|will not load|checkpoint .*at iteration|setting training iteration|does not match the optimizer|live group sizes" \
       "$newest" 2>/dev/null | head -6 | sed 's/^/    /'
+    grep -E "^( +)?(train_data_path|phase_transition_iterations|lr_decay_iters|lr_wsd_decay_iters|train_iters) +\." \
+      "$newest" 2>/dev/null | sed 's/^/    CONTRACT /'
+    grep -A3 "datasets target sizes" "$newest" 2>/dev/null | head -4 | sed 's/^/    DATASET /'
     # A running job's own log is unreadable through the platform API, so the last
     # progress line here is the only way to see how far a live run has got.
     grep -E "iteration +[0-9]+/" "$newest" 2>/dev/null | tail -1 | cut -c1-420 | sed 's/^/    /'
