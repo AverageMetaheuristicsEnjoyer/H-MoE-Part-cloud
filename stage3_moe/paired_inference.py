@@ -248,10 +248,9 @@ def build_inference(replicates):
     memory, wct, degradation = [], [], []
     for _, _, baseline, treatment in replicates:
         base_measure, treat_measure = baseline["measurement"], treatment["measurement"]
-        memory.append(
-            base_measure["memory"]["max_allocated_bytes"]
-            / treat_measure["memory"]["max_allocated_bytes"]
-        )
+        base_memory = base_measure["memory"]["max_allocated_bytes"]
+        treat_memory = treat_measure["memory"]["max_allocated_bytes"]
+        memory.append(base_memory / treat_memory if base_memory and treat_memory else None)
         base_wct = base_measure["timing"]["e2e_wct_seconds"]
         treat_wct = treat_measure["timing"]["e2e_wct_seconds"]
         wct.append(base_wct / treat_wct if base_wct and treat_wct else None)
