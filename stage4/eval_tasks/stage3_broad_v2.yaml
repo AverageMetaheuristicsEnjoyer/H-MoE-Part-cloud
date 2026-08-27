@@ -1,0 +1,63 @@
+group: stage3_broad_v2
+task:
+  - anli_r1
+  - anli_r2
+  - anli_r3
+  - commonsense_qa
+  - task: mrpc
+    num_fewshot: 0
+    metric_list:
+      - metric: acc
+        aggregation: mean
+        higher_is_better: true
+  - rte
+  - sst2
+  - wnli
+  - logiqa
+  - logiqa2
+  - mathqa
+  - task: mc_taco
+    num_fewshot: 0
+    metric_list:
+      - metric: acc
+        aggregation: mean
+        higher_is_better: true
+  - task: openbookqa
+    num_fewshot: 5
+  - pubmedqa
+  - sciq
+  - social_iqa
+  - task: cb
+    num_fewshot: 0
+    metric_list:
+      - metric: acc
+        aggregation: mean
+        higher_is_better: true
+  - copa
+  - multirc
+  - sglue_rte
+  - wic
+  - wsc
+  - truthfulqa_mc1
+  - truthfulqa_mc2
+  - winogender_all
+  - task: winogrande
+    num_fewshot: 5
+  - wsc273
+  - task: mmlu
+    num_fewshot: 5
+  - leaderboard_bbh
+  - task: wikitext
+    num_fewshot: 0
+    metric_list:
+      - metric: bits_per_byte
+        aggregation: bits_per_byte
+        higher_is_better: false
+  - task: mediqa_qa2019_perplexity
+    num_fewshot: 0
+    metric_list:
+      - metric: bits_per_byte
+        aggregation: bits_per_byte
+        higher_is_better: false
+metadata:
+  version: 1.0

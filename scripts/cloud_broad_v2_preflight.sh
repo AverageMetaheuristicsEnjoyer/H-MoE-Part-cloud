@@ -61,6 +61,11 @@ for candidate in candidates:
 for line in lines:
     print(line)
 print(f"PREFLIGHT candidates={len(candidates)} passed={passed} failed={len(candidates) - passed}")
+if "stage3_broad_v2" in manager.all_tasks:
+    tasks = list(leaves(get_task_dict(["stage3_broad_v2"], manager)))
+    docs = sum(len(task.eval_docs) for task in tasks)
+    metrics = sum(len(task.higher_is_better()) for task in tasks)
+    print(f"FINAL_GROUP leaves={len(tasks)} docs={docs} leaf_metrics={metrics}")
 PY
 code=$?
 echo "EXIT=$code"
