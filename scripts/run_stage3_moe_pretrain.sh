@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 3 MoE matched pretraining, WSD trunk-and-branch.
 #
-#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench|time-match|time-match-smoke|eval-lm-fixed|eval-downstream
+#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench|time-match|time-match-smoke|extension-decay-control|eval-lm-fixed|eval-downstream
 #
 # smoke exercises save and resume; bench measures throughput and peak memory with no
 # checkpoint traffic; resume-bench does the same from the trunk branch point, so the
@@ -184,6 +184,25 @@ case "$mode" in
       probe_warmup=0
       probe_measure=1
     fi
+    ;;
+  extension-decay-control)
+    [[ $arm == adamw_fp8gemm_state_fp32 ]] || {
+      echo "extension-decay-control is only defined for AdamW FP8-GEMM" >&2
+      exit 2
+    }
+    [[ -n ${STAGE3_MOE_TRAIN_DATA_PREFIX:-} ]] || {
+      echo "extension-decay-control requires STAGE3_MOE_TRAIN_DATA_PREFIX" >&2
+      exit 2
+    }
+    train_iters=$full_iters
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    phase_args=(--phase-transition-iterations "$time_match_branch")
+    control_dir="$ckpt_root/extension-decay-control/$arm"
+    mkdir -p "$control_dir"
+    save_args=(--save "$control_dir" --save-interval 363 --save-retain-interval 13794)
+    control_load=${STAGE3_MOE_EXTENSION_DECAY_LOAD:?set STAGE3_MOE_EXTENSION_DECAY_LOAD to the checkpoint directory}
+    load_args=(--load "$control_load" --override-opt_param-scheduler)
     ;;
   eval-lm-fixed)
     # Model-only evaluation on the first validation and test windows. --skip-train

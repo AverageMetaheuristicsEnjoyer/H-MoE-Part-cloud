@@ -55,3 +55,15 @@ def test_fixed_lm_eval_never_trains_and_resets_eval_samplers():
     assert "--no-load-optim --no-load-rng --skip-train" in block
     assert 'STAGE3_MOE_MICRO_BATCH=16' in cloud
     assert 'STAGE3_MOE_MATCHED_EVAL_REPEATS:-2' in cloud
+
+
+def test_extension_decay_control_starts_decay_at_phase_boundary():
+    launcher = (ROOT / "scripts/run_stage3_moe_pretrain.sh").read_text()
+    cloud = (ROOT / "scripts/cloud_moe_extension_decay_control.sh").read_text()
+
+    block = launcher.split("  extension-decay-control)", 1)[1].split("  eval-lm-fixed)", 1)[0]
+    assert "target_iters=$full_iters" in block
+    assert "decay_iters=$full_decay_iters" in block
+    assert 'phase_args=(--phase-transition-iterations "$time_match_branch")' in block
+    assert 'source_dir/iter_0013794' in cloud
+    assert 'STAGE3_MOE_TRAIN_DATA_PREFIX="$extension_root/data/train"' in cloud
