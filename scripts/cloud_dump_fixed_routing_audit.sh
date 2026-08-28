@@ -50,7 +50,11 @@ for path in sorted(glob.glob(sys.argv[1] + "/*.json")):
             print(
                 f"ROUTING_TRAJECTORY label={data['checkpoint_label']} "
                 f"split={evaluation['split']} worst_final_layer_cumulative_cv="
-                + ",".join(f"{i + 1}:{trajectory[i]:.6f}" for i in points if i >= 0)
+                + ",".join(
+                    f"{i + 1}:{trajectory[i]:.6f}"
+                    for i in points
+                    if 0 <= i < len(trajectory)
+                )
             )
 print("EXIT=0")
 PY
