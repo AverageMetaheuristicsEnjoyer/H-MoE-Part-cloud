@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 3 MoE matched pretraining, WSD trunk-and-branch.
 #
-#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|eval-lm-fixed|eval-routing-fixed|eval-downstream
+#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|eval-lm-fixed|eval-routing-fixed|eval-downstream
 #
 # smoke exercises save and resume; bench measures throughput and peak memory with no
 # checkpoint traffic; resume-bench does the same from the trunk branch point, so the
@@ -223,6 +223,25 @@ case "$mode" in
     save_args=(--save "$control_dir" --save-interval "$full_iters" --no-save-optim --no-save-rng)
     control_load=${STAGE3_MOE_EXTENSION_DECAY_LOAD:?set STAGE3_MOE_EXTENSION_DECAY_LOAD to the checkpoint directory}
     load_args=(--load "$control_load" --override-opt_param-scheduler)
+    ;;
+  original-data-plateau-control)
+    [[ $arm == adamw_fp8gemm_state_fp32 ]] || {
+      echo "original-data-plateau-control is only defined for AdamW FP8-GEMM" >&2
+      exit 2
+    }
+    plateau_end=$((time_match_branch + time_match_plateau_iters))
+    # Keep the original 17,242-step dataset sizing so this run reuses the exact
+    # cache of the uninterrupted arm. The runtime WSD schedule stays at peak LR
+    # through 16,122, and --exit-interval stops before its decay begins.
+    train_iters=$full_iters
+    target_iters=$((plateau_end + full_decay_iters))
+    decay_iters=$full_decay_iters
+    original_plateau_dir="$ckpt_root/original-data-plateau-control/$arm"
+    mkdir -p "$original_plateau_dir"
+    save_args=(--save "$original_plateau_dir" --save-interval "$plateau_end")
+    original_plateau_load=${STAGE3_MOE_ORIGINAL_PLATEAU_LOAD:?set STAGE3_MOE_ORIGINAL_PLATEAU_LOAD to the checkpoint directory}
+    load_args=(--load "$original_plateau_load" --override-opt_param-scheduler)
+    exit_args=(--exit-interval "$plateau_end")
     ;;
   time-match-stretched-decay)
     [[ $arm == adamw_fp8gemm_state_fp32 ]] || {

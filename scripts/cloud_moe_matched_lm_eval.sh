@@ -15,6 +15,7 @@ control=${STAGE3_MOE_MATCHED_CONTROL:-}
 candidate=${STAGE3_MOE_MATCHED_CANDIDATE:-}
 candidate_label=${STAGE3_MOE_MATCHED_CANDIDATE_LABEL:-candidate}
 candidate_iteration=${STAGE3_MOE_MATCHED_CANDIDATE_ITERATION:-19570}
+plateau_source=${STAGE3_MOE_MATCHED_PLATEAU_SOURCE:-}
 skip_references=${STAGE3_MOE_MATCHED_SKIP_REFERENCES:-0}
 
 nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
@@ -69,6 +70,9 @@ if [[ $skip_references != 1 ]]; then
 fi
 if [[ -n $control ]]; then
   eval_one extension_decay adamw_fp8gemm_state_fp32 "$control" 17242 || exit $?
+fi
+if [[ -n $plateau_source ]]; then
+  eval_one original_plateau_source adamw_fp8gemm_state_fp32 "$plateau_source" 13794 || exit $?
 fi
 if [[ -n $candidate ]]; then
   eval_one "$candidate_label" adamw_fp8gemm_state_fp32 "$candidate" "$candidate_iteration" || exit $?

@@ -86,3 +86,19 @@ def test_time_match_stretched_decay_uses_the_whole_extension_phase():
     assert 'source_dir/iter_0013794' in cloud
     assert 'STAGE3_MOE_TRAIN_DATA_PREFIX="$extension_root/data/train"' in cloud
     assert "phase_boundary=13794 sampler_offset_steps=0 decay_steps=5776" in cloud
+
+
+def test_original_data_plateau_control_is_constant_lr_and_reuses_original_cache():
+    launcher = (ROOT / "scripts/run_stage3_moe_pretrain.sh").read_text()
+    cloud = (ROOT / "scripts/cloud_moe_original_data_plateau_control.sh").read_text()
+    matched_eval = (ROOT / "scripts/cloud_moe_matched_lm_eval.sh").read_text()
+
+    block = launcher.split("  original-data-plateau-control)", 1)[1].split("  eval-lm-fixed)", 1)[0]
+    assert "plateau_end=$((time_match_branch + time_match_plateau_iters))" in block
+    assert "train_iters=$full_iters" in block
+    assert "target_iters=$((plateau_end + full_decay_iters))" in block
+    assert 'exit_args=(--exit-interval "$plateau_end")' in block
+    assert '--save-interval "$plateau_end"' in block
+    assert "/home/jovyan/data/fineweb-edu-gpt2-megatron" in cloud
+    assert "start=13794 end=$plateau_end plateau_steps=2328" in cloud
+    assert 'eval_one original_plateau_source adamw_fp8gemm_state_fp32 "$plateau_source" 13794' in matched_eval
