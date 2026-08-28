@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 3 MoE matched pretraining, WSD trunk-and-branch.
 #
-#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|eval-lm-fixed|eval-routing-fixed|eval-downstream
+#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|corrected-time-match|eval-lm-fixed|eval-routing-fixed|eval-downstream
 #
 # smoke exercises save and resume; bench measures throughput and peak memory with no
 # checkpoint traffic; resume-bench does the same from the trunk branch point, so the
@@ -243,6 +243,34 @@ case "$mode" in
     original_plateau_load=${STAGE3_MOE_ORIGINAL_PLATEAU_LOAD:?set STAGE3_MOE_ORIGINAL_PLATEAU_LOAD to the checkpoint directory}
     load_args=(--load "$original_plateau_load" --override-opt_param-scheduler)
     exit_args=(--exit-interval "$plateau_end")
+    ;;
+  corrected-time-match)
+    [[ $arm == adamw_fp8gemm_state_fp32 ]] || {
+      echo "corrected-time-match is only defined for AdamW FP8-GEMM" >&2
+      exit 2
+    }
+    corrected_phase=${STAGE3_MOE_CORRECTED_PHASE:?set STAGE3_MOE_CORRECTED_PHASE to base or tail}
+    corrected_transition=${STAGE3_MOE_CORRECTED_TRANSITION_DIR:?set STAGE3_MOE_CORRECTED_TRANSITION_DIR}
+    corrected_source=${STAGE3_MOE_CORRECTED_SOURCE:?set STAGE3_MOE_CORRECTED_SOURCE}
+    corrected_dir="$ckpt_root/corrected-time-match/$arm"
+    train_iters=19570
+    target_iters=$train_iters
+    decay_iters=$full_decay_iters
+    phase_args=(--phase-transition-iterations "$full_iters")
+    case $corrected_phase in
+      base)
+        mkdir -p "$corrected_transition"
+        save_args=(--save "$corrected_transition" --save-interval "$full_iters")
+        load_args=(--load "$corrected_source" --override-opt_param-scheduler)
+        ;;
+      tail)
+        mkdir -p "$corrected_dir"
+        save_args=(--save "$corrected_dir" --save-interval "$train_iters"
+                   --no-save-optim --no-save-rng)
+        load_args=(--load "$corrected_transition" --override-opt_param-scheduler)
+        ;;
+      *) echo "unknown corrected time-match phase: $corrected_phase" >&2; exit 2 ;;
+    esac
     ;;
   time-match-stretched-decay)
     [[ $arm == adamw_fp8gemm_state_fp32 ]] || {
