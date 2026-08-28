@@ -61,10 +61,18 @@ class RoutingAudit:
                 raw_scores = torch.sigmoid(flat_logits)
                 biased_scores = raw_scores + _module.expert_bias.detach().float()
                 frozen_scores = raw_scores + _state["checkpoint_bias"]
-                unbiased_indices = torch.topk(raw_scores, _module.topk, dim=-1).indices
-                biased_topk = torch.topk(biased_scores, _module.topk + 1, dim=-1)
-                biased_indices = biased_topk.indices[:, : _module.topk]
-                frozen_indices = torch.topk(frozen_scores, _module.topk, dim=-1).indices
+                unbiased_indices = torch.topk(
+                    raw_scores, _module.topk, dim=-1, sorted=False
+                ).indices
+                biased_indices = torch.topk(
+                    biased_scores, _module.topk, dim=-1, sorted=False
+                ).indices
+                frozen_indices = torch.topk(
+                    frozen_scores, _module.topk, dim=-1, sorted=False
+                ).indices
+                margin_values = torch.topk(
+                    biased_scores, _module.topk + 1, dim=-1, sorted=True
+                ).values
 
                 unbiased_map = torch.zeros_like(flat_actual)
                 unbiased_map.scatter_(1, unbiased_indices, True)
@@ -72,7 +80,10 @@ class RoutingAudit:
                 frozen_map.scatter_(1, frozen_indices, True)
                 computed_map = torch.zeros_like(flat_actual)
                 computed_map.scatter_(1, biased_indices, True)
-                margins = biased_topk.values[:, _module.topk - 1] - biased_topk.values[:, _module.topk]
+                margins = (
+                    margin_values[:, _module.topk - 1]
+                    - margin_values[:, _module.topk]
+                )
 
                 _state["tokens"] += flat_logits.shape[0]
                 _state["actual"] += flat_actual.sum(dim=0)
