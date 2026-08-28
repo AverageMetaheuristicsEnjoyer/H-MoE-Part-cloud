@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 3 MoE matched pretraining, WSD trunk-and-branch.
 #
-#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench|time-match|time-match-smoke|extension-decay-control|eval-lm-fixed|eval-routing-fixed|eval-downstream
+#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|eval-lm-fixed|eval-routing-fixed|eval-downstream
 #
 # smoke exercises save and resume; bench measures throughput and peak memory with no
 # checkpoint traffic; resume-bench does the same from the trunk branch point, so the
@@ -158,6 +158,20 @@ case "$mode" in
     # (start_wd = end_wd = 0.1) and every LR argument matches the trunk, so overriding
     # rebuilds the identical schedule; num_steps still comes from the checkpoint.
     load_args=(--load "$trunk_dir" --override-opt_param-scheduler)
+    ;;
+  resume-replay)
+    [[ $arm == adamw_fp8gemm_state_fp32 ]] || {
+      echo "resume-replay is only defined for AdamW FP8-GEMM" >&2
+      exit 2
+    }
+    train_iters=$((time_match_branch + 6))
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    replay_load=${STAGE3_MOE_REPLAY_LOAD:?set STAGE3_MOE_REPLAY_LOAD to the checkpoint directory}
+    save_args=()
+    load_args=(--load "$replay_load" --override-opt_param-scheduler)
+    probe_warmup=0
+    probe_measure=6
     ;;
   time-match|time-match-smoke)
     case "$arm" in
@@ -437,7 +451,7 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   --seed 1234 \
   --eval-interval 250 \
   --eval-iters "${STAGE3_MOE_EVAL_ITERS:-32}" \
-  --log-interval 10 \
+  --log-interval "${STAGE3_MOE_LOG_INTERVAL:-10}" \
   --log-throughput \
   --timing-log-level 1 \
   "${logger_args[@]}" \
