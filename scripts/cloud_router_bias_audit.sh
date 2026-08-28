@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Read-only inspection of router expert-bias tensors in Stage 3 checkpoints.
-set -u
+set -eu
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+export PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root"
 
 arm=adamw_fp8gemm_state_fp32
 paths=(
