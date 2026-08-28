@@ -48,6 +48,8 @@ for d in "$lg"/*/; do
       | sed 's/^/    EVAL_RESULT /'
     grep -ahE "loss at iteration .* on (validation|test) set" "$d"/train-*.log 2>/dev/null \
       | tail -4 | sed 's/^/    FINAL_SPLIT_RESULT /'
+    grep -ahE "validation loss at (iteration|the end of training)" "$d"/train-*.log 2>/dev/null \
+      | tail -6 | sed 's/^/    ALL_SEGMENT_EVAL_RESULT /'
   fi
   # wandb names an offline run dir offline-run-*, an online one run-*; its size says
   # whether history is actually being recorded.
