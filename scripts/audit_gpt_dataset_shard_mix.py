@@ -9,6 +9,8 @@ import numpy as np
 
 
 def source_shards(root):
+    artifact_manifest = json.loads((root / "artifact-manifest.json").read_bytes())
+    selected = set(artifact_manifest["selected_source_paths"])
     rows = []
     for path in root.rglob("*.json"):
         try:
@@ -18,7 +20,7 @@ def source_shards(root):
         if not isinstance(value, dict) or not {"source", "conversion", "artifacts"} <= value.keys():
             continue
         match = re.fullmatch(r"data/train-(\d{5})-of-00100\.parquet", value["source"]["path"])
-        if match is None:
+        if match is None or value["source"]["path"] not in selected:
             continue
         prefix = value["conversion"]["output_prefix"]
         artifact = value["artifacts"][f"{Path(prefix).name}.bin"]
