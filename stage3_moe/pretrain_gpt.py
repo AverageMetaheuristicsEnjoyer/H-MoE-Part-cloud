@@ -29,6 +29,7 @@ def take_stage3_args(argv):
     parser.add_argument("--stage3-eval-artifact-dir", type=Path, default=None)
     parser.add_argument("--stage3-eval-batch-size", type=int, default=8)
     parser.add_argument("--stage3-eval-limit", type=int, default=None)
+    parser.add_argument("--stage3-routing-audit-path", type=Path, default=None)
     args, remaining = parser.parse_known_args(argv[1:])
     if args.stage3_warmup_steps < 0 or args.stage3_measure_steps < 1:
         raise ValueError("stage3 warmup must be non-negative and measured steps positive")
@@ -149,6 +150,10 @@ def main():
         argv=mcore_argv,
     )
     install_memory_audit()
+    if stage3_args.stage3_routing_audit_path:
+        from stage3_moe.routing_audit import install as install_routing_audit
+
+        install_routing_audit(stage3_args.stage3_routing_audit_path)
     if stage3_args.stage3_eval_downstream:
         install_downstream_eval(
             probe,

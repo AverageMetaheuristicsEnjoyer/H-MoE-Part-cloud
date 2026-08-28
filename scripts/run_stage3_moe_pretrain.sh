@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 3 MoE matched pretraining, WSD trunk-and-branch.
 #
-#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench|time-match|time-match-smoke|extension-decay-control|eval-lm-fixed|eval-downstream
+#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench|time-match|time-match-smoke|extension-decay-control|eval-lm-fixed|eval-routing-fixed|eval-downstream
 #
 # smoke exercises save and resume; bench measures throughput and peak memory with no
 # checkpoint traffic; resume-bench does the same from the trunk branch point, so the
@@ -241,6 +241,23 @@ case "$mode" in
     probe_warmup=0
     probe_measure=1
     ;;
+  eval-routing-fixed)
+    train_iters=1
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    eval_load=${STAGE3_MOE_EVAL_LOAD:?set STAGE3_MOE_EVAL_LOAD to the checkpoint directory}
+    routing_audit_path=${STAGE3_MOE_ROUTING_AUDIT_PATH:?set STAGE3_MOE_ROUTING_AUDIT_PATH}
+    save_args=()
+    load_args=(--load "$eval_load" --no-load-optim --no-load-rng --skip-train
+               --override-opt_param-scheduler)
+    probe_warmup=0
+    probe_measure=1
+    eval_args=(
+      --stage3-routing-audit-path "$routing_audit_path"
+      --eval-global-batch-size "${STAGE3_MOE_ROUTING_EVAL_GLOBAL_BATCH:-16}"
+      --eval-micro-batch-size "${STAGE3_MOE_ROUTING_EVAL_MICRO_BATCH:-16}"
+    )
+    ;;
   eval-downstream)
     # Score a finished checkpoint. --skip-train makes MCore build the model, load the
     # weights and go straight to evaluation, which is what the decay endpoints support:
@@ -418,7 +435,7 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   --no-create-attention-mask-in-dataloader \
   --seed 1234 \
   --eval-interval 250 \
-  --eval-iters 32 \
+  --eval-iters "${STAGE3_MOE_EVAL_ITERS:-32}" \
   --log-interval 10 \
   --log-throughput \
   --timing-log-level 1 \
