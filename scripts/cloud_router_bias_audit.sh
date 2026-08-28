@@ -4,6 +4,9 @@ set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 export PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root"
+nvidia_lib_path=$(find /home/user/conda/lib/python3.12/site-packages/nvidia \
+  -mindepth 2 -maxdepth 2 -type d -name lib -print 2>/dev/null | paste -sd: - || true)
+export LD_LIBRARY_PATH=${nvidia_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 
 arm=adamw_fp8gemm_state_fp32
 paths=(
