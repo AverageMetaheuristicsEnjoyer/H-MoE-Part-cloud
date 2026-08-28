@@ -59,6 +59,7 @@ decay_dir="$ckpt_root/1p2b/$arm"
 run_id_eval="stage3-$arm-$mode${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
 eval_args=()
 phase_args=()
+exit_args=()
 full_dir="$ckpt_root/${STAGE3_MOE_FULL_DIR:-1c}/$arm"
 
 case "$mode" in
@@ -164,7 +165,7 @@ case "$mode" in
       echo "resume-replay is only defined for AdamW FP8-GEMM" >&2
       exit 2
     }
-    train_iters=$((time_match_branch + 6))
+    train_iters=$full_iters
     target_iters=$full_iters
     decay_iters=$full_decay_iters
     replay_load=${STAGE3_MOE_REPLAY_LOAD:?set STAGE3_MOE_REPLAY_LOAD to the checkpoint directory}
@@ -172,6 +173,7 @@ case "$mode" in
     load_args=(--load "$replay_load" --override-opt_param-scheduler)
     probe_warmup=0
     probe_measure=6
+    exit_args=(--exit-interval $((time_match_branch + 6)))
     ;;
   time-match|time-match-smoke)
     case "$arm" in
@@ -439,6 +441,7 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   --micro-batch-size "$micro_batch" \
   --global-batch-size "$global_batch" \
   --train-iters "$train_iters" \
+  "${exit_args[@]}" \
   "${phase_args[@]}" \
   --tokenizer-type NullTokenizer --vocab-size 50257 \
   --null-tokenizer-eod-id 50256 --null-tokenizer-pad-id -1 \
