@@ -75,13 +75,35 @@ audit_one() {
 import json, sys
 d = json.load(open(sys.argv[1]))
 for e in d["evaluations"]:
+    layers = e["layers"]
     print(
         f"ROUTING_RESULT label={d['checkpoint_label']} split={e['split']} "
         f"loss={e['loss']:.6f} worst_cv={e['worst_actual_cv']:.6f} "
         f"frozen_cv={e['worst_frozen_cv']:.6f} "
         f"unbiased_cv={e['worst_unbiased_cv']:.6f} "
-        f"min_mean={e['worst_actual_minimum_to_mean']:.6f}"
+        f"min_mean={e['worst_actual_minimum_to_mean']:.6f} "
+        f"max_bias_delta={max(x['maximum_absolute_bias_change'] for x in layers):.6f} "
+        f"max_adapted_fraction={max(x['assignment_fraction_changed_by_adaptation'] for x in layers):.6f} "
+        f"max_reconstruction_mismatch={max(x['computed_routing_mismatch_fraction'] for x in layers):.6f}"
     )
+    for layer in sorted(
+        layers,
+        key=lambda x: x["actual_balance"]["coefficient_of_variation"],
+        reverse=True,
+    )[:3]:
+        print(
+            f"ROUTING_LAYER label={d['checkpoint_label']} split={e['split']} "
+            f"layer={layer['layer']} "
+            f"actual_cv={layer['actual_balance']['coefficient_of_variation']:.6f} "
+            f"frozen_cv={layer['frozen_balance']['coefficient_of_variation']:.6f} "
+            f"unbiased_cv={layer['unbiased_balance']['coefficient_of_variation']:.6f} "
+            f"min_mean={layer['actual_balance']['minimum_to_mean']:.6f} "
+            f"max_mean={layer['actual_balance']['maximum_to_mean']:.6f} "
+            f"bias_delta={layer['maximum_absolute_bias_change']:.6f} "
+            f"changed_by_bias={layer['assignment_fraction_changed_by_bias']:.6f} "
+            f"changed_by_adaptation={layer['assignment_fraction_changed_by_adaptation']:.6f} "
+            f"margin_le_1e3={layer['biased_topk_margin_fraction_below_1e3']:.6f}"
+        )
 PY
 }
 
