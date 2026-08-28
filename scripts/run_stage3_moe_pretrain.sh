@@ -254,7 +254,7 @@ case "$mode" in
     probe_measure=1
     eval_args=(
       --stage3-routing-audit-path "$routing_audit_path"
-      --eval-global-batch-size "${STAGE3_MOE_ROUTING_EVAL_GLOBAL_BATCH:-16}"
+      --eval-global-batch-size "${STAGE3_MOE_ROUTING_EVAL_GLOBAL_BATCH:-208}"
       --eval-micro-batch-size "${STAGE3_MOE_ROUTING_EVAL_MICRO_BATCH:-16}"
       --data-cache-path "${STAGE3_MOE_DATA_CACHE_PATH:?set STAGE3_MOE_DATA_CACHE_PATH}"
     )

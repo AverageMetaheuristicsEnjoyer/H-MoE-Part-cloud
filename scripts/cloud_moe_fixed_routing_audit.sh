@@ -30,7 +30,7 @@ stat -c 'DATA_FILE size=%s inode=%i path=%n' \
 sha256sum "$extension_root/data/train.idx" "$extension_root/artifact-manifest.json" \
   "$base_data/final.idx"
 nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
-echo "ROUTING_AUDIT mode=$mode eval_iters=$eval_iters eval_global_batch=16 eval_micro_batch=16 sampler_offset=0 seed=1234"
+echo "ROUTING_AUDIT mode=$mode eval_iters=$eval_iters eval_global_batch=208 eval_micro_batch=16 sampler_offset=0 seed=1234 bias_replay=1e-3"
 
 audit_one() {
   label=$1
@@ -78,6 +78,7 @@ for e in d["evaluations"]:
     print(
         f"ROUTING_RESULT label={d['checkpoint_label']} split={e['split']} "
         f"loss={e['loss']:.6f} worst_cv={e['worst_actual_cv']:.6f} "
+        f"frozen_cv={e['worst_frozen_cv']:.6f} "
         f"unbiased_cv={e['worst_unbiased_cv']:.6f} "
         f"min_mean={e['worst_actual_minimum_to_mean']:.6f}"
     )
