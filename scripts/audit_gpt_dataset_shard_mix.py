@@ -8,9 +8,7 @@ from pathlib import Path
 import numpy as np
 
 
-def source_shards(root):
-    artifact_manifest = json.loads((root / "artifact-manifest.json").read_bytes())
-    selected = set(artifact_manifest["selected_source_paths"])
+def source_shards(root, expected_shards):
     rows = []
     for path in root.rglob("*.json"):
         try:
@@ -20,7 +18,7 @@ def source_shards(root):
         if not isinstance(value, dict) or not {"source", "conversion", "artifacts"} <= value.keys():
             continue
         match = re.fullmatch(r"data/train-(\d{5})-of-00100\.parquet", value["source"]["path"])
-        if match is None or value["source"]["path"] not in selected:
+        if match is None or int(match.group(1)) not in expected_shards:
             continue
         prefix = value["conversion"]["output_prefix"]
         artifact = value["artifacts"][f"{Path(prefix).name}.bin"]
@@ -71,8 +69,10 @@ def window_report(label, start, stop, shard_ids, expected):
     }
 
 
-def audit_dataset(root, windows):
-    shards = source_shards(root)
+def audit_dataset(root, windows, expected_shards):
+    shards = source_shards(root, expected_shards)
+    if [row["shard"] for row in shards] != expected_shards:
+        raise RuntimeError("source conversion manifests do not match expected shards")
     arrays = cache_arrays(root)
     document = arrays["document"]
     sample = arrays["sample"]
@@ -115,10 +115,12 @@ def main():
                 ("base_0_13794", 0, 13_794 * global_batch),
                 ("base_13794_17242", 13_794 * global_batch, 17_242 * global_batch),
             ],
+            list(range(8)),
         ),
         "extension": audit_dataset(
             args.extension_root,
             [("extension_0_2328", 0, 2_328 * global_batch)],
+            list(range(8, 12)),
         ),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
