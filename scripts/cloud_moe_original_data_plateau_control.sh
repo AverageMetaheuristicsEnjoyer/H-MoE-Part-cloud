@@ -60,7 +60,7 @@ export STAGE3_MOE_TRAIN_DATA_PREFIX="$data_root/data/train"
 export STAGE3_MOE_DATA_MANIFEST_PATH="$data_root/artifact-manifest.json"
 export STAGE3_MOE_ORIGINAL_PLATEAU_LOAD="$load"
 export STAGE3_MOE_RUN_SUFFIX=${STAGE3_MOE_RUN_SUFFIX:-v1}
-export STAGE3_MOE_LOG_ROOT=${STAGE3_MOE_LOG_ROOT:-/workspace-SR006.nfs2/hmoe-cloud/pretrain}
+export STAGE3_MOE_LOG_ROOT=${STAGE3_MOE_LOG_ROOT:-/workspace-SR006.nfs3/hmoe-cloud/pretrain}
 export WANDB_BASE_URL=${WANDB_BASE_URL:-https://wandb-radfan.ru}
 
 "$root/scripts/run_stage3_moe_pretrain.sh" "$arm" original-data-plateau-control

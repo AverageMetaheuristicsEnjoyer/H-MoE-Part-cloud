@@ -99,6 +99,8 @@ def test_original_data_plateau_control_is_constant_lr_and_reuses_original_cache(
     assert "target_iters=$((plateau_end + full_decay_iters))" in block
     assert 'exit_args=(--exit-interval "$plateau_end")' in block
     assert '--save-interval "$plateau_end"' in block
+    assert "--no-save-optim --no-save-rng" in block
     assert "/home/jovyan/data/fineweb-edu-gpt2-megatron" in cloud
+    assert "/workspace-SR006.nfs3/hmoe-cloud/pretrain" in cloud
     assert "start=13794 end=$plateau_end plateau_steps=2328" in cloud
     assert 'eval_one original_plateau_source adamw_fp8gemm_state_fp32 "$plateau_source" 13794' in matched_eval

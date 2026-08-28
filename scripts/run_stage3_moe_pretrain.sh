@@ -238,7 +238,8 @@ case "$mode" in
     decay_iters=$full_decay_iters
     original_plateau_dir="$ckpt_root/original-data-plateau-control/$arm"
     mkdir -p "$original_plateau_dir"
-    save_args=(--save "$original_plateau_dir" --save-interval "$plateau_end")
+    save_args=(--save "$original_plateau_dir" --save-interval "$plateau_end"
+               --no-save-optim --no-save-rng)
     original_plateau_load=${STAGE3_MOE_ORIGINAL_PLATEAU_LOAD:?set STAGE3_MOE_ORIGINAL_PLATEAU_LOAD to the checkpoint directory}
     load_args=(--load "$original_plateau_load" --override-opt_param-scheduler)
     exit_args=(--exit-interval "$plateau_end")
