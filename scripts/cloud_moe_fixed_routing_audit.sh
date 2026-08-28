@@ -7,7 +7,8 @@ mode=${1:-full}
 case "$mode" in
   smoke) eval_iters=1 ;;
   full) eval_iters=16 ;;
-  *) echo "usage: cloud_moe_fixed_routing_audit.sh [smoke|full]" >&2; exit 2 ;;
+  source-controller) eval_iters=${STAGE3_MOE_EVAL_ITERS:-100} ;;
+  *) echo "usage: cloud_moe_fixed_routing_audit.sh [smoke|full|source-controller]" >&2; exit 2 ;;
 esac
 arm=adamw_fp8gemm_state_fp32
 extension_root=${STAGE3_MOE_EXTENSION_ROOT:-/workspace-SR006.nfs2/hmoe-data/fineweb-edu-time-match-extension}
@@ -109,7 +110,7 @@ PY
 
 audit_one source-13794 \
   "/workspace-SR006.nfs3/hmoe-checkpoints/stage3-time-match-source/$arm" 13794 1 || exit $?
-[[ $mode == smoke ]] && { echo EXIT=0; exit 0; }
+[[ $mode == smoke || $mode == source-controller ]] && { echo EXIT=0; exit 0; }
 audit_one original-17242 \
   "/workspace-SR006.nfs3/hmoe-checkpoints/stage3/trunk/$arm" 17242 1 || exit $?
 audit_one extension-control-17242 \

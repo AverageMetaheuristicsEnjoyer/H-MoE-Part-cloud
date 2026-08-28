@@ -43,6 +43,8 @@ class RoutingAudit:
             "margin_min": torch.full((), float("inf"), dtype=torch.float64, device=device),
             "margin_below_1e3": torch.zeros((), dtype=torch.int64, device=device),
             "margin_below_1e2": torch.zeros((), dtype=torch.int64, device=device),
+            "actual_trajectory": [],
+            "frozen_trajectory": [],
             "checkpoint_bias": module.expert_bias.detach().clone(),
             "microbatch_calls": 0,
         }
@@ -106,6 +108,8 @@ class RoutingAudit:
                 _state["microbatch_calls"] += 1
                 if _state["microbatch_calls"] % self.microbatches_per_global_batch == 0:
                     counts = _state["adaptive_pending"]
+                    _state["actual_trajectory"].append(_state["actual"].clone())
+                    _state["frozen_trajectory"].append(_state["frozen"].clone())
                     offset = counts.to(torch.float32).mean() - counts
                     _module.expert_bias.add_(
                         torch.sign(offset) * _module.config.moe_router_bias_update_rate
@@ -121,6 +125,9 @@ class RoutingAudit:
             state["module"].expert_bias.copy_(state["checkpoint_bias"])
             state["microbatch_calls"] = 0
             for key, value in state.items():
+                if isinstance(value, list):
+                    value.clear()
+                    continue
                 if not torch.is_tensor(value):
                     continue
                 if key == "checkpoint_bias":
@@ -167,6 +174,22 @@ class RoutingAudit:
             actual = reduced["actual"].cpu()
             frozen = reduced["frozen"].cpu()
             unbiased = reduced["unbiased"].cpu()
+            actual_trajectory = []
+            frozen_trajectory = []
+            for actual_step, frozen_step in zip(
+                state["actual_trajectory"], state["frozen_trajectory"]
+            ):
+                actual_step = actual_step.detach().clone()
+                frozen_step = frozen_step.detach().clone()
+                if torch.distributed.is_initialized():
+                    torch.distributed.all_reduce(actual_step)
+                    torch.distributed.all_reduce(frozen_step)
+                actual_trajectory.append(
+                    self._balance(actual_step.cpu())["coefficient_of_variation"]
+                )
+                frozen_trajectory.append(
+                    self._balance(frozen_step.cpu())["coefficient_of_variation"]
+                )
             rows.append(
                 {
                     "layer": state["name"],
@@ -188,6 +211,8 @@ class RoutingAudit:
                     "actual_balance": self._balance(actual),
                     "frozen_balance": self._balance(frozen),
                     "unbiased_balance": self._balance(unbiased),
+                    "actual_cumulative_cv_by_batch": actual_trajectory,
+                    "frozen_cumulative_cv_by_batch": frozen_trajectory,
                     "assignment_fraction_changed_by_bias": float(
                         reduced["bias_changes"] / (tokens * topk)
                     ),

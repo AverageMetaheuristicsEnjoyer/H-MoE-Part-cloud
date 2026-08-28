@@ -21,6 +21,10 @@ for path in sorted(glob.glob(sys.argv[1] + "/*.json")):
             "".join(x["checkpoint_expert_bias_sha256"] for x in layers).encode()
         ).hexdigest()
         improved = sum(a < f for a, f in zip(actual, frozen))
+        trajectory = max(
+            layers,
+            key=lambda x: x["actual_balance"]["coefficient_of_variation"],
+        ).get("actual_cumulative_cv_by_batch", [])
         print(
             f"ROUTING_SUMMARY label={data['checkpoint_label']} "
             f"iteration={data['checkpoint_iteration']} split={evaluation['split']} "
@@ -41,5 +45,12 @@ for path in sorted(glob.glob(sys.argv[1] + "/*.json")):
             f"checkpoint_bias_mean={statistics.mean(bias_values):.6f} "
             f"checkpoint_bias_hash={bias_hash}"
         )
+        if trajectory:
+            points = sorted({0, 1, 3, 7, 15, 31, 63, len(trajectory) - 1})
+            print(
+                f"ROUTING_TRAJECTORY label={data['checkpoint_label']} "
+                f"split={evaluation['split']} worst_final_layer_cumulative_cv="
+                + ",".join(f"{i + 1}:{trajectory[i]:.6f}" for i in points if i >= 0)
+            )
 print("EXIT=0")
 PY
