@@ -80,6 +80,7 @@ for label, path in zip(labels, files):
     digest = hashlib.sha256(flat.numpy().tobytes()).hexdigest() if tensors else "none"
     args = checkpoint.get("args")
     consumed = getattr(args, "consumed_train_samples", None)
+    scheduler = checkpoint.get("opt_param_scheduler", checkpoint.get("lr_scheduler", {}))
     print(
         f"BIAS_SUMMARY label={label} iteration={checkpoint.get('iteration')} "
         f"consumed_train_samples={consumed} keys={len(keys)} values={flat.numel()} "
@@ -90,6 +91,33 @@ for label, path in zip(labels, files):
         f"scheduler={'opt_param_scheduler' in checkpoint or 'lr_scheduler' in checkpoint} "
         f"rng={'rng_state' in checkpoint}"
     )
+    print(
+        f"SCHEDULER_SUMMARY label={label} "
+        f"num_steps={scheduler.get('num_steps', scheduler.get('num_iters'))} "
+        f"max_lr={scheduler.get('max_lr', scheduler.get('start_lr'))} "
+        f"min_lr={scheduler.get('min_lr')} "
+        f"lr_decay_steps={scheduler.get('lr_decay_steps', scheduler.get('decay_steps'))} "
+        f"wsd_decay_steps={scheduler.get('wsd_decay_steps')}"
+    )
+
+    def optimizer_param_groups(value, path="optimizer"):
+        if isinstance(value, dict):
+            groups = value.get("param_groups")
+            if isinstance(groups, list):
+                for index, group in enumerate(groups):
+                    print(
+                        f"OPTIMIZER_GROUP label={label} path={path}.param_groups[{index}] "
+                        f"lr={group.get('lr')} max_lr={group.get('max_lr')} "
+                        f"min_lr={group.get('min_lr')}"
+                    )
+            for key in ("optimizer", "optimizers", "chained_optimizers"):
+                if key in value:
+                    optimizer_param_groups(value[key], f"{path}.{key}")
+        elif isinstance(value, (list, tuple)):
+            for index, item in enumerate(value):
+                optimizer_param_groups(item, f"{path}[{index}]")
+
+    optimizer_param_groups(checkpoint.get("optimizer"))
     for key, tensor in zip(keys, tensors):
         key_digest = hashlib.sha256(tensor.numpy().tobytes()).hexdigest()[:16]
         print(
