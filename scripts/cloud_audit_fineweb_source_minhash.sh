@@ -7,13 +7,17 @@ shard_start=${STAGE3_MOE_MINHASH_SHARD_START:?set STAGE3_MOE_MINHASH_SHARD_START
 shard_end=${STAGE3_MOE_MINHASH_SHARD_END:?set STAGE3_MOE_MINHASH_SHARD_END}
 documents=${STAGE3_MOE_MINHASH_DOCUMENTS_PER_SHARD:-100000}
 output=${STAGE3_MOE_MINHASH_OUTPUT:?set STAGE3_MOE_MINHASH_OUTPUT}
+work_root=$(mktemp -d /tmp/hmoe-minhash.XXXXXX)
+trap 'rm -rf "$work_root"' EXIT
+python -m venv --system-site-packages "$work_root/venv"
+"$work_root/venv/bin/python" -m pip install -q -r "$root/requirements-data.txt"
 
 export HF_HOME="$tools_root/cache/huggingface"
 export HF_HUB_CACHE="$HF_HOME/hub"
 export XDG_CACHE_HOME="$tools_root/cache/xdg"
 export HF_HUB_DISABLE_IMPLICIT_TOKEN=1
 
-"$tools_root/venv/bin/python" "$root/scripts/audit_fineweb_source_minhash.py" \
+"$work_root/venv/bin/python" "$root/scripts/audit_fineweb_source_minhash.py" \
   --datatrove-root "$tools_root/datatrove" \
   --shard-start "$shard_start" \
   --shard-end "$shard_end" \
