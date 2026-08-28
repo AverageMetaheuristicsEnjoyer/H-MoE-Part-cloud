@@ -12,6 +12,9 @@ bf16=${STAGE3_MOE_MATCHED_BF16:-/workspace-SR006.nfs2/hmoe-checkpoints/stage3-1c
 original=${STAGE3_MOE_MATCHED_ORIGINAL:-/workspace-SR006.nfs3/hmoe-checkpoints/stage3/trunk/adamw_fp8gemm_state_fp32}
 time_match=${STAGE3_MOE_MATCHED_TIME_MATCH:-/home/jovyan/hmoe-checkpoints/stage3-time-match/time-match/adamw_fp8gemm_state_fp32}
 control=${STAGE3_MOE_MATCHED_CONTROL:-}
+candidate=${STAGE3_MOE_MATCHED_CANDIDATE:-}
+candidate_label=${STAGE3_MOE_MATCHED_CANDIDATE_LABEL:-candidate}
+candidate_iteration=${STAGE3_MOE_MATCHED_CANDIDATE_ITERATION:-19570}
 skip_references=${STAGE3_MOE_MATCHED_SKIP_REFERENCES:-0}
 
 nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
@@ -66,6 +69,9 @@ if [[ $skip_references != 1 ]]; then
 fi
 if [[ -n $control ]]; then
   eval_one extension_decay adamw_fp8gemm_state_fp32 "$control" 17242 || exit $?
+fi
+if [[ -n $candidate ]]; then
+  eval_one "$candidate_label" adamw_fp8gemm_state_fp32 "$candidate" "$candidate_iteration" || exit $?
 fi
 
 echo "EXIT=0"

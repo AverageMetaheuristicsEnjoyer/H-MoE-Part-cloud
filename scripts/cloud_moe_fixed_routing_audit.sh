@@ -8,7 +8,8 @@ case "$mode" in
   smoke) eval_iters=1 ;;
   full) eval_iters=16 ;;
   source-controller) eval_iters=${STAGE3_MOE_EVAL_ITERS:-100} ;;
-  *) echo "usage: cloud_moe_fixed_routing_audit.sh [smoke|full|source-controller]" >&2; exit 2 ;;
+  stretched) eval_iters=16 ;;
+  *) echo "usage: cloud_moe_fixed_routing_audit.sh [smoke|full|source-controller|stretched]" >&2; exit 2 ;;
 esac
 arm=adamw_fp8gemm_state_fp32
 extension_root=${STAGE3_MOE_EXTENSION_ROOT:-/workspace-SR006.nfs2/hmoe-data/fineweb-edu-time-match-extension}
@@ -107,6 +108,13 @@ for e in d["evaluations"]:
         )
 PY
 }
+
+if [[ $mode == stretched ]]; then
+  audit_one stretched-19570 \
+    "/workspace-SR006.nfs3/hmoe-checkpoints/stage3-time-match-stretched-v1/time-match-stretched/$arm" 19570 1 || exit $?
+  echo EXIT=0
+  exit 0
+fi
 
 audit_one source-13794 \
   "/workspace-SR006.nfs3/hmoe-checkpoints/stage3-time-match-source/$arm" 13794 1 || exit $?
