@@ -36,14 +36,43 @@ done
 
 python - "${labels[*]}" "${files[@]}" <<'PY'
 import hashlib
+import pickle
 import sys
 
 import torch
 
+
+class Placeholder:
+    def __new__(cls, *args, **kwargs):
+        return super().__new__(cls)
+
+
+class CheckpointUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        if module.startswith("megatron"):
+            return Placeholder
+        return super().find_class(module, name)
+
+
+class CheckpointPickle:
+    __name__ = "pickle"
+    Unpickler = CheckpointUnpickler
+    load = pickle.load
+    loads = pickle.loads
+    dump = pickle.dump
+    dumps = pickle.dumps
+
+
 labels = sys.argv[1].split()
 files = sys.argv[2:]
 for label, path in zip(labels, files):
-    checkpoint = torch.load(path, map_location="cpu", mmap=True, weights_only=False)
+    checkpoint = torch.load(
+        path,
+        map_location="cpu",
+        mmap=True,
+        pickle_module=CheckpointPickle,
+        weights_only=False,
+    )
     model = checkpoint["model"]
     keys = sorted(k for k in model if k.endswith("expert_bias"))
     tensors = [model[k].detach().float().reshape(-1) for k in keys]
