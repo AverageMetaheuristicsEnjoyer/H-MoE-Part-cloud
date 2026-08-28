@@ -9,7 +9,8 @@ case "$mode" in
   full) eval_iters=16 ;;
   source-controller) eval_iters=${STAGE3_MOE_EVAL_ITERS:-100} ;;
   stretched) eval_iters=16 ;;
-  *) echo "usage: cloud_moe_fixed_routing_audit.sh [smoke|full|source-controller|stretched]" >&2; exit 2 ;;
+  candidate) eval_iters=${STAGE3_MOE_EVAL_ITERS:-16} ;;
+  *) echo "usage: cloud_moe_fixed_routing_audit.sh [smoke|full|source-controller|stretched|candidate]" >&2; exit 2 ;;
 esac
 arm=adamw_fp8gemm_state_fp32
 extension_root=${STAGE3_MOE_EXTENSION_ROOT:-/workspace-SR006.nfs2/hmoe-data/fineweb-edu-time-match-extension}
@@ -112,6 +113,14 @@ PY
 if [[ $mode == stretched ]]; then
   audit_one stretched-19570 \
     "/workspace-SR006.nfs3/hmoe-checkpoints/stage3-time-match-stretched-v1/time-match-stretched/$arm" 19570 1 || exit $?
+  echo EXIT=0
+  exit 0
+fi
+if [[ $mode == candidate ]]; then
+  candidate=${STAGE3_MOE_ROUTING_CANDIDATE:?set STAGE3_MOE_ROUTING_CANDIDATE}
+  candidate_label=${STAGE3_MOE_ROUTING_CANDIDATE_LABEL:-candidate}
+  candidate_iteration=${STAGE3_MOE_ROUTING_CANDIDATE_ITERATION:-19570}
+  audit_one "$candidate_label" "$candidate" "$candidate_iteration" 1 || exit $?
   echo EXIT=0
   exit 0
 fi
