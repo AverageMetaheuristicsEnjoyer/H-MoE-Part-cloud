@@ -46,6 +46,8 @@ for d in "$lg"/*/; do
       | tail -1 | cut -c1-420 | sed 's/^/    /'
     grep -aE "validation loss at iteration" "$newest" 2>/dev/null \
       | sed 's/^/    EVAL_RESULT /'
+    grep -ahE "loss at iteration .* on (validation|test) set" "$d"/train-*.log 2>/dev/null \
+      | tail -4 | sed 's/^/    FINAL_SPLIT_RESULT /'
   fi
   # wandb names an offline run dir offline-run-*, an online one run-*; its size says
   # whether history is actually being recorded.
