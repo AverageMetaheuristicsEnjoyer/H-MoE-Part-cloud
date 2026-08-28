@@ -21,7 +21,7 @@ labels=()
 for item in "${paths[@]}"; do
   label=${item%%:*}
   path=${item#*:}
-  file=$(find "$path" -maxdepth 2 -type f -name 'model_optim_rng.pt' -print -quit 2>/dev/null)
+  file=$(find "$path" -maxdepth 2 -type f -name 'model_optim_rng.pt' -print -quit 2>/dev/null || true)
   if [[ -n $file ]]; then
     labels+=("$label")
     files+=("$file")
