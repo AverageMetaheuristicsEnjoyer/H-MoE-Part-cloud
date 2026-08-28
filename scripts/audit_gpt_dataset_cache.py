@@ -19,7 +19,11 @@ def sha256_file(path):
 def audit_root(label, root):
     rows = []
     for description_path in sorted(root.rglob("*-GPTDataset-train-description.txt")):
-        description = json.loads(description_path.read_text())
+        description_text = description_path.read_text()
+        if not description_text.strip():
+            print(f"incomplete_description={description_path}", flush=True)
+            continue
+        description = json.loads(description_text)
         stem = description_path.name.removesuffix("description.txt")
         paths = {
             name: description_path.with_name(f"{stem}{name}_index.npy")
