@@ -79,6 +79,13 @@ prepare_workdir() {
 
 check_gpu_prerequisites() {
   nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
+  unset PYTHONNOUSERSITE
+  nvidia_lib_path=$(find /home/user/conda/lib/python3.12/site-packages/nvidia \
+    -mindepth 2 -maxdepth 2 -type d -name lib -print 2>/dev/null | paste -sd: - || true)
+  export LD_LIBRARY_PATH=${nvidia_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+  export CUDNN_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cudnn
+  export CURAND_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/curand
+  export NVRTC_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cuda_nvrtc
   for path in "$extension_root/data/train.bin" "$extension_root/data/train.idx" "$extension_root/artifact-manifest.json"; do
     [[ -f $path ]] || { echo "schedule-matrix prerequisite missing: $path" >&2; return 2; }
   done
