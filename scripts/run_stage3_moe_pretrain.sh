@@ -352,7 +352,6 @@ case "$mode" in
       --stage3-routing-audit-path "$routing_audit_path"
       --eval-global-batch-size "${STAGE3_MOE_ROUTING_EVAL_GLOBAL_BATCH:-208}"
       --eval-micro-batch-size "${STAGE3_MOE_ROUTING_EVAL_MICRO_BATCH:-16}"
-      --data-cache-path "${STAGE3_MOE_DATA_CACHE_PATH:?set STAGE3_MOE_DATA_CACHE_PATH}"
     )
     ;;
   eval-downstream)
@@ -389,6 +388,11 @@ case "$mode" in
     ;;
   *) echo "unknown mode: $mode" >&2; exit 2 ;;
 esac
+
+data_cache_args=()
+if [[ -n ${STAGE3_MOE_DATA_CACHE_PATH:-} ]]; then
+  data_cache_args=(--data-cache-path "$STAGE3_MOE_DATA_CACHE_PATH")
+fi
 
 run_id="stage3-$arm-$mode${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
 mkdir -p "$log_root/$run_id" "$trunk_dir"
@@ -529,6 +533,7 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   --train-data-path "$train_data_prefix" \
   --valid-data-path "$valid_data_prefix" \
   --test-data-path "$test_data_prefix" \
+  "${data_cache_args[@]}" \
   --dataloader-type single \
   --num-workers 2 \
   --no-create-attention-mask-in-dataloader \

@@ -214,8 +214,9 @@ PY
 }
 
 export_run_environment() {
-  mkdir -p "$work/triton-cache"
+  mkdir -p "$work/triton-cache" "$work/data-cache"
   export TRITON_CACHE_DIR="$work/triton-cache"
+  export STAGE3_MOE_DATA_CACHE_PATH="$work/data-cache"
   export STAGE3_MOE_MICRO_BATCH=16
   export STAGE3_MOE_PROPAGATE_EXIT=1
   export STAGE3_MOE_CKPT_ROOT="$work/checkpoints"
