@@ -538,7 +538,7 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   --num-workers 2 \
   --no-create-attention-mask-in-dataloader \
   --seed 1234 \
-  --eval-interval 250 \
+  --eval-interval "${STAGE3_MOE_EVAL_INTERVAL:-250}" \
   --eval-iters "${STAGE3_MOE_EVAL_ITERS:-32}" \
   --log-interval "${STAGE3_MOE_LOG_INTERVAL:-10}" \
   --log-throughput \

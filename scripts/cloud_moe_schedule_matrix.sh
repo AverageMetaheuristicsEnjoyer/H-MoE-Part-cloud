@@ -250,8 +250,20 @@ if "successfully loaded checkpoint" not in text or "at iteration 13794" not in t
 for failure in ("Unable to load optimizer", "Unable to load rng state"):
     if failure in text:
         raise RuntimeError(failure)
-if "train:      1201408" not in text:
-    raise RuntimeError("extension phase size is not 5,776 x 208")
+if "train:      208" not in text:
+    raise RuntimeError("one-step preflight did not build exactly one extension batch")
+contracts = {
+    "global_batch_size": "208",
+    "phase_transition_iterations": "[13794]",
+    "train_iters": "13795",
+    "eval_interval": "1",
+    "lr_decay_iters": "19570",
+    "lr_wsd_decay_iters": "3448" if schedule == "short" else "5776",
+}
+for name, expected_value in contracts.items():
+    match = re.search(rf"^\s*{re.escape(name)}\s+\.{{2,}}\s+(.+?)\s*$", text, re.MULTILINE)
+    if match is None or match.group(1) != expected_value:
+        raise RuntimeError(f"runtime contract mismatch for {name}: {None if match is None else match.group(1)!r}")
 matches = re.findall(r"iteration\s+(\d+)/\s*\d+.*?learning rate:\s*([0-9.E+-]+)", text)
 first = next(((int(step), float(lr)) for step, lr in matches if int(step) >= 13795), None)
 if first is None or first[0] != 13795:
@@ -306,6 +318,7 @@ preflight() {
     STAGE3_MOE_SCHEDULE="$smoke_schedule" \
     STAGE3_MOE_RUN_SUFFIX="$suffix" \
     STAGE3_MOE_LOG_INTERVAL=1 \
+    STAGE3_MOE_EVAL_INTERVAL=1 \
     STAGE3_MOE_EVAL_ITERS=1 \
     WANDB_MODE=disabled \
       "$root/scripts/run_stage3_moe_pretrain.sh" "$arm" schedule-tail-smoke

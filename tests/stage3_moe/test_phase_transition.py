@@ -108,6 +108,7 @@ def test_schedule_matrix_tails_use_native_sources_and_one_extension_sequence():
     assert "iter_0013794" in cloud
     assert "STAGE3_MOE_MICRO_BATCH=16" in cloud
     assert 'STAGE3_MOE_CKPT_ROOT="$work/checkpoints"' in cloud
+    assert "STAGE3_MOE_EVAL_INTERVAL=1" in cloud
     assert "extension_local_consumed_samples\": 0" in cloud
     assert "STAGE3_MOE_MATCHED_EVAL_REPEATS=2" in cloud
     assert 'STAGE3_MOE_MATCHED_CANDIDATE_ARM="$arm"' in cloud
