@@ -7,7 +7,8 @@ mode=${1:?usage: cloud_moe_schedule_matrix.sh inventory|preflight|run [ARM] [sho
 arm=${2:-}
 schedule=${3:-}
 
-hf_repo=${STAGE3_MOE_HF_REPO:-AverageMetaheuristicsEnjoyer/hmoe-stage3-checkpoints}
+hf_source_repo=${STAGE3_MOE_HF_SOURCE_REPO:-AverageMetaheuristicsEnjoyer/hmoe-stage3-checkpoints}
+hf_output_repo=${STAGE3_MOE_HF_OUTPUT_REPO:-AverageMetaheuristicsEnjoyer/hmoe-stage3-schedule-matrix}
 hf_source_prefix=${STAGE3_MOE_HF_SOURCE_PREFIX:-1c-mb4}
 hf_output_prefix=${STAGE3_MOE_HF_OUTPUT_PREFIX:-schedule-matrix-adamw-v1}
 token_file=${STAGE3_MOE_HF_TOKEN_FILE:-/home/jovyan/.cache/huggingface/token}
@@ -45,7 +46,7 @@ inventory() {
   local_fp8gemm=/workspace-SR006.nfs3/hmoe-checkpoints/stage3/trunk/adamw_fp8gemm_state_fp32/iter_0013794
   [[ -d $local_fp8gemm ]] && du -sh "$local_fp8gemm" || echo "LOCAL_FP8GEMM_SOURCE_MISSING path=$local_fp8gemm"
   echo "=== HF SOURCE INVENTORY ==="
-  python - "$hf_repo" "$hf_source_prefix" "$token_file" <<'PY'
+  python - "$hf_source_repo" "$hf_source_prefix" "$token_file" <<'PY'
 import os
 import sys
 from pathlib import Path
@@ -102,7 +103,7 @@ check_gpu_prerequisites() {
 
 download_source() {
   mkdir -p "$work/source"
-  python - "$hf_repo" "$hf_source_prefix" "$arm" "$token_file" "$work/source" <<'PY'
+  python - "$hf_source_repo" "$hf_source_prefix" "$arm" "$token_file" "$work/source" <<'PY'
 import os
 import sys
 from pathlib import Path
@@ -142,7 +143,7 @@ PY
 audit_source_checkpoint() {
   source_audit="$work/source-audit.json"
   PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root" \
-    python - "$checkpoint_file" "$arm" "$source_audit" "$hf_repo" "$hf_source_prefix" <<'PY'
+    python - "$checkpoint_file" "$arm" "$source_audit" "$hf_source_repo" "$hf_source_prefix" <<'PY'
 import hashlib
 import json
 import math
@@ -354,7 +355,7 @@ preflight() {
 upload_endpoint() {
   local endpoint=$1
   local archive_json=$2
-  python - "$hf_repo" "$hf_output_prefix" "$arm" "$schedule" "$token_file" "$endpoint" "$archive_json" <<'PY'
+  python - "$hf_output_repo" "$hf_output_prefix" "$arm" "$schedule" "$token_file" "$endpoint" "$archive_json" <<'PY'
 import json
 import os
 import sys
@@ -368,6 +369,9 @@ token = os.environ.get("HF_TOKEN") or (Path(token_path).read_text().strip() if P
 if not token:
     raise RuntimeError("safe HF upload credential is missing")
 api = HfApi(token=token)
+api.create_repo(repo_id=repo, repo_type="model", private=True, exist_ok=True)
+if not api.model_info(repo, repo_type="model").private:
+    raise RuntimeError(f"refusing to archive schedule endpoint to non-private repo: {repo}")
 local = Path(endpoint)
 remote = f"{prefix}/{arm}/{schedule}/iter_0019570"
 files = {str(path.relative_to(local)): path.stat().st_size for path in local.rglob("*") if path.is_file()}
