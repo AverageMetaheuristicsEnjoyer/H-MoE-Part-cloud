@@ -29,7 +29,7 @@ inventory() {
   echo "=== FILESYSTEM INODES ==="
   df -i /tmp /home/jovyan /workspace-SR006.nfs2 /workspace-SR006.nfs3
   echo "=== CREDENTIAL PRESENCE ==="
-  [[ -s $token_file ]] && echo "hf-token-present path=$token_file" || { echo "hf-token-missing path=$token_file"; return 2; }
+  [[ -s $token_file ]] && echo "hf-token-present path=$token_file" || echo "hf-token-missing path=$token_file"
   [[ -s /home/jovyan/.wandb-key || -n ${WANDB_API_KEY:-} ]] && echo "wandb-key-present" || echo "wandb-key-missing"
   echo "=== EXTENSION DATA ==="
   for path in "$extension_root/data/train.bin" "$extension_root/data/train.idx" "$extension_root/artifact-manifest.json"; do
@@ -52,10 +52,10 @@ from pathlib import Path
 from huggingface_hub import HfApi
 
 repo, prefix, token_path = sys.argv[1:]
-token = Path(token_path).read_text().strip()
+token = Path(token_path).read_text().strip() if Path(token_path).is_file() else None
 api = HfApi(token=token)
 info = api.model_info(repo)
-print(f"HF_REPO repo={repo} private={info.private}")
+print(f"HF_REPO repo={repo} private={info.private} access={'authenticated' if token else 'anonymous'}")
 for arm in ("adamw_bf16_state_fp32", "adamw_bf16_state_fp8"):
     remote = f"{prefix}/{arm}/iter_0013794"
     entries = list(api.list_repo_tree(repo, path_in_repo=remote, repo_type="model", recursive=True))
@@ -82,7 +82,6 @@ check_gpu_prerequisites() {
   for path in "$extension_root/data/train.bin" "$extension_root/data/train.idx" "$extension_root/artifact-manifest.json"; do
     [[ -f $path ]] || { echo "schedule-matrix prerequisite missing: $path" >&2; return 2; }
   done
-  [[ -s $token_file ]] || { echo "cached HF token is missing: $token_file" >&2; return 2; }
   available_kb=$(df -Pk /tmp | awk 'END {print $4}')
   [[ $available_kb -ge 25000000 ]] || {
     echo "GPU-local /tmp needs at least 25,000,000 KiB free: available=$available_kb" >&2
@@ -102,7 +101,7 @@ from pathlib import Path
 from huggingface_hub import HfApi, snapshot_download
 
 repo, prefix, arm, token_path, destination = sys.argv[1:]
-token = Path(token_path).read_text().strip()
+token = Path(token_path).read_text().strip() if Path(token_path).is_file() else None
 remote = f"{prefix}/{arm}/iter_0013794"
 snapshot_download(
     repo_id=repo,
@@ -122,7 +121,10 @@ local = Path(destination) / remote
 local_files = {str(path.relative_to(local)): path.stat().st_size for path in local.rglob("*") if path.is_file()}
 if remote_files != local_files:
     raise RuntimeError(f"download size mismatch: remote={remote_files} local={local_files}")
-print(f"HF_DOWNLOAD_VERIFIED arm={arm} files={len(local_files)} bytes={sum(local_files.values())} source={local}")
+print(
+    f"HF_DOWNLOAD_VERIFIED arm={arm} access={'authenticated' if token else 'anonymous'} "
+    f"files={len(local_files)} bytes={sum(local_files.values())} source={local}"
+)
 PY
   [[ -f $checkpoint_file ]] || { echo "downloaded checkpoint file is missing: $checkpoint_file" >&2; return 2; }
   echo 13794 > "$source_dir/latest_checkpointed_iteration.txt"
@@ -419,6 +421,10 @@ run_tail() {
   case "$schedule" in short|long) ;; *) echo "schedule must be short or long" >&2; return 2 ;; esac
   [[ -s /home/jovyan/.wandb-key || -n ${WANDB_API_KEY:-} ]] || {
     echo "online W&B credential is missing" >&2
+    return 2
+  }
+  [[ -s $token_file ]] || {
+    echo "safe HF upload credential is missing: $token_file" >&2
     return 2
   }
   prepare_workdir
