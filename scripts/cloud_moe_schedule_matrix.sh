@@ -29,7 +29,7 @@ inventory() {
   echo "=== FILESYSTEM INODES ==="
   df -i /tmp /home/jovyan /workspace-SR006.nfs2 /workspace-SR006.nfs3
   echo "=== CREDENTIAL PRESENCE ==="
-  [[ -s $token_file ]] && echo "hf-token-present path=$token_file" || echo "hf-token-missing path=$token_file"
+  [[ -s $token_file || -n ${HF_TOKEN:-} ]] && echo "hf-token-present" || echo "hf-token-missing"
   [[ -s /home/jovyan/.wandb-key || -n ${WANDB_API_KEY:-} ]] && echo "wandb-key-present" || echo "wandb-key-missing"
   echo "=== EXTENSION DATA ==="
   for path in "$extension_root/data/train.bin" "$extension_root/data/train.idx" "$extension_root/artifact-manifest.json"; do
@@ -46,13 +46,14 @@ inventory() {
   [[ -d $local_fp8gemm ]] && du -sh "$local_fp8gemm" || echo "LOCAL_FP8GEMM_SOURCE_MISSING path=$local_fp8gemm"
   echo "=== HF SOURCE INVENTORY ==="
   python - "$hf_repo" "$hf_source_prefix" "$token_file" <<'PY'
+import os
 import sys
 from pathlib import Path
 
 from huggingface_hub import HfApi
 
 repo, prefix, token_path = sys.argv[1:]
-token = Path(token_path).read_text().strip() if Path(token_path).is_file() else None
+token = os.environ.get("HF_TOKEN") or (Path(token_path).read_text().strip() if Path(token_path).is_file() else None)
 api = HfApi(token=token)
 info = api.model_info(repo)
 print(f"HF_REPO repo={repo} private={info.private} access={'authenticated' if token else 'anonymous'}")
@@ -102,13 +103,14 @@ check_gpu_prerequisites() {
 download_source() {
   mkdir -p "$work/source"
   python - "$hf_repo" "$hf_source_prefix" "$arm" "$token_file" "$work/source" <<'PY'
+import os
 import sys
 from pathlib import Path
 
 from huggingface_hub import HfApi, snapshot_download
 
 repo, prefix, arm, token_path, destination = sys.argv[1:]
-token = Path(token_path).read_text().strip() if Path(token_path).is_file() else None
+token = os.environ.get("HF_TOKEN") or (Path(token_path).read_text().strip() if Path(token_path).is_file() else None)
 remote = f"{prefix}/{arm}/iter_0013794"
 snapshot_download(
     repo_id=repo,
@@ -143,6 +145,7 @@ audit_source_checkpoint() {
     python - "$checkpoint_file" "$arm" "$source_audit" "$hf_repo" "$hf_source_prefix" <<'PY'
 import hashlib
 import json
+import math
 import sys
 from collections import Counter
 from pathlib import Path
@@ -155,6 +158,8 @@ required = {"model", "optimizer", "opt_param_scheduler", "rng_state"}
 missing = sorted(required - checkpoint.keys())
 if missing:
     raise RuntimeError(f"checkpoint keys missing: {missing}")
+if not checkpoint["optimizer"] or not checkpoint["rng_state"]:
+    raise RuntimeError("optimizer or RNG state is empty")
 iteration = checkpoint.get("iteration")
 consumed = getattr(checkpoint["args"], "consumed_train_samples", None)
 if iteration != 13794 or consumed != 13794 * 208:
@@ -183,6 +188,18 @@ if arm.endswith("_state_fp8") and not float8:
 if arm.endswith("_state_fp32") and float8:
     raise RuntimeError("FP32-state checkpoint contains FP8 optimizer tensors")
 scheduler = checkpoint["opt_param_scheduler"]
+expected_scheduler = {
+    "num_steps": 13794 * 208,
+    "lr_warmup_steps": 173 * 208,
+    "lr_decay_steps": 17242 * 208,
+}
+for key, expected in expected_scheduler.items():
+    if scheduler.get(key) != expected:
+        raise RuntimeError(f"source scheduler mismatch for {key}: {scheduler.get(key)} != {expected}")
+if not math.isclose(scheduler.get("max_lr"), 1.63e-3) or not math.isclose(
+    scheduler.get("min_lr"), 1.63e-4
+):
+    raise RuntimeError("source scheduler LR bounds are wrong")
 record = {
     "arm": arm,
     "hf_repo": hf_repo,
@@ -195,6 +212,8 @@ record = {
     "scheduler_present": True,
     "rng_present": True,
     "scheduler_num_steps": scheduler.get("num_steps"),
+    "scheduler_lr_warmup_steps": scheduler.get("lr_warmup_steps"),
+    "scheduler_lr_decay_steps": scheduler.get("lr_decay_steps"),
     "scheduler_max_lr": scheduler.get("max_lr"),
     "scheduler_min_lr": scheduler.get("min_lr"),
     "router_bias_keys": len(bias_keys),
@@ -337,6 +356,7 @@ upload_endpoint() {
   local archive_json=$2
   python - "$hf_repo" "$hf_output_prefix" "$arm" "$schedule" "$token_file" "$endpoint" "$archive_json" <<'PY'
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -344,7 +364,9 @@ from pathlib import Path
 from huggingface_hub import HfApi
 
 repo, prefix, arm, schedule, token_path, endpoint, output = sys.argv[1:]
-token = Path(token_path).read_text().strip()
+token = os.environ.get("HF_TOKEN") or (Path(token_path).read_text().strip() if Path(token_path).is_file() else None)
+if not token:
+    raise RuntimeError("safe HF upload credential is missing")
 api = HfApi(token=token)
 local = Path(endpoint)
 remote = f"{prefix}/{arm}/{schedule}/iter_0019570"
@@ -446,8 +468,8 @@ run_tail() {
     echo "online W&B credential is missing" >&2
     return 2
   }
-  [[ -s $token_file ]] || {
-    echo "safe HF upload credential is missing: $token_file" >&2
+  [[ -s $token_file || -n ${HF_TOKEN:-} ]] || {
+    echo "safe HF upload credential is missing" >&2
     return 2
   }
   prepare_workdir
@@ -491,6 +513,7 @@ run_tail() {
   STAGE3_MOE_ROUTING_CANDIDATE_LABEL="$label" \
   STAGE3_MOE_ROUTING_CANDIDATE_ITERATION=19570 \
   STAGE3_MOE_ROUTING_OUTPUT_ROOT="$routing_output" \
+  STAGE3_MOE_ROUTING_DATA_CACHE="$work/routing-data-cache" \
   STAGE3_MOE_LOG_ROOT="$log_root" \
     "$root/scripts/cloud_moe_fixed_routing_audit.sh" candidate | tee "$routing_log"
   routing_json="$routing_output/$label.json"

@@ -16,7 +16,7 @@ arm=${STAGE3_MOE_ROUTING_ARM:-adamw_fp8gemm_state_fp32}
 extension_root=${STAGE3_MOE_EXTENSION_ROOT:-/workspace-SR006.nfs2/hmoe-data/fineweb-edu-time-match-extension}
 output_root=${STAGE3_MOE_ROUTING_OUTPUT_ROOT:-/workspace-SR006.nfs2/hmoe-cloud/routing-audit/fixed-extension-v1}
 log_root=${STAGE3_MOE_LOG_ROOT:-/workspace-SR006.nfs2/hmoe-cloud/pretrain}
-data_cache=$output_root/data-cache
+data_cache=${STAGE3_MOE_ROUTING_DATA_CACHE:-$output_root/data-cache}
 stage_dir=/tmp/stage3-fixed-routing-checkpoint
 base_data=/home/jovyan/data/fineweb-edu-gpt2-megatron/data
 trap 'rm -f "$stage_dir"' EXIT

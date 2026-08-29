@@ -113,7 +113,9 @@ def test_schedule_matrix_tails_use_native_sources_and_one_extension_sequence():
     assert "STAGE3_MOE_MATCHED_EVAL_REPEATS=2" in cloud
     assert 'STAGE3_MOE_MATCHED_CANDIDATE_ARM="$arm"' in cloud
     assert 'STAGE3_MOE_ROUTING_ARM="$arm"' in cloud
+    assert 'STAGE3_MOE_ROUTING_DATA_CACHE="$work/routing-data-cache"' in cloud
     assert "/home/jovyan/.cache/huggingface/token" in cloud
+    assert 'os.environ.get("HF_TOKEN")' in cloud
 
 
 def test_fixed_candidate_audits_accept_the_requested_arm():
