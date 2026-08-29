@@ -88,6 +88,42 @@ def test_time_match_stretched_decay_uses_the_whole_extension_phase():
     assert "phase_boundary=13794 sampler_offset_steps=0 decay_steps=5776" in cloud
 
 
+def test_schedule_matrix_tails_use_native_sources_and_one_extension_sequence():
+    launcher = (ROOT / "scripts/run_stage3_moe_pretrain.sh").read_text()
+    cloud = (ROOT / "scripts/cloud_moe_schedule_matrix.sh").read_text()
+
+    block = launcher.split("  schedule-tail|schedule-tail-smoke)", 1)[1].split(
+        "  eval-lm-fixed)", 1
+    )[0]
+    assert "adamw_bf16_state_fp32|adamw_bf16_state_fp8" in block
+    assert "target_iters=19570" in block
+    assert "short) decay_iters=$full_decay_iters" in block
+    assert "long) decay_iters=$((19570 - time_match_branch))" in block
+    assert 'phase_args=(--phase-transition-iterations "$time_match_branch")' in block
+    assert 'train_iters=$((time_match_branch + 1))' in block
+    assert '--save-interval "$target_iters"' in block
+    assert "--no-save-optim --no-save-rng" in block
+
+    assert "1c-mb4" in cloud
+    assert "iter_0013794" in cloud
+    assert "STAGE3_MOE_MICRO_BATCH=16" in cloud
+    assert 'STAGE3_MOE_CKPT_ROOT="$work/checkpoints"' in cloud
+    assert "extension_local_consumed_samples\": 0" in cloud
+    assert "STAGE3_MOE_MATCHED_EVAL_REPEATS=2" in cloud
+    assert 'STAGE3_MOE_MATCHED_CANDIDATE_ARM="$arm"' in cloud
+    assert 'STAGE3_MOE_ROUTING_ARM="$arm"' in cloud
+    assert "/home/jovyan/.cache/huggingface/token" in cloud
+
+
+def test_fixed_candidate_audits_accept_the_requested_arm():
+    matched = (ROOT / "scripts/cloud_moe_matched_lm_eval.sh").read_text()
+    routing = (ROOT / "scripts/cloud_moe_fixed_routing_audit.sh").read_text()
+
+    assert "STAGE3_MOE_MATCHED_CANDIDATE_ARM" in matched
+    assert 'eval_one "$candidate_label" "$candidate_arm"' in matched
+    assert "STAGE3_MOE_ROUTING_ARM" in routing
+
+
 def test_original_data_plateau_control_is_constant_lr_and_reuses_original_cache():
     launcher = (ROOT / "scripts/run_stage3_moe_pretrain.sh").read_text()
     cloud = (ROOT / "scripts/cloud_moe_original_data_plateau_control.sh").read_text()

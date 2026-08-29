@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 3 MoE matched pretraining, WSD trunk-and-branch.
 #
-#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|corrected-time-match|eval-lm-fixed|eval-routing-fixed|eval-downstream
+#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|corrected-time-match|time-match-stretched-decay|schedule-tail|schedule-tail-smoke|eval-lm-fixed|eval-routing-fixed|eval-downstream
 #
 # smoke exercises save and resume; bench measures throughput and peak memory with no
 # checkpoint traffic; resume-bench does the same from the trunk branch point, so the
@@ -291,6 +291,38 @@ case "$mode" in
     stretched_load=${STAGE3_MOE_STRETCHED_LOAD:?set STAGE3_MOE_STRETCHED_LOAD to the checkpoint directory}
     load_args=(--load "$stretched_load" --override-opt_param-scheduler)
     ;;
+  schedule-tail|schedule-tail-smoke)
+    case "$arm" in
+      adamw_bf16_state_fp32|adamw_bf16_state_fp8) ;;
+      *) echo "schedule tails are only defined for the two AdamW BF16-GEMM arms" >&2; exit 2 ;;
+    esac
+    schedule=${STAGE3_MOE_SCHEDULE:?set STAGE3_MOE_SCHEDULE to short or long}
+    case "$schedule" in
+      short) decay_iters=$full_decay_iters ;;
+      long) decay_iters=$((19570 - time_match_branch)) ;;
+      *) echo "unknown schedule tail: $schedule" >&2; exit 2 ;;
+    esac
+    [[ -n ${STAGE3_MOE_TRAIN_DATA_PREFIX:-} ]] || {
+      echo "schedule tails require STAGE3_MOE_TRAIN_DATA_PREFIX" >&2
+      exit 2
+    }
+    target_iters=19570
+    phase_args=(--phase-transition-iterations "$time_match_branch")
+    schedule_load=${STAGE3_MOE_SCHEDULE_LOAD:?set STAGE3_MOE_SCHEDULE_LOAD to the checkpoint directory}
+    load_args=(--load "$schedule_load" --override-opt_param-scheduler)
+    if [[ $mode == schedule-tail-smoke ]]; then
+      train_iters=$((time_match_branch + 1))
+      save_args=()
+      probe_warmup=0
+      probe_measure=1
+    else
+      train_iters=$target_iters
+      schedule_dir="$ckpt_root/schedule-matrix/$schedule/$arm"
+      mkdir -p "$schedule_dir"
+      save_args=(--save "$schedule_dir" --save-interval "$target_iters"
+                 --no-save-optim --no-save-rng)
+    fi
+    ;;
   eval-lm-fixed)
     # Model-only evaluation on the first validation and test windows. --skip-train
     # makes both samplers start at zero instead of restoring consumed_valid_samples.
@@ -397,6 +429,7 @@ if python -c 'import wandb, torch.utils.tensorboard' >/dev/null 2>&1; then
     --tensorboard-dir "$log_root/$run_id/tensorboard"
     --tensorboard-log-interval 10
     --wandb-project "${STAGE3_MOE_WANDB_PROJECT:-hmoe-stage3}"
+    --wandb-entity "${STAGE3_MOE_WANDB_ENTITY:-andrey}"
     --wandb-exp-name "$run_id"
     --wandb-save-dir "$log_root/$run_id"
   )

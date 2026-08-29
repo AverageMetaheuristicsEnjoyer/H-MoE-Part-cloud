@@ -14,6 +14,7 @@ time_match=${STAGE3_MOE_MATCHED_TIME_MATCH:-/home/jovyan/hmoe-checkpoints/stage3
 control=${STAGE3_MOE_MATCHED_CONTROL:-}
 candidate=${STAGE3_MOE_MATCHED_CANDIDATE:-}
 candidate_label=${STAGE3_MOE_MATCHED_CANDIDATE_LABEL:-candidate}
+candidate_arm=${STAGE3_MOE_MATCHED_CANDIDATE_ARM:-adamw_fp8gemm_state_fp32}
 candidate_iteration=${STAGE3_MOE_MATCHED_CANDIDATE_ITERATION:-19570}
 plateau_source=${STAGE3_MOE_MATCHED_PLATEAU_SOURCE:-}
 skip_references=${STAGE3_MOE_MATCHED_SKIP_REFERENCES:-0}
@@ -75,7 +76,7 @@ if [[ -n $plateau_source ]]; then
   eval_one original_plateau_source adamw_fp8gemm_state_fp32 "$plateau_source" 13794 || exit $?
 fi
 if [[ -n $candidate ]]; then
-  eval_one "$candidate_label" adamw_fp8gemm_state_fp32 "$candidate" "$candidate_iteration" || exit $?
+  eval_one "$candidate_label" "$candidate_arm" "$candidate" "$candidate_iteration" || exit $?
 fi
 
 echo "EXIT=0"
