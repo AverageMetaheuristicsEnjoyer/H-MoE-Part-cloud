@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Read-only availability check for the six original final 1C endpoints.
+# Read-only availability check for the six original final and pre-decay 1C checkpoints.
 set -u
 
 failed=0
@@ -16,6 +16,12 @@ for arm in \
     echo "MISSING arm=$arm tracker=${iteration:-none} endpoint=$endpoint"
     failed=1
   fi
+  retained="$base/iter_0013794"
+  if [[ -d $retained ]]; then
+    echo "PREDECAY_OK arm=$arm files=$(find "$retained" -type f | wc -l) bytes=$(du -sb "$retained" | cut -f1)"
+  else
+    echo "PREDECAY_MISSING arm=$arm checkpoint=$retained"
+  fi
 done
 
 for arm in adamw_fp8gemm_state_fp32 muon_fp8gemm_state_fp32; do
@@ -28,6 +34,12 @@ for arm in adamw_fp8gemm_state_fp32 muon_fp8gemm_state_fp32; do
   else
     echo "MISSING arm=$arm tracker=${iteration:-none} endpoint=$endpoint"
     failed=1
+  fi
+  retained="$base/iter_0013794"
+  if [[ -d $retained ]]; then
+    echo "PREDECAY_OK arm=$arm files=$(find "$retained" -type f | wc -l) bytes=$(du -sb "$retained" | cut -f1)"
+  else
+    echo "PREDECAY_MISSING arm=$arm checkpoint=$retained"
   fi
 done
 
