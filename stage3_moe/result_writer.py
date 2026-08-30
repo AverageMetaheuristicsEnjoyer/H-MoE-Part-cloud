@@ -633,7 +633,7 @@ def install_probe(*, arm, result_path, warmup_steps, measured_steps, program_sta
 
     def named_setup(*args, **kwargs):
         model, optimizer, scheduler = original_setup(*args, **kwargs)
-        if probe.arm.endswith("_state_fp8"):
+        if probe.arm.endswith("_state_fp8") and "--skip-train" not in argv:
             assert_fp8_adam_bootstrap(optimizer)
         probe.optimizer = optimizer
         probe.model_chunks = list(model)

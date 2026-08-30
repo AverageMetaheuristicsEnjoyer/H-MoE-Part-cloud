@@ -344,6 +344,17 @@ preflight() {
       "$root/scripts/run_stage3_moe_pretrain.sh" "$arm" schedule-tail-smoke
     validate_smoke "$smoke_schedule"
   done
+  if [[ $arm == *_state_fp8 ]]; then
+    WANDB_MODE=disabled \
+    STAGE3_MOE_MATCHED_SKIP_REFERENCES=1 \
+    STAGE3_MOE_MATCHED_CANDIDATE="$source_dir" \
+    STAGE3_MOE_MATCHED_CANDIDATE_LABEL="$arm-eval-preflight" \
+    STAGE3_MOE_MATCHED_CANDIDATE_ARM="$arm" \
+    STAGE3_MOE_MATCHED_CANDIDATE_ITERATION=13794 \
+    STAGE3_MOE_MATCHED_EVAL_TAG="schedule-matrix-eval-preflight-v1" \
+    STAGE3_MOE_MATCHED_EVAL_REPEATS=1 \
+      "$root/scripts/cloud_moe_matched_lm_eval.sh"
+  fi
   if find "$work/checkpoints" -type d -name 'iter_*' -print -quit | grep -q .; then
     echo "preflight unexpectedly wrote a checkpoint" >&2
     return 2
@@ -370,7 +381,7 @@ if not token:
     raise RuntimeError("safe HF upload credential is missing")
 api = HfApi(token=token)
 api.create_repo(repo_id=repo, repo_type="model", private=True, exist_ok=True)
-if not api.model_info(repo, repo_type="model").private:
+if not api.model_info(repo).private:
     raise RuntimeError(f"refusing to archive schedule endpoint to non-private repo: {repo}")
 local = Path(endpoint)
 remote = f"{prefix}/{arm}/{schedule}/iter_0019570"
@@ -482,7 +493,8 @@ run_tail() {
   audit_source_checkpoint
   export_run_environment
 
-  suffix="schedule-matrix-$schedule-v1"
+  revision=${STAGE3_MOE_SCHEDULE_MATRIX_REVISION:-v1}
+  suffix="schedule-matrix-$schedule-$revision"
   train_run_id="stage3-$arm-schedule-tail-$suffix"
   echo "WANDB_RUN url=https://wandb-radfan.ru/andrey/hmoe-stage3/runs/$train_run_id"
   STAGE3_MOE_SCHEDULE="$schedule" \
@@ -497,8 +509,11 @@ run_tail() {
   endpoint="$endpoint_root/iter_0019570"
   [[ -d $endpoint ]] || { echo "endpoint directory missing: $endpoint" >&2; return 2; }
 
-  mkdir -p "$evidence_root/eval" "$evidence_root/health" "$evidence_root/routing"
+  mkdir -p "$evidence_root/eval" "$evidence_root/health" "$evidence_root/routing" "$evidence_root/archive"
   label="$arm-$schedule"
+  archive_json="$evidence_root/archive/$label-$revision.json"
+  upload_endpoint "$endpoint" "$archive_json"
+
   eval_log="$evidence_root/eval/$label.log"
   WANDB_MODE=disabled \
   STAGE3_MOE_MATCHED_SKIP_REFERENCES=1 \
@@ -506,7 +521,7 @@ run_tail() {
   STAGE3_MOE_MATCHED_CANDIDATE_LABEL="$label" \
   STAGE3_MOE_MATCHED_CANDIDATE_ARM="$arm" \
   STAGE3_MOE_MATCHED_CANDIDATE_ITERATION=19570 \
-  STAGE3_MOE_MATCHED_EVAL_TAG="schedule-matrix-$schedule-v1" \
+  STAGE3_MOE_MATCHED_EVAL_TAG="schedule-matrix-$schedule-$revision" \
   STAGE3_MOE_MATCHED_EVAL_REPEATS=2 \
     "$root/scripts/cloud_moe_matched_lm_eval.sh" | tee "$eval_log"
 
@@ -529,8 +544,6 @@ run_tail() {
     --run "$label:$log_root/$train_run_id:$decay_start" \
     --output "$health_json"
 
-  archive_json="$work/archive.json"
-  upload_endpoint "$endpoint" "$archive_json"
   report="$evidence_root/$label.json"
   write_final_report "$health_json" "$eval_log" "$routing_json" "$archive_json" "$report" "$train_run_id"
 

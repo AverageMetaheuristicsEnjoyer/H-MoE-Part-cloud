@@ -120,6 +120,19 @@ def test_schedule_matrix_tails_use_native_sources_and_one_extension_sequence():
     assert 'os.environ.get("HF_TOKEN")' in cloud
     assert 'private=True' in cloud
 
+    run_tail = cloud.split("run_tail()", 1)[1]
+    assert run_tail.index('upload_endpoint "$endpoint"') < run_tail.index(
+        "STAGE3_MOE_MATCHED_SKIP_REFERENCES=1"
+    )
+    assert "schedule-matrix-eval-preflight-v1" in cloud
+    assert "api.model_info(repo).private" in cloud
+
+
+def test_model_only_eval_does_not_require_an_optimizer_bootstrap():
+    source = (ROOT / "stage3_moe/result_writer.py").read_text()
+
+    assert 'probe.arm.endswith("_state_fp8") and "--skip-train" not in argv' in source
+
 
 def test_fixed_candidate_audits_accept_the_requested_arm():
     matched = (ROOT / "scripts/cloud_moe_matched_lm_eval.sh").read_text()
