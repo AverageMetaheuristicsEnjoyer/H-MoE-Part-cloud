@@ -173,6 +173,8 @@ def install_monarch_model(blocks):
 
     class MonarchMLP(MLP):
         def __init__(self, *args, pg_collection=None, **kwargs):
+            kwargs.pop("is_mtp_layer", None)
+            kwargs.pop("layer_number", None)
             super().__init__(*args, tp_group=pg_collection.tp, **kwargs)
 
     def monarch_spec(config, *args, **kwargs):
