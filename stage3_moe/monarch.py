@@ -48,6 +48,7 @@ class MonarchFactors(torch.nn.Module):
                 parameter.uniform_(-bound, bound)
 
     def forward(self, x, group=0):
+        x = x.to(self.blkdiag1.dtype)
         if x.shape[-1] < self.in_extended:
             x = F.pad(x, (0, self.in_extended - x.shape[-1]))
         output = _butterfly(x, self.blkdiag1[group], self.blkdiag2[group])
