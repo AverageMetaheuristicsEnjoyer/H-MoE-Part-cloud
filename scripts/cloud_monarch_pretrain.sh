@@ -80,6 +80,7 @@ case "$model" in
   hmoe)
     model_args=("${STAGE3_MOE_MODEL_ARGS[@]}" "${STAGE3_MOE_ROUTER_ARGS[@]}")
     train_data=("$base_data/train")
+    data_manifests=("$base_data/../artifact-manifest.json")
     beta2=0.95
     peak_lr=1.63e-3
     min_lr=1.63e-4
@@ -94,6 +95,11 @@ case "$model" in
   dense)
     model_args=("${DENSE_1P028B_MODEL_ARGS[@]}")
     train_data=("$base_data/train" "$old_extension" "$new_extension")
+    data_manifests=(
+      "$base_data/../artifact-manifest.json"
+      "${old_extension%/data/train}/artifact-manifest.json"
+      "${new_extension%/data/train}/artifact-manifest.json"
+    )
     beta2=0.99
     peak_lr=1e-3
     min_lr=0
@@ -193,6 +199,7 @@ if [[ -n ${WANDB_API_KEY:-} ]] && python -c 'import wandb, torch.utils.tensorboa
   export WANDB_RUN_ID=${WANDB_RUN_ID:-$run_id}
   export WANDB_RESUME=${WANDB_RESUME:-allow}
   export WANDB_RUN_GROUP=${WANDB_RUN_GROUP:-monarch-1b-pretrain}
+  export WANDB_TAGS=${WANDB_TAGS:-"monarch,nblocks${blocks},${model},${arm},${parallelism}${WORLD_SIZE}"}
   logger_args=(
     --tensorboard-dir "$log_root/$run_id/tensorboard"
     --tensorboard-log-interval 10
@@ -225,6 +232,10 @@ echo "MONARCH_TRAIN_PROCESS model=$model arm=$arm blocks=$blocks rank=$RANK worl
 echo "MONARCH_TRAIN_CONFIG run_id=$run_id mode=$mode micro_batch=$micro_batch global_batch=$global_batch target_iters=$target_iters train_iters=$train_iters warmup=$warmup_iters decay=$decay_iters lr=$peak_lr min_lr=$min_lr wd=0.1 wandb=$wandb_status"
 echo "MONARCH_DATA train=${train_data[*]} valid=$base_data/development test=$base_data/final cache=$data_cache"
 echo "MONARCH_STORAGE checkpoint=${ckpt_dir:-none} log=$rank_log"
+echo "MONARCH_CODE commit=$(git -C "$root" rev-parse HEAD)"
+for manifest in "${data_manifests[@]}"; do
+  [[ -f $manifest ]] && echo "MONARCH_DATA_MANIFEST $(sha256sum "$manifest")"
+done
 
 set +e
 python "$root/stage3_moe/pretrain_monarch.py" \
