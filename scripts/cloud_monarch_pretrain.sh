@@ -173,8 +173,19 @@ run_id="monarch-${model}-${arm}-n${blocks}-${parallelism}${WORLD_SIZE}-${run_pha
 ckpt_dir="$storage_root/$run_id"
 log_root=${MONARCH_LOG_ROOT:-/home/jovyan/hmoe-cloud/monarch-pretrain}
 rank_log="$log_root/$run_id/rank-${RANK}-$(date -u +%Y%m%dT%H%M%SZ).log"
-data_cache=${MONARCH_DATA_CACHE_PATH:-$storage_root/data-cache/${model}-1c}
-mkdir -p "$log_root/$run_id" "$data_cache"
+data_cache_args=()
+if [[ -n ${MONARCH_DATA_CACHE_PATH:-} ]]; then
+  data_cache=$MONARCH_DATA_CACHE_PATH
+elif [[ $model == dense ]]; then
+  data_cache="$storage_root/data-cache/dense-1c"
+else
+  data_cache=dataset-default
+fi
+mkdir -p "$log_root/$run_id"
+if [[ $data_cache != dataset-default ]]; then
+  mkdir -p "$data_cache"
+  data_cache_args=(--data-cache-path "$data_cache")
+fi
 
 if [[ $mode == reload && ! -s $ckpt_dir/latest_checkpointed_iteration.txt ]]; then
   echo "reload checkpoint is missing: $ckpt_dir/latest_checkpointed_iteration.txt" >&2
@@ -271,7 +282,7 @@ python "$root/stage3_moe/pretrain_monarch.py" \
   --train-data-path "${train_data[@]}" \
   --valid-data-path "$base_data/development" \
   --test-data-path "$base_data/final" \
-  --data-cache-path "$data_cache" \
+  "${data_cache_args[@]}" \
   --dataloader-type single \
   --num-workers 2 \
   --no-create-attention-mask-in-dataloader \
