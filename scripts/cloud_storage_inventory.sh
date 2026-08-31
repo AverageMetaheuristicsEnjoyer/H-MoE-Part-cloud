@@ -9,7 +9,7 @@ df -i "${roots[@]}" 2>&1
 
 for root in "${roots[@]}"; do
   echo "=== usage depth 2: $root ==="
-  du -x -h --max-depth=2 "$root" 2>/dev/null | sort -h | tail -60
+  du -x -h --max-depth=2 "$root" 2>/dev/null | sort -h | tail -60 || true
 
   echo "=== files over 1 GiB: $root ==="
   find "$root" -xdev -type f -size +1G \
@@ -19,5 +19,5 @@ for root in "${roots[@]}"; do
   find "$root" -xdev -maxdepth 7 -type f \
     \( -name 'latest_checkpointed_iteration.txt' -o -name '*manifest*.json' \
        -o -name '*.upload*' -o -name '*tracker*' \) \
-    -printf '%s %TY-%Tm-%TdT%TH:%TM:%TS %p\n' 2>/dev/null | sort | tail -100
+    -printf '%s %TY-%Tm-%TdT%TH:%TM:%TS %p\n' 2>/dev/null | sort | tail -100 || true
 done
