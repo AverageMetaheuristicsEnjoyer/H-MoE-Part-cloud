@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-arm=${1:?usage: cloud_hmoe_monarch_smoke.sh baseline|adamw|muon BLOCKS}
-blocks=${2:?usage: cloud_hmoe_monarch_smoke.sh baseline|adamw|muon BLOCKS}
+arm=${1:?usage: cloud_hmoe_monarch_smoke.sh baseline|adamw|muon BLOCKS [ddp|ep]}
+blocks=${2:?usage: cloud_hmoe_monarch_smoke.sh baseline|adamw|muon BLOCKS [ddp|ep]}
+parallelism=${3:-ddp}
 root=$(cd "$(dirname "$0")/.." && pwd)
 source "$root/configs/stage3-moe-1p029b.sh"
 
@@ -45,10 +46,23 @@ case "$arm" in
   *) echo "unknown arm: $arm" >&2; exit 2 ;;
 esac
 
-gpu_uuid=$(nvidia-smi -i "$LOCAL_RANK" --query-gpu=uuid --format=csv,noheader)
-echo "HMOE_MONARCH_PROCESS rank=$RANK world_size=$WORLD_SIZE local_rank=$LOCAL_RANK pid=$$ gpu_uuid=$gpu_uuid nested_torchrun=false"
+case "$parallelism" in
+  ddp) expert_parallel=1 ;;
+  ep)
+    (( WORLD_SIZE > 1 )) || { echo "EP requires more than one rank" >&2; exit 2; }
+    (( STAGE3_MOE_ROUTED_EXPERTS % WORLD_SIZE == 0 )) || {
+      echo "experts must be divisible by world size" >&2
+      exit 2
+    }
+    expert_parallel=$WORLD_SIZE
+    ;;
+  *) echo "unknown parallelism: $parallelism" >&2; exit 2 ;;
+esac
 
-global_batch=$((2 * WORLD_SIZE))
+gpu_uuid=$(nvidia-smi -i "$LOCAL_RANK" --query-gpu=uuid --format=csv,noheader)
+echo "HMOE_MONARCH_PROCESS rank=$RANK world_size=$WORLD_SIZE local_rank=$LOCAL_RANK pid=$$ gpu_uuid=$gpu_uuid parallelism=$parallelism ep=$expert_parallel nested_torchrun=false"
+
+global_batch=${MONARCH_SMOKE_GLOBAL_BATCH:-$((2 * WORLD_SIZE))}
 python "$runner" \
   "${monarch_args[@]}" \
   "${STAGE3_MOE_MODEL_ARGS[@]}" \
@@ -56,7 +70,7 @@ python "$runner" \
   --tensor-model-parallel-size 1 \
   --pipeline-model-parallel-size 1 \
   --context-parallel-size 1 \
-  --expert-model-parallel-size 1 \
+  --expert-model-parallel-size "$expert_parallel" \
   --expert-tensor-parallel-size 1 \
   --transformer-impl transformer_engine \
   --bf16 \

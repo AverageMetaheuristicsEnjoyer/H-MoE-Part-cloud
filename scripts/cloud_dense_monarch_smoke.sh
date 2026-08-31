@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-arm=${1:?usage: cloud_dense_monarch_smoke.sh adamw|muon BLOCKS}
-blocks=${2:?usage: cloud_dense_monarch_smoke.sh adamw|muon BLOCKS}
+arm=${1:?usage: cloud_dense_monarch_smoke.sh adamw|muon BLOCKS [ddp|pp]}
+blocks=${2:?usage: cloud_dense_monarch_smoke.sh adamw|muon BLOCKS [ddp|pp]}
+parallelism=${3:-ddp}
 root=$(cd "$(dirname "$0")/.." && pwd)
 source "$root/configs/dense-1p028b.sh"
 source "$root/configs/stage3-moe-1p029b.sh"
@@ -33,15 +34,28 @@ case "$arm" in
   *) echo "unknown arm: $arm" >&2; exit 2 ;;
 esac
 
-gpu_uuid=$(nvidia-smi -i "$LOCAL_RANK" --query-gpu=uuid --format=csv,noheader)
-echo "DENSE_MONARCH_PROCESS rank=$RANK world_size=$WORLD_SIZE local_rank=$LOCAL_RANK pid=$$ gpu_uuid=$gpu_uuid nested_torchrun=false"
+case "$parallelism" in
+  ddp) pipeline_parallel=1 ;;
+  pp)
+    (( WORLD_SIZE > 1 )) || { echo "PP requires more than one rank" >&2; exit 2; }
+    (( 16 % WORLD_SIZE == 0 )) || {
+      echo "dense layers must be divisible by world size" >&2
+      exit 2
+    }
+    pipeline_parallel=$WORLD_SIZE
+    ;;
+  *) echo "unknown parallelism: $parallelism" >&2; exit 2 ;;
+esac
 
-global_batch=$((2 * WORLD_SIZE))
+gpu_uuid=$(nvidia-smi -i "$LOCAL_RANK" --query-gpu=uuid --format=csv,noheader)
+echo "DENSE_MONARCH_PROCESS rank=$RANK world_size=$WORLD_SIZE local_rank=$LOCAL_RANK pid=$$ gpu_uuid=$gpu_uuid parallelism=$parallelism pp=$pipeline_parallel nested_torchrun=false"
+
+global_batch=${MONARCH_SMOKE_GLOBAL_BATCH:-$((2 * WORLD_SIZE))}
 python "$root/stage3_moe/pretrain_monarch.py" \
   --monarch-blocks "$blocks" \
   "${DENSE_1P028B_MODEL_ARGS[@]}" \
   --tensor-model-parallel-size 1 \
-  --pipeline-model-parallel-size 1 \
+  --pipeline-model-parallel-size "$pipeline_parallel" \
   --context-parallel-size 1 \
   --transformer-impl transformer_engine \
   --bf16 \

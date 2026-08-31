@@ -1,5 +1,6 @@
 import math
 import os
+from contextlib import nullcontext
 from functools import partial
 
 import torch
@@ -39,12 +40,20 @@ class MonarchFactors(torch.nn.Module):
             shape2 = (groups, blocks, out_block, out_block)
         self.blkdiag1 = torch.nn.Parameter(torch.empty(shape1, dtype=dtype, device=device))
         self.blkdiag2 = torch.nn.Parameter(torch.empty(shape2, dtype=dtype, device=device))
-        for parameter in (self.blkdiag1, self.blkdiag2):
-            parameter.monarch_factor = True
-            parameter.allreduce = not expert
-            fan_in = parameter.shape[-1]
-            bound = math.sqrt(3.0) / math.sqrt(fan_in) * math.sqrt(2.0 / 6.0)
-            with torch.no_grad():
+        rng = nullcontext()
+        if expert:
+            from megatron.core.tensor_parallel.random import (
+                get_cuda_rng_tracker,
+                get_expert_parallel_rng_tracker_name,
+            )
+
+            rng = get_cuda_rng_tracker().fork(get_expert_parallel_rng_tracker_name())
+        with rng, torch.no_grad():
+            for parameter in (self.blkdiag1, self.blkdiag2):
+                parameter.monarch_factor = True
+                parameter.allreduce = not expert
+                fan_in = parameter.shape[-1]
+                bound = math.sqrt(3.0) / math.sqrt(fan_in) * math.sqrt(2.0 / 6.0)
                 parameter.uniform_(-bound, bound)
 
     def forward(self, x, group=0):
@@ -129,12 +138,11 @@ class MonarchRowParallelLinear(_MonarchParallelLinear):
 class MonarchGroupedMLP(torch.nn.Module):
     def __init__(self, num_local_experts, config, submodules=None, pg_collection=None, name=None):
         super().__init__()
-        if config.expert_model_parallel_size != 1:
-            raise ValueError("Monarch expert prototype supports expert parallel size 1")
         blocks = int(os.environ["STAGE3_MONARCH_BLOCKS"])
         device = torch.cuda.current_device()
         hidden = config.hidden_size
         expert_hidden = config.moe_ffn_hidden_size
+        expert_parallel = config.expert_model_parallel_size > 1
         self.config = config
         self.num_local_experts = num_local_experts
         self.fc1 = MonarchFactors(
@@ -144,7 +152,7 @@ class MonarchGroupedMLP(torch.nn.Module):
             num_local_experts,
             config.params_dtype,
             device,
-            expert=False,
+            expert=expert_parallel,
         )
         self.fc2 = MonarchFactors(
             expert_hidden,
@@ -153,7 +161,7 @@ class MonarchGroupedMLP(torch.nn.Module):
             num_local_experts,
             config.params_dtype,
             device,
-            expert=False,
+            expert=expert_parallel,
         )
 
     def forward(self, hidden_states, tokens_per_expert, permuted_probs):
