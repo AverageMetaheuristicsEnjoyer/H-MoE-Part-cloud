@@ -204,10 +204,33 @@ def install_monarch_model(blocks):
 
 
 def install_monarch_muon_contract():
+    from emerging_optimizers.orthogonalized_optimizers import muon_utils
     from megatron.core.optimizer.emerging_optimizers import _EMERGING_OPTIMIZERS
     from megatron.core.optimizer.optimizer_config import ParamKey, ParamPredicate
 
     entry = _EMERGING_OPTIMIZERS["muon"]
+    optimizer_cls = entry.optimizer_cls
+    original_ns_step = muon_utils.newton_schulz_step
+
+    def monarch_ns_step(x, a, b, c, tp_group=None):
+        if x.ndim == 2:
+            return original_ns_step(x, a, b, c, tp_group)
+        aa = x @ x.mT
+        if tp_group is not None:
+            torch.distributed.all_reduce(aa, op=torch.distributed.ReduceOp.SUM, group=tp_group)
+        bb = torch.baddbmm(aa, aa, aa, beta=b, alpha=c)
+        return torch.baddbmm(x, bb, x, beta=a)
+
+    class MonarchFactorMuon(optimizer_cls):
+        def orthogonalize(self, parameter, grad, **kwargs):
+            if not getattr(parameter, "monarch_factor", False):
+                return super().orthogonalize(parameter, grad, **kwargs)
+            shape = grad.shape
+            grad = grad.reshape(-1, shape[-2], shape[-1])
+            return super().orthogonalize(parameter, grad, **kwargs).reshape(shape)
+
+    muon_utils.newton_schulz_step = monarch_ns_step
+    entry.optimizer_cls = MonarchFactorMuon
     for key in list(entry.default_param_overrides):
         predicate = key.predicate
         if isinstance(predicate, ParamPredicate) and predicate.name == "nonlinear_or_embedding":

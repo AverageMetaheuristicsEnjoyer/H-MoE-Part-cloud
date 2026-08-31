@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-arm=${1:?usage: cloud_hmoe_monarch_smoke.sh adamw|muon BLOCKS}
-blocks=${2:?usage: cloud_hmoe_monarch_smoke.sh adamw|muon BLOCKS}
+arm=${1:?usage: cloud_hmoe_monarch_smoke.sh baseline|adamw|muon BLOCKS}
+blocks=${2:?usage: cloud_hmoe_monarch_smoke.sh baseline|adamw|muon BLOCKS}
 root=$(cd "$(dirname "$0")/.." && pwd)
 source "$root/configs/stage3-moe-1p029b.sh"
 
@@ -23,9 +23,24 @@ export CUDNN_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cudnn
 export CURAND_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/curand
 export NVRTC_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cuda_nvrtc
 
+make -s -C "$root/third_party/Megatron-LM/megatron/core/datasets"
+
 case "$arm" in
-  adamw) optimizer=(--optimizer adam) ;;
-  muon) optimizer=(--optimizer muon "${STAGE3_MOE_MUON_ARGS[@]}") ;;
+  baseline)
+    optimizer=(--optimizer adam)
+    runner="$root/third_party/Megatron-LM/pretrain_gpt.py"
+    monarch_args=()
+    ;;
+  adamw)
+    optimizer=(--optimizer adam)
+    runner="$root/stage3_moe/pretrain_monarch.py"
+    monarch_args=(--monarch-blocks "$blocks")
+    ;;
+  muon)
+    optimizer=(--optimizer muon "${STAGE3_MOE_MUON_ARGS[@]}")
+    runner="$root/stage3_moe/pretrain_monarch.py"
+    monarch_args=(--monarch-blocks "$blocks")
+    ;;
   *) echo "unknown arm: $arm" >&2; exit 2 ;;
 esac
 
@@ -33,8 +48,8 @@ gpu_uuid=$(nvidia-smi -i "$LOCAL_RANK" --query-gpu=uuid --format=csv,noheader)
 echo "HMOE_MONARCH_PROCESS rank=$RANK world_size=$WORLD_SIZE local_rank=$LOCAL_RANK pid=$$ gpu_uuid=$gpu_uuid nested_torchrun=false"
 
 global_batch=$((2 * WORLD_SIZE))
-python "$root/stage3_moe/pretrain_monarch.py" \
-  --monarch-blocks "$blocks" \
+python "$runner" \
+  "${monarch_args[@]}" \
   "${STAGE3_MOE_MODEL_ARGS[@]}" \
   "${STAGE3_MOE_ROUTER_ARGS[@]}" \
   --tensor-model-parallel-size 1 \
