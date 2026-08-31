@@ -37,5 +37,45 @@ for top, (count, size) in sorted(totals.items()):
 for entry in sorted(files, key=lambda item: item.path):
     if entry.size > 1 << 30:
         print(f"HF_LARGE_FILE bytes={entry.size} path={entry.path}")
+
+remote_sizes = {entry.path: entry.size for entry in files}
+mappings = (
+    (
+        Path("/workspace-SR006.nfs2/hmoe-checkpoints/stage3-1c-mb4/1c"),
+        "1c-mb4",
+    ),
+    (
+        Path("/workspace-SR006.nfs3/hmoe-checkpoints/stage3/trunk"),
+        "1c-mb16",
+    ),
+    (
+        Path("/workspace-SR006.nfs3/hmoe-checkpoints/stage3-time-match-source"),
+        "1c-mb16",
+    ),
+)
+for root, prefix in mappings:
+    for checkpoint in sorted(root.glob("*/iter_*")):
+        arm = checkpoint.parent.name
+        remote = f"{prefix}/{arm}/{checkpoint.name}"
+        local_files = {
+            str(path.relative_to(checkpoint)): path.stat().st_size
+            for path in checkpoint.rglob("*")
+            if path.is_file()
+        }
+        archived_files = {
+            path.removeprefix(remote + "/"): size
+            for path, size in remote_sizes.items()
+            if path.startswith(remote + "/")
+        }
+        if local_files != archived_files:
+            print(
+                f"LOCAL_ARCHIVE_MISMATCH local={checkpoint} remote={remote} "
+                f"local_files={len(local_files)} remote_files={len(archived_files)}"
+            )
+            continue
+        print(
+            f"LOCAL_ARCHIVE_MATCH local={checkpoint} remote={remote} "
+            f"files={len(local_files)} bytes={sum(local_files.values())}"
+        )
 print("HF_ARCHIVE_VERIFY=pass")
 PY
