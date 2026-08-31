@@ -173,7 +173,7 @@ run_id="monarch-${model}-${arm}-n${blocks}-${parallelism}${WORLD_SIZE}-${run_pha
 ckpt_dir="$storage_root/$run_id"
 log_root=${MONARCH_LOG_ROOT:-/home/jovyan/hmoe-cloud/monarch-pretrain}
 rank_log="$log_root/$run_id/rank-${RANK}-$(date -u +%Y%m%dT%H%M%SZ).log"
-data_cache=${MONARCH_DATA_CACHE_PATH:-$storage_root/data-cache/$run_id}
+data_cache=${MONARCH_DATA_CACHE_PATH:-$storage_root/data-cache/${model}-1c}
 mkdir -p "$log_root/$run_id" "$data_cache"
 
 if [[ $mode == reload && ! -s $ckpt_dir/latest_checkpointed_iteration.txt ]]; then
