@@ -215,11 +215,13 @@ def install_monarch_muon_contract():
     def monarch_ns_step(x, a, b, c, tp_group=None):
         if x.ndim == 2:
             return original_ns_step(x, a, b, c, tp_group)
+        shape = x.shape
+        x = x.reshape(-1, shape[-2], shape[-1])
         aa = x @ x.mT
         if tp_group is not None:
             torch.distributed.all_reduce(aa, op=torch.distributed.ReduceOp.SUM, group=tp_group)
         bb = torch.baddbmm(aa, aa, aa, beta=b, alpha=c)
-        return torch.baddbmm(x, bb, x, beta=a)
+        return torch.baddbmm(x, bb, x, beta=a).reshape(shape)
 
     class MonarchFactorMuon(optimizer_cls):
         def orthogonalize(self, parameter, grad, **kwargs):
