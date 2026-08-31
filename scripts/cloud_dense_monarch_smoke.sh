@@ -14,6 +14,12 @@ source "$root/configs/stage3-moe-1p029b.sh"
 export RANK=${OMPI_COMM_WORLD_RANK:?missing OMPI_COMM_WORLD_RANK}
 export WORLD_SIZE=${OMPI_COMM_WORLD_SIZE:?missing OMPI_COMM_WORLD_SIZE}
 export LOCAL_RANK=${OMPI_COMM_WORLD_LOCAL_RANK:?missing OMPI_COMM_WORLD_LOCAL_RANK}
+local_world_size=${OMPI_COMM_WORLD_LOCAL_SIZE:?missing OMPI_COMM_WORLD_LOCAL_SIZE}
+visible_gpus=$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)
+if (( WORLD_SIZE != local_world_size || local_world_size != visible_gpus )); then
+  echo "one MPI process per visible GPU is required: world=$WORLD_SIZE local_world=$local_world_size visible_gpus=$visible_gpus" >&2
+  exit 2
+fi
 export MASTER_ADDR=${MASTER_ADDR:-$(hostname)}
 export MASTER_PORT=${MASTER_PORT:-29543}
 export PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root"
@@ -48,7 +54,7 @@ case "$parallelism" in
 esac
 
 gpu_uuid=$(nvidia-smi -i "$LOCAL_RANK" --query-gpu=uuid --format=csv,noheader)
-echo "DENSE_MONARCH_PROCESS rank=$RANK world_size=$WORLD_SIZE local_rank=$LOCAL_RANK pid=$$ gpu_uuid=$gpu_uuid parallelism=$parallelism pp=$pipeline_parallel nested_torchrun=false"
+echo "DENSE_MONARCH_PROCESS rank=$RANK world_size=$WORLD_SIZE local_rank=$LOCAL_RANK local_world_size=$local_world_size pid=$$ gpu_uuid=$gpu_uuid parallelism=$parallelism pp=$pipeline_parallel nested_torchrun=false"
 
 global_batch=${MONARCH_SMOKE_GLOBAL_BATCH:-$((2 * WORLD_SIZE))}
 python "$root/stage3_moe/pretrain_monarch.py" \

@@ -66,7 +66,7 @@ case "$model:$parallelism" in
 esac
 
 global_batch=${MONARCH_GLOBAL_BATCH:-208}
-micro_batch=${MONARCH_MICRO_BATCH:-2}
+micro_batch=${MONARCH_MICRO_BATCH:-4}
 data_parallel=$((WORLD_SIZE / tensor_parallel / pipeline_parallel))
 if (( global_batch % (micro_batch * data_parallel) != 0 )); then
   echo "global batch must be divisible by micro batch times data-parallel size" >&2
