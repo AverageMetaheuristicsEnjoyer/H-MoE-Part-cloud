@@ -13,7 +13,7 @@ for root in "${roots[@]}"; do
 
   echo "=== files over 1 GiB: $root ==="
   find "$root" -xdev -type f -size +1G \
-    -printf '%s %u %TY-%Tm-%TdT%TH:%TM:%TS %p\n' 2>/dev/null | sort -nr | head -60
+    -printf '%s %u %TY-%Tm-%TdT%TH:%TM:%TS %p\n' 2>/dev/null | sort -nr | head -60 || true
 
   echo "=== checkpoint and upload markers: $root ==="
   find "$root" -xdev -maxdepth 7 -type f \
