@@ -171,6 +171,10 @@ def install_monarch_model(blocks):
         linear_fc2=MonarchRowParallelLinear,
     )
 
+    class MonarchMLP(MLP):
+        def __init__(self, *args, pg_collection=None, **kwargs):
+            super().__init__(*args, tp_group=pg_collection.tp, **kwargs)
+
     def monarch_spec(config, *args, **kwargs):
         block = original(config, *args, **kwargs)
         for layer_spec in block.layer_specs:
@@ -190,7 +194,7 @@ def install_monarch_model(blocks):
                     ),
                 )
             else:
-                layer.mlp = partial(MLP, submodules=linears)
+                layer.mlp = partial(MonarchMLP, submodules=linears)
         return block
 
     gpt_builders.get_gpt_decoder_block_spec = monarch_spec
