@@ -54,6 +54,22 @@ class MonarchFactors(torch.nn.Module):
         output = _butterfly(x, self.blkdiag1[group], self.blkdiag2[group])
         return output[..., : self.out_features]
 
+    def forward_grouped(self, x):
+        x = x.to(self.blkdiag1.dtype)
+        if x.shape[-1] < self.in_extended:
+            x = F.pad(x, (0, self.in_extended - x.shape[-1]))
+        groups, batch, _ = x.shape
+        blocks, q, p = self.blkdiag1.shape[1:]
+        out_blocks, s, r = self.blkdiag2.shape[1:]
+        x1 = x.reshape(groups, batch, blocks, p).permute(0, 2, 1, 3)
+        y1 = x1 @ self.blkdiag1.transpose(-1, -2)
+        y1 = y1.permute(0, 2, 1, 3).reshape(groups, batch, r, out_blocks)
+        y1 = y1.permute(0, 3, 1, 2)
+        y2 = y1 @ self.blkdiag2.transpose(-1, -2)
+        return y2.permute(0, 2, 3, 1).reshape(groups, batch, s * out_blocks)[
+            ..., : self.out_features
+        ]
+
 
 class _MonarchParallelLinear(torch.nn.Module):
     def __init__(
@@ -141,17 +157,30 @@ class MonarchGroupedMLP(torch.nn.Module):
         )
 
     def forward(self, hidden_states, tokens_per_expert, permuted_probs):
-        counts = tokens_per_expert.tolist()
-        hidden_chunks = hidden_states.split(counts)
-        prob_chunks = permuted_probs.reshape(-1, 1).split(counts)
-        outputs = []
-        for expert, (hidden, probability) in enumerate(zip(hidden_chunks, prob_chunks)):
-            intermediate = self.fc1(hidden, expert)
-            gate, value = intermediate.chunk(2, dim=-1)
-            intermediate = F.silu(gate) * value
-            intermediate = intermediate * probability
-            outputs.append(self.fc2(intermediate, expert))
-        return torch.cat(outputs), None
+        counts = tokens_per_expert.to(device=hidden_states.device, dtype=torch.long)
+        max_tokens = int(counts.max().item())
+        expert = torch.repeat_interleave(
+            torch.arange(self.num_local_experts, device=hidden_states.device), counts
+        )
+        starts = torch.repeat_interleave(counts.cumsum(0) - counts, counts)
+        position = torch.arange(hidden_states.shape[0], device=hidden_states.device) - starts
+        flat_index = expert * max_tokens + position
+
+        padded = hidden_states.new_zeros(
+            self.num_local_experts * max_tokens, hidden_states.shape[-1]
+        )
+        padded = padded.index_copy(0, flat_index, hidden_states).reshape(
+            self.num_local_experts, max_tokens, hidden_states.shape[-1]
+        )
+        probabilities = permuted_probs.new_zeros(self.num_local_experts * max_tokens, 1)
+        probabilities = probabilities.index_copy(
+            0, flat_index, permuted_probs.reshape(-1, 1)
+        ).reshape(self.num_local_experts, max_tokens, 1)
+
+        intermediate = self.fc1.forward_grouped(padded)
+        gate, value = intermediate.chunk(2, dim=-1)
+        output = self.fc2.forward_grouped(F.silu(gate) * value * probabilities)
+        return output.reshape(-1, output.shape[-1]).index_select(0, flat_index), None
 
     def backward_dw(self):
         return None
