@@ -188,13 +188,16 @@ class MonarchGroupedMLP(torch.nn.Module):
 
 def install_monarch_model(blocks):
     import gpt_builders
+    import megatron.training.training as training
     from megatron.core.extensions.transformer_engine_spec_provider import TESpecProvider
     from megatron.core.transformer.mlp import MLP, MLPSubmodules
     from megatron.core.transformer.moe.moe_layer import MoELayer, MoESubmodules
     from megatron.core.transformer.moe.shared_experts import SharedExpertMLP
 
     os.environ["STAGE3_MONARCH_BLOCKS"] = str(blocks)
-    original = gpt_builders.get_gpt_decoder_block_spec
+    original_block_spec = gpt_builders.get_gpt_decoder_block_spec
+    original_dense_spec = gpt_builders.get_gpt_layer_with_transformer_engine_spec
+    original_setup = training.setup_model_and_optimizer
     norm = TESpecProvider().layer_norm(has_residual=True)
     linears = MLPSubmodules(
         linear_fc1=MonarchColumnParallelLinear,
@@ -207,29 +210,61 @@ def install_monarch_model(blocks):
             kwargs.pop("layer_number", None)
             super().__init__(*args, tp_group=pg_collection.tp, **kwargs)
 
-    def monarch_spec(config, *args, **kwargs):
-        block = original(config, *args, **kwargs)
+    def patch_layer(layer_spec):
+        layer = layer_spec.submodules
+        layer.input_layernorm = norm
+        layer.pre_mlp_layernorm = norm
+        layer.self_attention.submodules.linear_qkv = MonarchColumnParallelLinear
+        layer.self_attention.submodules.linear_proj = MonarchRowParallelLinear
+        layer.sharded_state_dict_keys_map = {}
+        mlp = layer.mlp
+        if isinstance(mlp, partial) and mlp.func is MoELayer:
+            layer.mlp = partial(
+                MoELayer,
+                submodules=MoESubmodules(
+                    experts=MonarchGroupedMLP,
+                    shared_experts=partial(SharedExpertMLP, submodules=linears),
+                ),
+            )
+        else:
+            layer.mlp = partial(MonarchMLP, submodules=linears)
+        return layer_spec
+
+    def monarch_block_spec(config, *args, **kwargs):
+        block = original_block_spec(config, *args, **kwargs)
         for layer_spec in block.layer_specs:
-            layer = layer_spec.submodules
-            layer.input_layernorm = norm
-            layer.pre_mlp_layernorm = norm
-            layer.self_attention.submodules.linear_qkv = MonarchColumnParallelLinear
-            layer.self_attention.submodules.linear_proj = MonarchRowParallelLinear
-            layer.sharded_state_dict_keys_map = {}
-            mlp = layer.mlp
-            if isinstance(mlp, partial) and mlp.func is MoELayer:
-                layer.mlp = partial(
-                    MoELayer,
-                    submodules=MoESubmodules(
-                        experts=MonarchGroupedMLP,
-                        shared_experts=partial(SharedExpertMLP, submodules=linears),
-                    ),
-                )
-            else:
-                layer.mlp = partial(MonarchMLP, submodules=linears)
+            patch_layer(layer_spec)
         return block
 
-    gpt_builders.get_gpt_decoder_block_spec = monarch_spec
+    def monarch_dense_spec(*args, **kwargs):
+        return patch_layer(original_dense_spec(*args, **kwargs))
+
+    def setup_and_check(*args, **kwargs):
+        result = original_setup(*args, **kwargs)
+        models = result[0]
+        modules = sum(
+            isinstance(module, MonarchFactors)
+            for model in models
+            for module in model.modules()
+        )
+        factor_parameters = sum(
+            parameter.numel()
+            for model in models
+            for parameter in model.parameters()
+            if getattr(parameter, "monarch_factor", False)
+        )
+        if modules == 0:
+            raise RuntimeError("Monarch model hook did not replace any linear layers")
+        print(
+            f"MONARCH_MODEL_CHECK rank={torch.distributed.get_rank()} "
+            f"modules={modules} factor_parameters={factor_parameters}",
+            flush=True,
+        )
+        return result
+
+    gpt_builders.get_gpt_decoder_block_spec = monarch_block_spec
+    gpt_builders.get_gpt_layer_with_transformer_engine_spec = monarch_dense_spec
+    training.setup_model_and_optimizer = setup_and_check
 
 
 def install_monarch_muon_contract():
