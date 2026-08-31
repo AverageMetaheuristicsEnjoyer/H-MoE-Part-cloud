@@ -1,0 +1,43 @@
+{
+  "dataset": {
+    "repo": "HuggingFaceFW/fineweb_edu_100BT-shuffled",
+    "revision": "be6b2a50d3a9c60d330c45384e80c7863cd3a25d"
+  },
+  "data_phase": {
+    "global_batch_sequences": 208,
+    "max_target_iteration": 48265,
+    "phase_transition_iteration": 0,
+    "required_samples": 4502020,
+    "sequence_length": 2048
+  },
+  "development": [
+    "data/train-00098-of-00100.parquet"
+  ],
+  "development_minimum_indexed_tokens": 8000000,
+  "final": [
+    "data/train-00099-of-00100.parquet"
+  ],
+  "final_minimum_indexed_tokens": 100000000,
+  "previous_training": [
+    "data/train-00000-of-00100.parquet",
+    "data/train-00001-of-00100.parquet",
+    "data/train-00002-of-00100.parquet",
+    "data/train-00003-of-00100.parquet",
+    "data/train-00004-of-00100.parquet",
+    "data/train-00005-of-00100.parquet",
+    "data/train-00006-of-00100.parquet",
+    "data/train-00007-of-00100.parquet",
+    "data/train-00008-of-00100.parquet",
+    "data/train-00009-of-00100.parquet",
+    "data/train-00010-of-00100.parquet",
+    "data/train-00011-of-00100.parquet"
+  ],
+  "schema_version": 2,
+  "training": {
+    "extension_target_indexed_tokens": 9220136922,
+    "path_template": "data/train-{shard:05d}-of-00100.parquet",
+    "selection": "smallest whole-file prefix covering the target",
+    "shard_end_exclusive": 98,
+    "shard_start_inclusive": 12
+  }
+}

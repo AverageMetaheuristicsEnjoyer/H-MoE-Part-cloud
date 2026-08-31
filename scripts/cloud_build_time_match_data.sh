@@ -5,7 +5,8 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 output_root=${STAGE3_MOE_EXTENSION_ROOT:-/workspace-SR006.nfs2/hmoe-data/fineweb-edu-time-match-extension}
 tools_root=${STAGE3_MOE_DATA_TOOLS_ROOT:-/workspace-SR006.nfs2/hmoe-data/tools}
-plan="$root/configs/fineweb_edu_time_match_extension_plan.json"
+plan=${STAGE3_MOE_EXTENSION_PLAN:-$root/configs/fineweb_edu_time_match_extension_plan.json}
+gpt_samples=${STAGE3_MOE_EXTENSION_SAMPLES:-1750112}
 venv="$tools_root/venv"
 datatrove="$tools_root/datatrove"
 megatron="$tools_root/Megatron-LM"
@@ -88,7 +89,7 @@ fi
 python "$root/scripts/gpt_dataset_smoke.py" \
   --megatron-root "$megatron" \
   --data-prefix "$output_root/data/train" \
-  --samples 1750112 \
+  --samples "$gpt_samples" \
   > "$output_root/gpt-dataset-smoke.log"
 cat "$output_root/gpt-dataset-smoke.log"
 "$venv/bin/python" "$root/scripts/finalize_time_match_data.py" \

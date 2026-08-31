@@ -43,9 +43,12 @@ def main():
     merge = json.loads(merge_path.read_bytes())
     training = plan["training"]
     target = training["extension_target_indexed_tokens"]
+    shard_start = training["shard_start_inclusive"]
     shards = [record["shard"] for record in selection["selected_shards"]]
-    if shards != list(range(8, 8 + len(shards))):
-        raise RuntimeError("extension source shards are not consecutive from shard 8")
+    if shards != list(range(shard_start, shard_start + len(shards))):
+        raise RuntimeError(
+            f"extension source shards are not consecutive from shard {shard_start}"
+        )
     if set(plan["previous_training"]) & {
         record["source_path"] for record in selection["selected_shards"]
     }:
@@ -62,14 +65,18 @@ def main():
     if "gpt_dataset=pass" not in smoke_path.read_text(encoding="utf-8"):
         raise RuntimeError("GPTDataset smoke did not pass")
 
-    manifest = {
-        "data_phase": {
+    data_phase = plan.get(
+        "data_phase",
+        {
             "global_batch_sequences": 208,
             "max_target_iteration": 22208,
-            "minimum_indexed_tokens": target,
             "phase_transition_iteration": 13794,
             "sequence_length": 2048,
         },
+    )
+    data_phase["minimum_indexed_tokens"] = target
+    manifest = {
+        "data_phase": data_phase,
         "files": [
             record(train_bin, output_root),
             record(train_idx, output_root),
