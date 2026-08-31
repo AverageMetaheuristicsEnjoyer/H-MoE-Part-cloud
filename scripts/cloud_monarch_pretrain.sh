@@ -228,7 +228,8 @@ else
   wandb_status=offline
 fi
 
-make -s -C "$root/third_party/Megatron-LM/megatron/core/datasets"
+flock "$root/third_party/Megatron-LM/megatron/core/datasets/.helpers-build.lock" \
+  make -s -C "$root/third_party/Megatron-LM/megatron/core/datasets"
 
 save_args=()
 if (( mode_save_interval > 0 )); then

@@ -32,7 +32,8 @@ export CUDNN_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cudnn
 export CURAND_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/curand
 export NVRTC_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cuda_nvrtc
 
-make -s -C "$root/third_party/Megatron-LM/megatron/core/datasets"
+flock "$root/third_party/Megatron-LM/megatron/core/datasets/.helpers-build.lock" \
+  make -s -C "$root/third_party/Megatron-LM/megatron/core/datasets"
 
 case "$arm" in
   adamw) optimizer=(--optimizer adam) ;;
