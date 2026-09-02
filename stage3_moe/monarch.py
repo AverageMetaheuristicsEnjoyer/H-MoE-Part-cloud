@@ -21,10 +21,22 @@ def _butterfly(x, w1, w2):
     return y2.permute(1, 2, 0).reshape(*batch_shape, s * out_blocks)
 
 
-def _packed_layout(counts):
+def _packed_layout(counts, blocks):
     active_experts = torch.nonzero(counts, as_tuple=False).flatten()
     active_counts = counts.index_select(0, active_experts)
-    return active_experts, active_counts.cumsum(0).to(torch.int32)
+    active_starts = active_counts.cumsum(0) - active_counts
+    token_experts = torch.repeat_interleave(
+        torch.arange(active_counts.numel(), device=counts.device), active_counts
+    )
+    positions = torch.arange(token_experts.numel(), device=counts.device) - torch.repeat_interleave(
+        active_starts, active_counts
+    )
+    block_counts = active_counts.repeat_interleave(blocks)
+    block_starts = (block_counts.cumsum(0) - block_counts).reshape(-1, blocks)
+    packed_index = (
+        block_starts.index_select(0, token_experts) + positions[:, None]
+    ).reshape(-1)
+    return active_experts, block_counts.cumsum(0).to(torch.int32), packed_index
 
 
 class MonarchFactors(torch.nn.Module):
@@ -89,34 +101,23 @@ class MonarchFactors(torch.nn.Module):
         x = x.to(self.blkdiag1.dtype)
         if x.shape[-1] < self.in_extended:
             x = F.pad(x, (0, self.in_extended - x.shape[-1]))
-        active_experts, offsets = layout
+        active_experts, offsets, packed_index = layout
         batch = x.shape[0]
         blocks, q, p = self.blkdiag1.shape[1:]
         out_blocks, s, r = self.blkdiag2.shape[1:]
 
-        w1 = self.blkdiag1
-        w2 = self.blkdiag2
-        if active_experts.numel() != self.groups:
-            w1 = w1.index_select(0, active_experts)
-            w2 = w2.index_select(0, active_experts)
+        x1 = x.reshape(batch, blocks, p).reshape(-1, p)
+        x1 = torch.zeros_like(x1).index_copy(0, packed_index, x1)
+        w1 = self.blkdiag1.index_select(0, active_experts).flatten(0, 1)
+        y1 = torch._grouped_mm(x1, w1.transpose(-1, -2), offsets)
+        y1 = y1.index_select(0, packed_index).reshape(batch, blocks, q)
 
-        x1 = x.reshape(batch, blocks, p)
-        y1 = torch.stack(
-            [
-                torch._grouped_mm(x1[:, block], w1[:, block].mT, offsets)
-                for block in range(blocks)
-            ],
-            dim=1,
-        )
-        y1 = y1.reshape(batch, r, out_blocks).transpose(1, 2)
-        y2 = torch.stack(
-            [
-                torch._grouped_mm(y1[:, block].contiguous(), w2[:, block].mT, offsets)
-                for block in range(out_blocks)
-            ],
-            dim=2,
-        )
-        return y2.reshape(batch, s * out_blocks)[..., : self.out_features]
+        y1 = y1.reshape(batch, r, out_blocks).transpose(1, 2).reshape(-1, r)
+        y1 = torch.zeros_like(y1).index_copy(0, packed_index, y1)
+        w2 = self.blkdiag2.index_select(0, active_experts).flatten(0, 1)
+        y2 = torch._grouped_mm(y1, w2.transpose(-1, -2), offsets)
+        y2 = y2.index_select(0, packed_index).reshape(batch, out_blocks, s)
+        return y2.transpose(1, 2).reshape(batch, s * out_blocks)[..., : self.out_features]
 
 
 class _MonarchParallelLinear(torch.nn.Module):
@@ -205,7 +206,7 @@ class MonarchGroupedMLP(torch.nn.Module):
 
     def forward(self, hidden_states, tokens_per_expert, permuted_probs):
         counts = tokens_per_expert.to(device=hidden_states.device, dtype=torch.long)
-        layout = _packed_layout(counts)
+        layout = _packed_layout(counts, self.fc1.blocks)
         intermediate = self.fc1.forward_packed(hidden_states, layout)
         gate, value = intermediate.chunk(2, dim=-1)
         output = self.fc2.forward_packed(
