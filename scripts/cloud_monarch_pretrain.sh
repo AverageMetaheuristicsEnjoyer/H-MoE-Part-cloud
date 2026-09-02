@@ -247,8 +247,16 @@ else
   wandb_status=offline
 fi
 
-flock "$root/third_party/Megatron-LM/megatron/core/datasets/.helpers-build.lock" \
-  make -s -C "$root/third_party/Megatron-LM/megatron/core/datasets"
+if [[ $runtime == node207 ]]; then
+  helper_ext=$("$python_bin" -c 'import sysconfig; print(sysconfig.get_config_var("EXT_SUFFIX"))')
+  helper_includes=$("$python_bin" -m pybind11 --includes)
+  flock "$root/third_party/Megatron-LM/megatron/core/datasets/.helpers-build.lock" \
+    make -s -C "$root/third_party/Megatron-LM/megatron/core/datasets" \
+      "LIBEXT=$helper_ext" "CPPFLAGS=$helper_includes"
+else
+  flock "$root/third_party/Megatron-LM/megatron/core/datasets/.helpers-build.lock" \
+    make -s -C "$root/third_party/Megatron-LM/megatron/core/datasets"
+fi
 
 save_args=()
 if (( mode_save_interval > 0 )); then

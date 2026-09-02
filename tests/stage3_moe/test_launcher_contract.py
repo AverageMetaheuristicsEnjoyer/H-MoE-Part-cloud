@@ -184,6 +184,8 @@ def test_node207_monarch_is_single_gpu_hmoe_only():
     assert 'export RANK=0 WORLD_SIZE=1 LOCAL_RANK=0' in cloud
     assert 'torch.cuda.device_count()' in cloud
     assert 'gpu_index=$CUDA_VISIBLE_DEVICES' in cloud
+    assert '"$python_bin" -m pybind11 --includes' in cloud
+    assert '"LIBEXT=$helper_ext"' in cloud
     assert 'exec "$root/scripts/cloud_monarch_pretrain.sh" hmoe "$arm" "$blocks" ddp "$mode"' in node207
     assert 'export CUDA_VISIBLE_DEVICES=$gpu' in node207
     assert 'torchrun' not in node207
