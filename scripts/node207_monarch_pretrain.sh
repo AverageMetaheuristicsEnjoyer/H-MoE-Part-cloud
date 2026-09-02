@@ -24,10 +24,15 @@ export MONARCH_DATA_CACHE_PATH=${MONARCH_DATA_CACHE_PATH:-$work_root/dataset-cac
 export TMPDIR=${TMPDIR:-$work_root/tmp}
 export TRITON_CACHE_DIR=${TRITON_CACHE_DIR:-$work_root/triton-cache/gpu-$gpu-$arm}
 export TORCHINDUCTOR_CACHE_DIR=${TORCHINDUCTOR_CACHE_DIR:-$work_root/torchinductor-cache/gpu-$gpu-$arm}
+export WANDB_DIR=${WANDB_DIR:-$work_root/wandb}
+export WANDB_CACHE_DIR=${WANDB_CACHE_DIR:-$work_root/wandb-cache}
+export WANDB_CONFIG_DIR=${WANDB_CONFIG_DIR:-$work_root/wandb-config}
+export WANDB_DATA_DIR=${WANDB_DATA_DIR:-$work_root/wandb-data}
 export PATH="$(dirname "$python_bin"):$PATH"
 
 mkdir -p "$MONARCH_CKPT_ROOT" "$MONARCH_LOG_ROOT" "$MONARCH_DATA_CACHE_PATH" \
-  "$TMPDIR" "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR"
+  "$TMPDIR" "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" "$WANDB_DIR" \
+  "$WANDB_CACHE_DIR" "$WANDB_CONFIG_DIR" "$WANDB_DATA_DIR"
 df -h "$work_root"
 df -i "$work_root"
 nvidia-smi -i "$gpu" --query-gpu=index,uuid,name,memory.total,memory.used,utilization.gpu \

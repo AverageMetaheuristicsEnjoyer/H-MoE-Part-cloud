@@ -186,9 +186,11 @@ def test_node207_monarch_is_single_gpu_hmoe_only():
     assert 'gpu_index=$CUDA_VISIBLE_DEVICES' in cloud
     assert '"$python_bin" -m pybind11 --includes' in cloud
     assert '"LIBEXT=$helper_ext"' in cloud
+    assert 'wandb_auth=netrc' in cloud
     assert 'exec "$root/scripts/cloud_monarch_pretrain.sh" hmoe "$arm" "$blocks" ddp "$mode"' in node207
     assert 'export CUDA_VISIBLE_DEVICES=$gpu' in node207
     assert 'torchrun' not in node207
     assert 'MONARCH_BASE_DATA' in node207
+    assert 'WANDB_CACHE_DIR' in node207
     assert 'df -h "$work_root"' in node207
     assert 'df -i "$work_root"' in node207

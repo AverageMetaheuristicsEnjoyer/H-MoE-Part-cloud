@@ -224,8 +224,14 @@ export WANDB_BASE_URL=${WANDB_BASE_URL:-https://wandb-radfan.ru}
 if [[ -z ${WANDB_API_KEY:-} && -f /home/jovyan/.wandb-key ]]; then
   export WANDB_API_KEY=$(< /home/jovyan/.wandb-key)
 fi
+wandb_auth=none
+if [[ -n ${WANDB_API_KEY:-} ]]; then
+  wandb_auth=environment
+elif [[ $runtime == node207 ]] && grep -q 'machine wandb-radfan.ru' /home/user1/.netrc 2>/dev/null; then
+  wandb_auth=netrc
+fi
 logger_args=()
-if [[ -n ${WANDB_API_KEY:-} ]] && "$python_bin" -c 'import wandb, torch.utils.tensorboard' >/dev/null 2>&1; then
+if [[ $wandb_auth != none ]] && "$python_bin" -c 'import wandb, torch.utils.tensorboard' >/dev/null 2>&1; then
   export WANDB_RUN_ID=${WANDB_RUN_ID:-$run_id}
   export WANDB_RESUME=${WANDB_RESUME:-allow}
   export WANDB_RUN_GROUP=${WANDB_RUN_GROUP:-monarch-1b-pretrain}
@@ -238,7 +244,7 @@ if [[ -n ${WANDB_API_KEY:-} ]] && "$python_bin" -c 'import wandb, torch.utils.te
     --wandb-exp-name "$run_id"
     --wandb-save-dir "$log_root/$run_id"
   )
-  wandb_status="online host=$WANDB_BASE_URL"
+  wandb_status="online auth=$wandb_auth host=$WANDB_BASE_URL"
 elif [[ $mode == full ]]; then
   echo "full mode requires W&B credentials and importable wandb/tensorboard" >&2
   exit 2
