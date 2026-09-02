@@ -8,6 +8,8 @@ ROOT = Path(__file__).parents[2]
 LAUNCHER = ROOT / "scripts" / "run_stage3_moe_probe.sh"
 CONFIG = ROOT / "configs" / "stage3-moe-1p029b.sh"
 CLOUD = ROOT / "scripts" / "cloud_moe_fp8_delayed_smoke.sh"
+MONARCH_CLOUD = ROOT / "scripts" / "cloud_monarch_pretrain.sh"
+MONARCH_PPU = ROOT / "scripts" / "ppu_monarch_pretrain.sh"
 
 ARMS = (
     "adamw_bf16_state_fp32",
@@ -172,3 +174,20 @@ def test_outer_launcher_finalizes_wct_and_gpu_postflight():
     assert '"gpu_clean"]["after"] = sys.argv[4] == "1"' in launcher
     assert 'GPU_POSTFLIGHT' in launcher
     assert 'exec "${cmd[@]}"' not in launcher
+
+
+def test_monarch_ppu_launcher_keeps_one_torchrun_rank_per_allocated_device():
+    cloud = MONARCH_CLOUD.read_text()
+    ppu = MONARCH_PPU.read_text()
+
+    assert "runtime=${MONARCH_RUNTIME:-cloud}" in cloud
+    assert "PPU runtime requires torchrun" in cloud
+    assert "WORLD_SIZE != local_world_size || local_world_size != visible_gpus" in cloud
+    assert "MONARCH_RUNTIME=ppu" in ppu
+    assert 'nproc=${#devices[@]}' in ppu
+    assert '--nproc-per-node "$nproc"' in ppu
+    assert "--max-restarts 0" in ppu
+    assert "--no-python" in ppu
+    assert "--bind /bmcp_lvm_fs:/bmcp_lvm_fs" in ppu
+    assert 'df -h "$HOME" "$MONARCH_CKPT_ROOT" "$MONARCH_BASE_DATA"' in ppu
+    assert 'df -i "$HOME" "$MONARCH_CKPT_ROOT" "$MONARCH_BASE_DATA"' in ppu

@@ -10,18 +10,35 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 source "$root/configs/stage3-moe-1p029b.sh"
 source "$root/configs/dense-1p028b.sh"
 
-[[ ${MLSUB_IMAGE:-} == torch28 ]] || { echo "requires --image torch28" >&2; exit 2; }
-[[ -z ${TORCHELASTIC_RUN_ID:-} ]] || { echo "nested torchrun is not allowed" >&2; exit 2; }
 [[ $blocks == 2 || $blocks == 4 ]] || { echo "BLOCKS must be 2 or 4" >&2; exit 2; }
 
-export RANK=${OMPI_COMM_WORLD_RANK:?missing OMPI_COMM_WORLD_RANK}
-export WORLD_SIZE=${OMPI_COMM_WORLD_SIZE:?missing OMPI_COMM_WORLD_SIZE}
-export LOCAL_RANK=${OMPI_COMM_WORLD_LOCAL_RANK:?missing OMPI_COMM_WORLD_LOCAL_RANK}
-local_world_size=${OMPI_COMM_WORLD_LOCAL_SIZE:?missing OMPI_COMM_WORLD_LOCAL_SIZE}
-visible_gpus=$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)
+runtime=${MONARCH_RUNTIME:-cloud}
+python_bin=${MONARCH_PYTHON:-python}
+case "$runtime" in
+  cloud)
+    [[ ${MLSUB_IMAGE:-} == torch28 ]] || { echo "requires --image torch28" >&2; exit 2; }
+    [[ -z ${TORCHELASTIC_RUN_ID:-} ]] || { echo "nested torchrun is not allowed" >&2; exit 2; }
+    export RANK=${OMPI_COMM_WORLD_RANK:?missing OMPI_COMM_WORLD_RANK}
+    export WORLD_SIZE=${OMPI_COMM_WORLD_SIZE:?missing OMPI_COMM_WORLD_SIZE}
+    export LOCAL_RANK=${OMPI_COMM_WORLD_LOCAL_RANK:?missing OMPI_COMM_WORLD_LOCAL_RANK}
+    local_world_size=${OMPI_COMM_WORLD_LOCAL_SIZE:?missing OMPI_COMM_WORLD_LOCAL_SIZE}
+    visible_gpus=$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)
+    launcher=mpi
+    ;;
+  ppu)
+    [[ -n ${TORCHELASTIC_RUN_ID:-} ]] || { echo "PPU runtime requires torchrun" >&2; exit 2; }
+    export RANK=${RANK:?missing RANK}
+    export WORLD_SIZE=${WORLD_SIZE:?missing WORLD_SIZE}
+    export LOCAL_RANK=${LOCAL_RANK:?missing LOCAL_RANK}
+    local_world_size=${LOCAL_WORLD_SIZE:?missing LOCAL_WORLD_SIZE}
+    visible_gpus=$("$python_bin" -c 'import torch; print(torch.cuda.device_count())')
+    launcher=torchrun
+    ;;
+  *) echo "unknown MONARCH_RUNTIME: $runtime" >&2; exit 2 ;;
+esac
 case "$WORLD_SIZE" in 1|2|4) ;; *) echo "WORLD_SIZE must be 1, 2, or 4" >&2; exit 2 ;; esac
 if (( WORLD_SIZE != local_world_size || local_world_size != visible_gpus )); then
-  echo "one MPI process per visible GPU is required: world=$WORLD_SIZE local_world=$local_world_size visible_gpus=$visible_gpus" >&2
+  echo "one trainer process per visible GPU is required: world=$WORLD_SIZE local_world=$local_world_size visible_gpus=$visible_gpus" >&2
   exit 2
 fi
 
@@ -30,12 +47,14 @@ export MASTER_PORT=${MASTER_PORT:-29547}
 export PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root"
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 unset PYTHONNOUSERSITE
-nvidia_lib_path=$(find /home/user/conda/lib/python3.12/site-packages/nvidia \
-  -mindepth 2 -maxdepth 2 -type d -name lib -print 2>/dev/null | paste -sd: - || true)
-export LD_LIBRARY_PATH=${nvidia_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
-export CUDNN_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cudnn
-export CURAND_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/curand
-export NVRTC_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cuda_nvrtc
+if [[ $runtime == cloud ]]; then
+  nvidia_lib_path=$(find /home/user/conda/lib/python3.12/site-packages/nvidia \
+    -mindepth 2 -maxdepth 2 -type d -name lib -print 2>/dev/null | paste -sd: - || true)
+  export LD_LIBRARY_PATH=${nvidia_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+  export CUDNN_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cudnn
+  export CURAND_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/curand
+  export NVRTC_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cuda_nvrtc
+fi
 
 case "$arm" in
   adamw) optimizer=(--optimizer adam) ;;
@@ -206,7 +225,7 @@ if [[ -z ${WANDB_API_KEY:-} && -f /home/jovyan/.wandb-key ]]; then
   export WANDB_API_KEY=$(< /home/jovyan/.wandb-key)
 fi
 logger_args=()
-if [[ -n ${WANDB_API_KEY:-} ]] && python -c 'import wandb, torch.utils.tensorboard' >/dev/null 2>&1; then
+if [[ -n ${WANDB_API_KEY:-} ]] && "$python_bin" -c 'import wandb, torch.utils.tensorboard' >/dev/null 2>&1; then
   export WANDB_RUN_ID=${WANDB_RUN_ID:-$run_id}
   export WANDB_RESUME=${WANDB_RESUME:-allow}
   export WANDB_RUN_GROUP=${WANDB_RUN_GROUP:-monarch-1b-pretrain}
@@ -239,8 +258,12 @@ if (( mode_save_interval > 0 )); then
   fi
 fi
 
-gpu_uuid=$(nvidia-smi -i "$LOCAL_RANK" --query-gpu=uuid --format=csv,noheader)
-echo "MONARCH_TRAIN_PROCESS model=$model arm=$arm blocks=$blocks rank=$RANK world_size=$WORLD_SIZE local_rank=$LOCAL_RANK local_world_size=$local_world_size pid=$$ gpu_uuid=$gpu_uuid parallelism=$parallelism tp=$tensor_parallel pp=$pipeline_parallel ep=$expert_parallel dp=$data_parallel nested_torchrun=false"
+if [[ $runtime == cloud ]]; then
+  device="gpu_uuid=$(nvidia-smi -i "$LOCAL_RANK" --query-gpu=uuid --format=csv,noheader)"
+else
+  device="gpu_name=$("$python_bin" -c 'import os, torch; print(torch.cuda.get_device_name(int(os.environ["LOCAL_RANK"])))')"
+fi
+echo "MONARCH_TRAIN_PROCESS model=$model arm=$arm blocks=$blocks rank=$RANK world_size=$WORLD_SIZE local_rank=$LOCAL_RANK local_world_size=$local_world_size pid=$$ $device parallelism=$parallelism tp=$tensor_parallel pp=$pipeline_parallel ep=$expert_parallel dp=$data_parallel launcher=$launcher nested_torchrun=false"
 echo "MONARCH_TRAIN_CONFIG run_id=$run_id mode=$mode micro_batch=$micro_batch global_batch=$global_batch target_iters=$target_iters train_iters=$train_iters warmup=$warmup_iters decay=$decay_iters lr=$peak_lr min_lr=$min_lr wd=0.1 wandb=$wandb_status"
 echo "MONARCH_DATA train=${train_data[*]} valid=$base_data/development test=$base_data/final cache=$data_cache"
 echo "MONARCH_STORAGE checkpoint=${ckpt_dir:-none} log=$rank_log"
@@ -250,7 +273,7 @@ for manifest in "${data_manifests[@]}"; do
 done
 
 set +e
-python "$root/stage3_moe/pretrain_monarch.py" \
+"$python_bin" "$root/stage3_moe/pretrain_monarch.py" \
   --monarch-blocks "$blocks" \
   "${model_args[@]}" \
   --tensor-model-parallel-size "$tensor_parallel" \
