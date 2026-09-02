@@ -344,8 +344,6 @@ set +e
   --log-interval "${MONARCH_LOG_INTERVAL:-$log_interval}" \
   --log-throughput \
   --timing-log-level 1 \
-  --cross-entropy-loss-fusion \
-  --cross-entropy-fusion-impl native \
   --no-gradient-accumulation-fusion \
   --ckpt-format torch \
   "${profile_args[@]}" \
