@@ -7,16 +7,19 @@ mode=${3:?usage: node207_monarch_pretrain.sh adamw|muon BLOCKS smoke|reload|benc
 gpu=${4:?usage: node207_monarch_pretrain.sh adamw|muon BLOCKS smoke|reload|bench|full GPU}
 root=$(cd "$(dirname "$0")/.." && pwd)
 work_root=${NODE207_MONARCH_ROOT:-/var/tmp/user1-monarch-pretrain}
-python_bin=${MONARCH_PYTHON:-$work_root/venv-py312/bin/python}
+python_bin=${MONARCH_PYTHON:-$root/scripts/node207_monarch_python.sh}
+runtime_python=${NODE207_MONARCH_PYTHON:-$work_root/venv-py312/bin/python}
 
 [[ $gpu =~ ^[0-7]$ ]] || { echo "GPU must be a physical index from 0 to 7" >&2; exit 2; }
 [[ -x $python_bin ]] || { echo "missing Python: $python_bin" >&2; exit 2; }
+[[ -x $runtime_python ]] || { echo "missing Python runtime: $runtime_python" >&2; exit 2; }
 
 export CUDA_VISIBLE_DEVICES=$gpu
 export MASTER_ADDR=127.0.0.1
 export MASTER_PORT=${MASTER_PORT:-$((29600 + gpu))}
 export MONARCH_RUNTIME=node207
 export MONARCH_PYTHON=$python_bin
+export NODE207_MONARCH_PYTHON=$runtime_python
 export MONARCH_BASE_DATA=${MONARCH_BASE_DATA:-$work_root/data/fineweb-edu-gpt2-megatron/data}
 export MONARCH_CKPT_ROOT=${MONARCH_CKPT_ROOT:-$work_root/checkpoints}
 export MONARCH_LOG_ROOT=${MONARCH_LOG_ROOT:-$work_root/logs}
