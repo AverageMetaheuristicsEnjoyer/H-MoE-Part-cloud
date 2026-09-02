@@ -243,6 +243,16 @@ class MonarchGroupedMLP(torch.nn.Module):
         return None
 
 
+class _TorchQKRMSNorm(torch.nn.RMSNorm):
+    def __init__(self, config, hidden_size, eps=1e-5, **kwargs):
+        super().__init__(
+            hidden_size,
+            eps=eps,
+            dtype=config.params_dtype,
+            device=torch.cuda.current_device(),
+        )
+
+
 def install_monarch_model(blocks):
     import gpt_builders
     import megatron.training.training as training
@@ -273,6 +283,8 @@ def install_monarch_model(blocks):
         layer.pre_mlp_layernorm = norm
         layer.self_attention.submodules.linear_qkv = MonarchColumnParallelLinear
         layer.self_attention.submodules.linear_proj = MonarchRowParallelLinear
+        layer.self_attention.submodules.q_layernorm = _TorchQKRMSNorm
+        layer.self_attention.submodules.k_layernorm = _TorchQKRMSNorm
         layer.sharded_state_dict_keys_map = {}
         mlp = layer.mlp
         if isinstance(mlp, partial) and mlp.func is MoELayer:
