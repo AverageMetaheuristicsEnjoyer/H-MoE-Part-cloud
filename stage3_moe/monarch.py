@@ -21,6 +21,18 @@ def _butterfly(x, w1, w2):
     return y2.permute(1, 2, 0).reshape(*batch_shape, s * out_blocks)
 
 
+class _Permutation(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, index, inverse):
+        ctx.save_for_backward(inverse)
+        return x.index_select(0, index)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        (inverse,) = ctx.saved_tensors
+        return grad_output.index_select(0, inverse), None, None
+
+
 def _packed_layout(counts, blocks):
     active_experts = torch.nonzero(counts, as_tuple=False).flatten()
     active_counts = counts.index_select(0, active_experts)
@@ -36,7 +48,12 @@ def _packed_layout(counts, blocks):
     packed_index = (
         block_starts.index_select(0, token_experts) + positions[:, None]
     ).reshape(-1)
-    return active_experts, block_counts.cumsum(0).to(torch.int32), packed_index
+    inverse_index = torch.empty_like(packed_index).scatter_(
+        0,
+        packed_index,
+        torch.arange(packed_index.numel(), device=counts.device),
+    )
+    return active_experts, block_counts.cumsum(0).to(torch.int32), packed_index, inverse_index
 
 
 class MonarchFactors(torch.nn.Module):
@@ -101,22 +118,30 @@ class MonarchFactors(torch.nn.Module):
         x = x.to(self.blkdiag1.dtype)
         if x.shape[-1] < self.in_extended:
             x = F.pad(x, (0, self.in_extended - x.shape[-1]))
-        active_experts, offsets, packed_index = layout
+        active_experts, offsets, packed_index, inverse_index = layout
         batch = x.shape[0]
         blocks, q, p = self.blkdiag1.shape[1:]
         out_blocks, s, r = self.blkdiag2.shape[1:]
 
         x1 = x.reshape(batch, blocks, p).reshape(-1, p)
-        x1 = torch.zeros_like(x1).index_copy(0, packed_index, x1)
-        w1 = self.blkdiag1.index_select(0, active_experts).flatten(0, 1)
+        x1 = _Permutation.apply(x1, inverse_index, packed_index)
+        w1 = self.blkdiag1
+        if active_experts.numel() != self.groups:
+            w1 = w1.index_select(0, active_experts)
+        w1 = w1.flatten(0, 1)
         y1 = torch._grouped_mm(x1, w1.transpose(-1, -2), offsets)
-        y1 = y1.index_select(0, packed_index).reshape(batch, blocks, q)
+        y1 = _Permutation.apply(y1, packed_index, inverse_index).reshape(batch, blocks, q)
 
         y1 = y1.reshape(batch, r, out_blocks).transpose(1, 2).reshape(-1, r)
-        y1 = torch.zeros_like(y1).index_copy(0, packed_index, y1)
-        w2 = self.blkdiag2.index_select(0, active_experts).flatten(0, 1)
+        y1 = _Permutation.apply(y1, inverse_index, packed_index)
+        w2 = self.blkdiag2
+        if active_experts.numel() != self.groups:
+            w2 = w2.index_select(0, active_experts)
+        w2 = w2.flatten(0, 1)
         y2 = torch._grouped_mm(y1, w2.transpose(-1, -2), offsets)
-        y2 = y2.index_select(0, packed_index).reshape(batch, out_blocks, s)
+        y2 = _Permutation.apply(y2, packed_index, inverse_index).reshape(
+            batch, out_blocks, s
+        )
         return y2.transpose(1, 2).reshape(batch, s * out_blocks)[..., : self.out_features]
 
 
