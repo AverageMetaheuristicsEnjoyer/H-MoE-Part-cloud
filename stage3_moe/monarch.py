@@ -243,7 +243,7 @@ class MonarchGroupedMLP(torch.nn.Module):
         return None
 
 
-class _TorchRMSNorm(torch.nn.RMSNorm):
+class _TorchQKRMSNorm(torch.nn.RMSNorm):
     def __init__(self, config, hidden_size, eps=1e-5, **kwargs):
         super().__init__(
             hidden_size,
@@ -256,6 +256,7 @@ class _TorchRMSNorm(torch.nn.RMSNorm):
 def install_monarch_model(blocks):
     import gpt_builders
     import megatron.training.training as training
+    from megatron.core.extensions.transformer_engine_spec_provider import TESpecProvider
     from megatron.core.transformer.mlp import MLP, MLPSubmodules
     from megatron.core.transformer.moe.moe_layer import MoELayer, MoESubmodules
     from megatron.core.transformer.moe.shared_experts import SharedExpertMLP
@@ -264,7 +265,7 @@ def install_monarch_model(blocks):
     original_block_spec = gpt_builders.get_gpt_decoder_block_spec
     original_dense_spec = gpt_builders.get_gpt_layer_with_transformer_engine_spec
     original_setup = training.setup_model_and_optimizer
-    norm = _TorchRMSNorm
+    norm = TESpecProvider().layer_norm(has_residual=True)
     linears = MLPSubmodules(
         linear_fc1=MonarchColumnParallelLinear,
         linear_fc2=MonarchRowParallelLinear,
@@ -282,8 +283,8 @@ def install_monarch_model(blocks):
         layer.pre_mlp_layernorm = norm
         layer.self_attention.submodules.linear_qkv = MonarchColumnParallelLinear
         layer.self_attention.submodules.linear_proj = MonarchRowParallelLinear
-        layer.self_attention.submodules.q_layernorm = _TorchRMSNorm
-        layer.self_attention.submodules.k_layernorm = _TorchRMSNorm
+        layer.self_attention.submodules.q_layernorm = _TorchQKRMSNorm
+        layer.self_attention.submodules.k_layernorm = _TorchQKRMSNorm
         layer.sharded_state_dict_keys_map = {}
         mlp = layer.mlp
         if isinstance(mlp, partial) and mlp.func is MoELayer:
