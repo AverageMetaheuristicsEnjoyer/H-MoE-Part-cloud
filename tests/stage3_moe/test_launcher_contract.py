@@ -10,6 +10,7 @@ CONFIG = ROOT / "configs" / "stage3-moe-1p029b.sh"
 CLOUD = ROOT / "scripts" / "cloud_moe_fp8_delayed_smoke.sh"
 MONARCH_CLOUD = ROOT / "scripts" / "cloud_monarch_pretrain.sh"
 MONARCH_PPU = ROOT / "scripts" / "ppu_monarch_pretrain.sh"
+MONARCH_PPU_DATA = ROOT / "scripts" / "ppu_prepare_monarch_data.sh"
 
 ARMS = (
     "adamw_bf16_state_fp32",
@@ -191,3 +192,13 @@ def test_monarch_ppu_launcher_keeps_one_torchrun_rank_per_allocated_device():
     assert "--bind /bmcp_lvm_fs:/bmcp_lvm_fs" in ppu
     assert 'df -h "$HOME" "$MONARCH_CKPT_ROOT" "$MONARCH_BASE_DATA"' in ppu
     assert 'df -i "$HOME" "$MONARCH_CKPT_ROOT" "$MONARCH_BASE_DATA"' in ppu
+
+
+def test_monarch_ppu_data_build_uses_disjoint_extension_plans():
+    data = MONARCH_PPU_DATA.read_text()
+
+    assert "fineweb_edu_time_match_extension_plan.json" in data
+    assert "fineweb_edu_dense_1c_extension_plan.json" in data
+    assert "1750112" in data
+    assert "4502020" in data
+    assert "--bind /bmcp_lvm_fs:/bmcp_lvm_fs" in data

@@ -29,8 +29,13 @@ PY
 }
 
 echo "=== PREFLIGHT ==="
-df -h /workspace-SR006.nfs2 /workspace-SR006.nfs3 /home/jovyan 2>&1
-df -i /workspace-SR006.nfs2 /workspace-SR006.nfs3 /home/jovyan 2>&1
+if [[ ${MONARCH_RUNTIME:-cloud} == ppu ]]; then
+  df -h "$HOME" "$(dirname "$output_root")" "$(dirname "$tools_root")" 2>&1
+  df -i "$HOME" "$(dirname "$output_root")" "$(dirname "$tools_root")" 2>&1
+else
+  df -h /workspace-SR006.nfs2 /workspace-SR006.nfs3 /home/jovyan 2>&1
+  df -i /workspace-SR006.nfs2 /workspace-SR006.nfs3 /home/jovyan 2>&1
+fi
 mkdir -p "$tools_root" "$output_root"
 cache_root="$tools_root/cache"
 mkdir -p "$cache_root/huggingface" "$cache_root/xdg"
@@ -38,11 +43,13 @@ export HF_HOME="$cache_root/huggingface"
 export HF_HUB_CACHE="$HF_HOME/hub"
 export XDG_CACHE_HOME="$cache_root/xdg"
 unset PYTHONNOUSERSITE
-nvidia_lib_path=$(find /home/user/conda/lib/python3.12/site-packages/nvidia \
-  /home/jovyan/.local-torch28/lib/python3.12/site-packages/nvidia \
-  -mindepth 2 -maxdepth 2 -type d -name lib -print 2>/dev/null | paste -sd: - || true)
-export LD_LIBRARY_PATH=${nvidia_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
-export CUDNN_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cudnn
+if [[ ${MONARCH_RUNTIME:-cloud} == cloud ]]; then
+  nvidia_lib_path=$(find /home/user/conda/lib/python3.12/site-packages/nvidia \
+    /home/jovyan/.local-torch28/lib/python3.12/site-packages/nvidia \
+    -mindepth 2 -maxdepth 2 -type d -name lib -print 2>/dev/null | paste -sd: - || true)
+  export LD_LIBRARY_PATH=${nvidia_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+  export CUDNN_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cudnn
+fi
 
 if [[ -f $output_root/artifact-manifest.json ]]; then
   python "$root/scripts/finalize_time_match_data.py" --output-root "$output_root" --plan "$plan"
