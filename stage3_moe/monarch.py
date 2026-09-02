@@ -114,9 +114,9 @@ class MonarchFactors(torch.nn.Module):
                 torch._grouped_mm(y1[:, block].contiguous(), w2[:, block].mT, offsets)
                 for block in range(out_blocks)
             ],
-            dim=1,
+            dim=2,
         )
-        return y2.transpose(1, 2).reshape(batch, s * out_blocks)[..., : self.out_features]
+        return y2.reshape(batch, s * out_blocks)[..., : self.out_features]
 
 
 class _MonarchParallelLinear(torch.nn.Module):
