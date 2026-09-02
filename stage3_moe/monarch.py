@@ -103,7 +103,7 @@ class MonarchFactors(torch.nn.Module):
         x1 = x.reshape(batch, blocks, p)
         y1 = torch.stack(
             [
-                torch._grouped_mm(x1[:, block].contiguous(), w1[:, block].mT, offsets)
+                torch._grouped_mm(x1[:, block], w1[:, block].mT, offsets)
                 for block in range(blocks)
             ],
             dim=1,
