@@ -7,7 +7,7 @@ mode=${3:?usage: node207_monarch_pretrain.sh adamw|muon BLOCKS smoke|reload|benc
 gpu=${4:?usage: node207_monarch_pretrain.sh adamw|muon BLOCKS smoke|reload|bench|full GPU}
 root=$(cd "$(dirname "$0")/.." && pwd)
 work_root=${NODE207_MONARCH_ROOT:-/var/tmp/user1-monarch-pretrain}
-python_bin=${MONARCH_PYTHON:-$work_root/venv/bin/python}
+python_bin=${MONARCH_PYTHON:-$work_root/venv-py312/bin/python}
 
 [[ $gpu =~ ^[0-7]$ ]] || { echo "GPU must be a physical index from 0 to 7" >&2; exit 2; }
 [[ -x $python_bin ]] || { echo "missing Python: $python_bin" >&2; exit 2; }

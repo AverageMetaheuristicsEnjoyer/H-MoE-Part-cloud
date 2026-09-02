@@ -194,6 +194,7 @@ def test_node207_monarch_is_single_gpu_hmoe_only():
     assert 'export CUDA_VISIBLE_DEVICES=$gpu' in node207
     assert 'torchrun' not in node207
     assert 'MONARCH_BASE_DATA' in node207
+    assert 'venv-py312/bin/python' in node207
     assert 'WANDB_CACHE_DIR' in node207
     assert 'df -h "$work_root"' in node207
     assert 'df -i "$work_root"' in node207
