@@ -278,6 +278,15 @@ if (( mode_save_interval > 0 )); then
     save_args+=(--save-retain-interval "$retain_interval")
   fi
 fi
+profile_args=()
+if [[ ${MONARCH_PROFILE:-0} == 1 ]]; then
+  profile_args=(
+    --profile
+    --use-pytorch-profiler
+    --profile-step-start 2
+    --profile-step-end 3
+  )
+fi
 
 gpu_index=$LOCAL_RANK
 [[ $runtime == node207 ]] && gpu_index=$CUDA_VISIBLE_DEVICES
@@ -337,6 +346,7 @@ set +e
   --timing-log-level 1 \
   --no-gradient-accumulation-fusion \
   --ckpt-format torch \
+  "${profile_args[@]}" \
   "${logger_args[@]}" \
   "${save_args[@]}" \
   "${scheduler_override[@]}" \
