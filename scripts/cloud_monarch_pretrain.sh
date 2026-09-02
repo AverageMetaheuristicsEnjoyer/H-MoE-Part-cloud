@@ -54,6 +54,13 @@ if [[ $runtime == cloud ]]; then
   export NVRTC_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cuda_nvrtc
 else
   export PYTHONNOUSERSITE=1
+  nvidia_root=$("$python_bin" -c 'import site; from pathlib import Path; print(next(Path(path) / "nvidia" for path in site.getsitepackages() if (Path(path) / "nvidia").is_dir()))')
+  nvidia_lib_path=$(find "$nvidia_root" -mindepth 2 -maxdepth 2 -type d -name lib -print | paste -sd: -)
+  export LD_LIBRARY_PATH=${nvidia_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+  export CUDNN_HOME=$nvidia_root/cudnn
+  export CURAND_HOME=$nvidia_root/curand
+  export NVRTC_HOME=$nvidia_root/cuda_nvrtc
+  export NVTE_FRAMEWORK=pytorch
 fi
 
 case "$arm" in
