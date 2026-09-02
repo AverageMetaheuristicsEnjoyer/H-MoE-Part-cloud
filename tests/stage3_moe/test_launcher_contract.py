@@ -8,6 +8,8 @@ ROOT = Path(__file__).parents[2]
 LAUNCHER = ROOT / "scripts" / "run_stage3_moe_probe.sh"
 CONFIG = ROOT / "configs" / "stage3-moe-1p029b.sh"
 CLOUD = ROOT / "scripts" / "cloud_moe_fp8_delayed_smoke.sh"
+MONARCH_CLOUD = ROOT / "scripts" / "cloud_monarch_pretrain.sh"
+MONARCH_NODE207 = ROOT / "scripts" / "node207_monarch_pretrain.sh"
 
 ARMS = (
     "adamw_bf16_state_fp32",
@@ -172,3 +174,19 @@ def test_outer_launcher_finalizes_wct_and_gpu_postflight():
     assert '"gpu_clean"]["after"] = sys.argv[4] == "1"' in launcher
     assert 'GPU_POSTFLIGHT' in launcher
     assert 'exec "${cmd[@]}"' not in launcher
+
+
+def test_node207_monarch_is_single_gpu_hmoe_only():
+    cloud = MONARCH_CLOUD.read_text()
+    node207 = MONARCH_NODE207.read_text()
+
+    assert 'MONARCH_RUNTIME:-cloud' in cloud
+    assert 'export RANK=0 WORLD_SIZE=1 LOCAL_RANK=0' in cloud
+    assert 'torch.cuda.device_count()' in cloud
+    assert 'gpu_index=$CUDA_VISIBLE_DEVICES' in cloud
+    assert 'exec "$root/scripts/cloud_monarch_pretrain.sh" hmoe "$arm" "$blocks" ddp "$mode"' in node207
+    assert 'export CUDA_VISIBLE_DEVICES=$gpu' in node207
+    assert 'torchrun' not in node207
+    assert 'MONARCH_BASE_DATA' in node207
+    assert 'df -h "$work_root"' in node207
+    assert 'df -i "$work_root"' in node207
