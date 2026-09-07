@@ -167,7 +167,7 @@ run_resume() {
     echo "GATE_FAIL arm=$arm phase=verify reason=no_iteration_50_load"
     return 1
   fi
-  if ! grep -q 'number of nan iterations: 0' "$run_dir"/train-*.log; then
+  if ! grep -qE 'number of nan iterations: +0' "$run_dir"/train-*.log; then
     echo "GATE_FAIL arm=$arm phase=verify reason=nan_summary_missing"
     return 1
   fi
@@ -213,7 +213,7 @@ run_calibration() {
     echo "GATE_FAIL arm=$arm gate=$launcher_mode recipe=$label tracker=$iteration expected=$target"
     return 1
   fi
-  if ! grep -q 'number of nan iterations: 0' "$run_dir"/train-*.log; then
+  if ! grep -qE 'number of nan iterations: +0' "$run_dir"/train-*.log; then
     echo "GATE_FAIL arm=$arm gate=$launcher_mode recipe=$label reason=nan_summary_missing"
     return 1
   fi

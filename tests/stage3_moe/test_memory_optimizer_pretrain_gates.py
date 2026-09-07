@@ -43,4 +43,5 @@ def test_cloud_gate_preregisters_only_the_three_frugal_recipes():
     assert "slimadam_bf16_state_fp32 matched 1.63e-3 1.63e-4 0.95 235" in gate
     assert 'routing["minimum_to_mean"] < 0.1' in gate
     assert 'routing["coefficient_of_variation"] >= 0.2' in gate
+    assert "number of nan iterations: +0" in gate
     assert "GATE_CKPT_REMOVED" in gate
