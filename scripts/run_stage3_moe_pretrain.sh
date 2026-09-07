@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 3 MoE matched pretraining, WSD trunk-and-branch.
 #
-#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|corrected-time-match|time-match-stretched-decay|schedule-tail|schedule-tail-smoke|eval-lm-fixed|eval-routing-fixed|eval-downstream
+#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|resume-gate|stability|lr-screen|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|corrected-time-match|time-match-stretched-decay|schedule-tail|schedule-tail-smoke|eval-lm-fixed|eval-routing-fixed|eval-downstream
 #
 # smoke exercises save and resume; bench measures throughput and peak memory with no
 # checkpoint traffic; resume-bench does the same from the trunk branch point, so the
@@ -54,6 +54,9 @@ probe_warmup=20
 probe_measure=100
 optimizer_args=()
 [[ $optimizer == muon ]] && optimizer_args=("${STAGE3_MOE_MUON_ARGS[@]}")
+learning_rate=${STAGE3_MOE_LR:-1.63e-3}
+min_learning_rate=${STAGE3_MOE_MIN_LR:-1.63e-4}
+adam_beta2=${STAGE3_MOE_ADAM_BETA2:-0.95}
 
 trunk_dir="$ckpt_root/trunk/$arm"
 decay_dir="$ckpt_root/1p2b/$arm"
@@ -135,6 +138,52 @@ case "$mode" in
     load_args=(--load "$smoke_dir")
     probe_warmup=5
     probe_measure=10
+    ;;
+  resume-gate)
+    case "$arm" in
+      frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) echo "resume-gate is only defined for Frugal CoordAdamW and SlimAdam" >&2; exit 2 ;;
+    esac
+    train_iters=52
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    resume_dir="$ckpt_root/resume-gate/$arm${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
+    mkdir -p "$resume_dir"
+    save_args=(--save "$resume_dir" --save-interval 50)
+    load_args=(--load "$resume_dir")
+    if [[ ! -f $resume_dir/latest_checkpointed_iteration.txt ]]; then
+      exit_args=(--exit-interval 50)
+    fi
+    probe_warmup=0
+    probe_measure=2
+    ;;
+  stability)
+    case "$arm" in
+      frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) echo "stability is only defined for Frugal CoordAdamW and SlimAdam" >&2; exit 2 ;;
+    esac
+    train_iters=235
+    target_iters=$train_iters
+    decay_iters=47
+    warmup_iters=2
+    gate_dir="$ckpt_root/stability/$arm${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
+    mkdir -p "$gate_dir"
+    save_args=(--save "$gate_dir" --save-interval "$train_iters")
+    load_args=()
+    ;;
+  lr-screen)
+    [[ $arm == frugal_coord_bf16_state_fp32 ]] || {
+      echo "lr-screen is only defined for Frugal CoordAdamW" >&2
+      exit 2
+    }
+    train_iters=587
+    target_iters=$train_iters
+    decay_iters=117
+    warmup_iters=6
+    gate_dir="$ckpt_root/lr-screen/$arm${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
+    mkdir -p "$gate_dir"
+    save_args=(--save "$gate_dir" --save-interval "$train_iters")
+    load_args=()
     ;;
   bench)
     # Throughput and peak memory only. No checkpoint traffic, so an NFS write never
@@ -493,6 +542,7 @@ echo "ARM=$arm MODE=$mode GPUS=$gpu_count micro_batch=$micro_batch global_batch=
 echo "DATA train=$train_data_prefix valid=$valid_data_prefix test=$test_data_prefix"
 echo "FP8_DEQUANT_CHUNK=${STAGE3_MOE_FP8_DEQUANT_CHUNK:-0} (0 = every state in FP32 at once)"
 echo "SCHEDULE target_iters=$target_iters decay_iters=$decay_iters warmup=$warmup_iters train_iters=$train_iters"
+echo "OPTIMIZER_HPARAMS lr=$learning_rate min_lr=$min_learning_rate beta1=0.9 beta2=$adam_beta2 weight_decay=0.1"
 echo "CKPT save=${save_args[*]} load=${load_args[*]}"
 
 train_log="$log_root/$run_id/train-$(date -u +%Y%m%dT%H%M%SZ).log"
@@ -515,9 +565,9 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   --expert-tensor-parallel-size 1 \
   --transformer-impl transformer_engine \
   --bf16 \
-  --adam-beta1 0.9 --adam-beta2 0.95 --adam-eps 1e-8 \
-  --lr 1.63e-3 \
-  --min-lr 1.63e-4 \
+  --adam-beta1 0.9 --adam-beta2 "$adam_beta2" --adam-eps 1e-8 \
+  --lr "$learning_rate" \
+  --min-lr "$min_learning_rate" \
   --lr-decay-style WSD \
   --lr-decay-iters "$target_iters" \
   --lr-wsd-decay-iters "$decay_iters" \
