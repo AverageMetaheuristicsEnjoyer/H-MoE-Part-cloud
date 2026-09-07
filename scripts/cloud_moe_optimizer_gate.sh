@@ -32,13 +32,27 @@ if (( available_kb < 20971520 )); then
   exit 0
 fi
 
-echo "=== ALLOCATED RUNTIME ==="
-nvidia-smi --query-gpu=name,uuid,compute_cap,memory.total,driver_version --format=csv,noheader
 unset PYTHONNOUSERSITE
 nvidia_lib_path=$(find /home/user/conda/lib/python3.12/site-packages/nvidia \
   -mindepth 2 -maxdepth 2 -type d -name lib -print 2>/dev/null | paste -sd: - || true)
 export LD_LIBRARY_PATH=${nvidia_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+export CUDNN_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cudnn
+export CURAND_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/curand
+export NVRTC_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cuda_nvrtc
 export PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root"
+
+echo "=== CPU CONTRACT ==="
+python -m pytest -q \
+  "$root/tests/stage3_moe/test_memory_efficient_optimizers.py" \
+  "$root/tests/stage3_moe/test_memory_optimizer_pretrain_gates.py"
+if [[ $? -ne 0 ]]; then
+  echo "GATE_FAIL reason=cpu_contract"
+  echo "EXIT=1"
+  exit 0
+fi
+
+echo "=== ALLOCATED RUNTIME ==="
+nvidia-smi --query-gpu=name,uuid,compute_cap,memory.total,driver_version --format=csv,noheader
 python - <<'PY'
 import torch
 import transformer_engine
