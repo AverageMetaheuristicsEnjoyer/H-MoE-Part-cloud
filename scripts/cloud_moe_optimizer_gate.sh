@@ -6,6 +6,7 @@ set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
 mode=${1:?usage: cloud_moe_optimizer_gate.sh resume|stability|lr-screen [RECIPE]}
 recipe=${2:-}
+gate_arm=${STAGE3_MOE_GATE_ARM:-both}
 ckpt_root=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs2/hmoe-checkpoints/frugal-slimadam-gates}
 log_root=${STAGE3_MOE_LOG_ROOT:-/workspace-SR006.nfs2/hmoe-cloud/pretrain}
 export STAGE3_MOE_CKPT_ROOT=$ckpt_root
@@ -237,19 +238,27 @@ status=0
 case "$mode" in
   resume)
     [[ -z $recipe ]] || status=1
-    if (( status == 0 )); then
+    case "$gate_arm" in
+      both|frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) status=1 ;;
+    esac
+    if (( status == 0 )) && [[ $gate_arm == both || $gate_arm == frugal_coord_bf16_state_fp32 ]]; then
       run_resume frugal_coord_bf16_state_fp32 || status=1
     fi
-    if (( status == 0 )); then
+    if (( status == 0 )) && [[ $gate_arm == both || $gate_arm == slimadam_bf16_state_fp32 ]]; then
       run_resume slimadam_bf16_state_fp32 || status=1
     fi
     ;;
   stability)
     [[ -z $recipe ]] || status=1
-    if (( status == 0 )); then
+    case "$gate_arm" in
+      both|frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) status=1 ;;
+    esac
+    if (( status == 0 )) && [[ $gate_arm == both || $gate_arm == frugal_coord_bf16_state_fp32 ]]; then
       run_calibration stability frugal_coord_bf16_state_fp32 matched 1.63e-3 1.63e-4 0.95 235 || status=1
     fi
-    if (( status == 0 )); then
+    if (( status == 0 )) && [[ $gate_arm == both || $gate_arm == slimadam_bf16_state_fp32 ]]; then
       run_calibration stability slimadam_bf16_state_fp32 matched 1.63e-3 1.63e-4 0.95 235 || status=1
     fi
     ;;
@@ -271,10 +280,10 @@ case "$mode" in
 esac
 
 if (( status != 0 )); then
-  echo "GATE_FAIL mode=$mode recipe=${recipe:-none}"
+  echo "GATE_FAIL mode=$mode recipe=${recipe:-none} arm=$gate_arm"
   echo "EXIT=1"
 else
-  echo "GATE_PASS mode=$mode recipe=${recipe:-none}"
+  echo "GATE_PASS mode=$mode recipe=${recipe:-none} arm=$gate_arm"
   echo "EXIT=0"
 fi
 exit 0
