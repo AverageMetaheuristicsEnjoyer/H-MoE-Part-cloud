@@ -153,14 +153,24 @@ def optimizer_state_ledger(optimizer, arm):
                     or state["exp_avg_sq"].dtype != torch.float32
                 ):
                     raise AssertionError(f"{role} state precision contract failed")
-                if state["exp_avg"].shape != parameter.shape:
-                    raise AssertionError(f"{role} first moment shape contract failed")
                 if role == "frugal_matrix":
+                    from stage3_moe.frugal import FRUGAL_DENSITY
+
                     saw_frugal = True
-                    if state["exp_avg_sq"].shape != parameter.shape:
-                        raise AssertionError("FRUGAL active second moment shape contract failed")
+                    expected_shape = (
+                        parameter.shape[0],
+                        int(parameter.shape[1] * FRUGAL_DENSITY),
+                    )
+                    if state["exp_avg"].shape != expected_shape:
+                        raise AssertionError("FRUGAL coordinate first moment shape contract failed")
+                    if state["exp_avg_sq"].shape != expected_shape:
+                        raise AssertionError("FRUGAL coordinate second moment shape contract failed")
+                    if state["coord_indices"].shape != (expected_shape[1],):
+                        raise AssertionError("FRUGAL coordinate index shape contract failed")
                 else:
                     saw_slimadam = True
+                    if state["exp_avg"].shape != parameter.shape:
+                        raise AssertionError("SlimAdam first moment shape contract failed")
                     dims = next(
                         group["slim_compress_dims"]
                         for group in raw.param_groups

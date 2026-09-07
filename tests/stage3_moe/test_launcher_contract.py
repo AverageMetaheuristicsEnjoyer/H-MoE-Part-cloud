@@ -16,7 +16,7 @@ ARMS = (
     "muon_bf16_state_fp8",
     "adamw_fp8gemm_state_fp32",
     "muon_fp8gemm_state_fp32",
-    "frugal_bf16_state_fp32",
+    "frugal_coord_bf16_state_fp32",
     "slimadam_bf16_state_fp32",
 )
 
@@ -91,7 +91,7 @@ def test_eight_arms_keep_state_compute_and_optimizer_axes_separate():
     assert value(commands["muon_bf16_state_fp8"], "--optimizer-state-precision") == "fp8"
     assert value(commands["muon_bf16_state_fp32"], "--optimizer") == "muon"
     assert "--muon-nesterov" in commands["muon_bf16_state_fp32"]
-    assert value(commands["frugal_bf16_state_fp32"], "--optimizer") == "frugal"
+    assert value(commands["frugal_coord_bf16_state_fp32"], "--optimizer") == "frugal"
     assert value(commands["slimadam_bf16_state_fp32"], "--optimizer") == "slimadam"
     assert all(value(commands[arm], "--ckpt-format") == "torch" for arm in ARMS)
 

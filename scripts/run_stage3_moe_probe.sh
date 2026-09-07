@@ -103,7 +103,7 @@ case "$arm" in
     optimizer_args+=("${STAGE3_MOE_MUON_ARGS[@]}")
     compute_args+=(--fp8-format hybrid --fp8-recipe delayed)
     ;;
-  frugal_bf16_state_fp32)
+  frugal_coord_bf16_state_fp32)
     optimizer=frugal
     state_precision=fp32
     ;;

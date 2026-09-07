@@ -12,7 +12,8 @@ from megatron.core.optimizer.optimizer_config import ParamKey, ParamWithNamePred
 
 
 FRUGAL_DENSITY = 0.25
-FRUGAL_UPDATE_GAP = 200
+FRUGAL_UPDATE_GAP = 50
+FRUGAL_COORD_CHOICE = "columns"
 
 
 def is_frugal_fallback(param: torch.Tensor, name: str) -> bool:
@@ -23,7 +24,7 @@ def is_frugal_fallback(param: torch.Tensor, name: str) -> bool:
     )
 
 
-class FrugalAdamW(torch.optim.Optimizer):
+class FrugalCoordAdamW(torch.optim.Optimizer):
     optimizer_role = "frugal_matrix"
 
     def __init__(
@@ -49,39 +50,25 @@ class FrugalAdamW(torch.optim.Optimizer):
         )
         for group in self.param_groups:
             group.setdefault("frugal_step", 0)
-            group.setdefault("frugal_next_block_start", len(group["params"]) - 1)
-            group.setdefault(
-                "frugal_num_active_blocks", round(len(group["params"]) * density)
-            )
 
     @staticmethod
-    def _init_state(param, state):
+    def _init_state(param, state, density):
+        state.clear()
+        columns = torch.randperm(param.shape[1], device=param.device)[
+            : int(param.shape[1] * density)
+        ]
+        shape = (param.shape[0], columns.numel())
         state["step"] = 0
-        state["exp_avg"] = torch.zeros_like(param)
-        state["exp_avg_sq"] = torch.zeros_like(param)
-
-    @torch.no_grad()
-    def _rotate_group(self, group):
-        params = group["params"]
-        if not params:
-            return
-        for param in params:
-            self.state[param].clear()
-            self.state[param]["active"] = False
-
-        count = group["frugal_num_active_blocks"]
-        start = group["frugal_next_block_start"]
-        for offset in range(count):
-            param = params[(start - offset) % len(params)]
-            state = self.state[param]
-            self._init_state(param, state)
-            state["active"] = True
-        group["frugal_next_block_start"] = (start - count) % len(params)
+        state["coord_indices"] = columns
+        state["exp_avg"] = torch.zeros(shape, dtype=param.dtype, device=param.device)
+        state["exp_avg_sq"] = torch.zeros(shape, dtype=param.dtype, device=param.device)
 
     @torch.no_grad()
     def _init_group(self, group, skip_non_grad_params=False):
-        if not any("active" in self.state[param] for param in group["params"]):
-            self._rotate_group(group)
+        for param in group["params"]:
+            if skip_non_grad_params and param.grad is None:
+                continue
+            self._init_state(param, self.state[param], group["density"])
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -92,7 +79,7 @@ class FrugalAdamW(torch.optim.Optimizer):
 
         for group in self.param_groups:
             if group["frugal_step"] % group["update_gap"] == 0:
-                self._rotate_group(group)
+                self._init_group(group)
             group["frugal_step"] += 1
 
             beta1, beta2 = group["betas"]
@@ -101,29 +88,31 @@ class FrugalAdamW(torch.optim.Optimizer):
                 if grad is None:
                     continue
                 if grad.is_sparse:
-                    raise RuntimeError("FrugalAdamW does not support sparse gradients")
+                    raise RuntimeError("FrugalCoordAdamW does not support sparse gradients")
 
                 param.mul_(1 - group["lr"] * group["weight_decay"])
                 state = self.state[param]
-                if not state["active"]:
-                    param.add_(grad.sign(), alpha=-group["lr"])
-                    continue
+                columns = state["coord_indices"]
+                active_grad = grad[:, columns]
 
                 state["step"] += 1
                 exp_avg = state["exp_avg"]
                 exp_avg_sq = state["exp_avg_sq"]
-                exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
-                exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+                exp_avg.mul_(beta1).add_(active_grad, alpha=1 - beta1)
+                exp_avg_sq.mul_(beta2).addcmul_(
+                    active_grad, active_grad, value=1 - beta2
+                )
 
                 bias_correction1 = 1 - beta1 ** state["step"]
                 bias_correction2 = 1 - beta2 ** state["step"]
                 denom = exp_avg_sq.sqrt().div_(math.sqrt(bias_correction2))
                 denom.add_(group["eps"])
-                param.addcdiv_(
-                    exp_avg,
-                    denom,
-                    value=-group["lr"] / bias_correction1,
-                )
+                active_update = exp_avg / denom
+                active_update.mul_(-group["lr"] / bias_correction1)
+
+                update = grad.sign().mul_(-group["lr"])
+                update[:, columns] = active_update
+                param.add_(update)
         return loss
 
 
@@ -143,7 +132,7 @@ def install_frugal_contract() -> None:
         name="stage3_frugal_adam_fallback", fn=is_frugal_fallback
     )
     _EMERGING_OPTIMIZERS["frugal"] = EmergingOptimizerEntry(
-        optimizer_cls=FrugalAdamW,
+        optimizer_cls=FrugalCoordAdamW,
         config_to_kwargs=_frugal_config_to_kwargs,
         default_param_overrides={
             ParamKey(with_name_predicate=fallback): {"optimizer": "adam"}
