@@ -450,7 +450,7 @@ fi
 fusion_args=()
 if [[ ${STAGE3_MOE_WGRAD_FUSION:-0} == 1 ]]; then
   echo "GRADIENT_ACCUMULATION_FUSION=requested (TE layers fuse, LM head falls back)"
-elif ! python -c 'import fused_weight_gradient_mlp_cuda' >/dev/null 2>&1; then
+elif ! python -c 'import torch; import fused_weight_gradient_mlp_cuda' >/dev/null 2>&1; then
   fusion_args=(--no-gradient-accumulation-fusion)
   echo "GRADIENT_ACCUMULATION_FUSION=disabled"
 fi

@@ -224,7 +224,7 @@ else
 fi
 
 fusion_args=()
-if "${runtime_prefix[@]}" "$python_bin" -c 'import fused_weight_gradient_mlp_cuda' >/dev/null 2>&1; then
+if "${runtime_prefix[@]}" "$python_bin" -c 'import torch; import fused_weight_gradient_mlp_cuda' >/dev/null 2>&1; then
   grad_accum_fusion=enabled
 else
   grad_accum_fusion=disabled
