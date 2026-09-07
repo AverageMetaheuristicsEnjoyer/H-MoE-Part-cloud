@@ -42,9 +42,24 @@ export NVRTC_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cuda_nvrt
 export PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root"
 
 echo "=== CPU CONTRACT ==="
-python -m pytest -q \
-  "$root/tests/stage3_moe/test_memory_efficient_optimizers.py" \
-  "$root/tests/stage3_moe/test_memory_optimizer_pretrain_gates.py"
+python - "$root" <<'PY'
+import runpy
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+count = 0
+for relative in (
+    "tests/stage3_moe/test_memory_efficient_optimizers.py",
+    "tests/stage3_moe/test_memory_optimizer_pretrain_gates.py",
+):
+    namespace = runpy.run_path(root / relative)
+    for name, function in sorted(namespace.items()):
+        if name.startswith("test_") and callable(function):
+            function()
+            count += 1
+print(f"CPU_CONTRACT_PASS tests={count}")
+PY
 if [[ $? -ne 0 ]]; then
   echo "GATE_FAIL reason=cpu_contract"
   echo "EXIT=1"
