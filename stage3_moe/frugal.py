@@ -51,6 +51,11 @@ class FrugalCoordAdamW(torch.optim.Optimizer):
         for group in self.param_groups:
             group.setdefault("frugal_step", 0)
 
+    def load_state_dict(self, state_dict):
+        super().load_state_dict(state_dict)
+        for state in self.state.values():
+            state["coord_indices"] = state["coord_indices"].to(dtype=torch.long)
+
     @staticmethod
     def _init_state(param, state, density):
         state.clear()

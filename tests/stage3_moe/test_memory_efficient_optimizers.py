@@ -69,6 +69,7 @@ def test_frugal_projects_columns_and_resumes_exactly():
         update_gap=2,
     )
     resumed.load_state_dict(copy.deepcopy(optimizer.state_dict()))
+    assert resumed.state[resumed_parameter]["coord_indices"].dtype == torch.long
 
     parameter.grad = torch.full_like(parameter, 2.0)
     resumed_parameter.grad = torch.full_like(resumed_parameter, 2.0)
