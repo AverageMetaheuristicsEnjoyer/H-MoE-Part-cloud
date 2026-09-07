@@ -25,7 +25,7 @@
         "match_key_sha256"
       ],
       "properties": {
-        "optimizer": { "enum": ["adamw", "muon"] },
+        "optimizer": { "enum": ["adamw", "muon", "frugal", "slimadam"] },
         "gemm_mode": { "enum": ["bf16", "fp8_delayed_hybrid"] },
         "optimizer_state_mode": { "enum": ["fp32", "fp8_hybrid"] },
         "match_key_sha256": { "$ref": "#/$defs/sha256" }
@@ -158,7 +158,7 @@
         "named_parameter_manifest_sha256"
       ],
       "properties": {
-        "role": { "enum": ["adamw_all", "muon_matrix", "adamw_fallback"] },
+        "role": { "enum": ["adamw_all", "muon_matrix", "adamw_fallback", "frugal_matrix", "slimadam_all"] },
         "parameters": { "type": "integer", "minimum": 0 },
         "parameters_global": { "type": "integer", "minimum": 0 },
         "active_parameters_per_token": { "type": "integer", "minimum": 0 },
@@ -170,7 +170,7 @@
       "additionalProperties": false,
       "required": ["group_role", "state_key", "dtype", "quantized", "numel", "bytes"],
       "properties": {
-        "group_role": { "enum": ["adamw_all", "muon_matrix", "adamw_fallback"] },
+        "group_role": { "enum": ["adamw_all", "muon_matrix", "adamw_fallback", "frugal_matrix", "slimadam_all"] },
         "state_key": { "enum": ["exp_avg", "exp_avg_sq", "momentum_buffer", "metadata", "step"] },
         "dtype": { "type": "string", "minLength": 1 },
         "quantized": { "type": "boolean" },
@@ -373,7 +373,9 @@
             "muon_bf16_state_fp32",
             "muon_bf16_state_fp8",
             "adamw_fp8gemm_state_fp32",
-            "muon_fp8gemm_state_fp32"
+            "muon_fp8gemm_state_fp32",
+            "frugal_bf16_state_fp32",
+            "slimadam_bf16_state_fp32"
           ]
         },
         "status": { "enum": ["completed", "failed", "not_run"] },
@@ -473,7 +475,7 @@
         "record_type": { "const": "pair" },
         "pair_id": { "type": "string", "minLength": 1 },
         "axis": { "enum": ["optimizer_state", "fp8_gemm"] },
-        "optimizer": { "enum": ["adamw", "muon"] },
+        "optimizer": { "enum": ["adamw", "muon", "frugal", "slimadam"] },
         "baseline_run_id": { "type": "string", "minLength": 1 },
         "treatment_run_id": { "type": "string", "minLength": 1 },
         "denominators": { "$ref": "#/$defs/denominators" },

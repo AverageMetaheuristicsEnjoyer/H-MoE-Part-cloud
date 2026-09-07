@@ -103,6 +103,14 @@ case "$arm" in
     optimizer_args+=("${STAGE3_MOE_MUON_ARGS[@]}")
     compute_args+=(--fp8-format hybrid --fp8-recipe delayed)
     ;;
+  frugal_bf16_state_fp32)
+    optimizer=frugal
+    state_precision=fp32
+    ;;
+  slimadam_bf16_state_fp32)
+    optimizer=slimadam
+    state_precision=fp32
+    ;;
   *) echo "unknown arm: $arm" >&2; exit 2 ;;
 esac
 
@@ -271,6 +279,7 @@ cmd=(
   "${compute_args[@]}"
   "${fusion_args[@]}"
   "${data_args[@]}"
+  --ckpt-format torch
   --train-iters "$train_iters"
 )
 

@@ -70,7 +70,12 @@ def option_value(argv, option):
 
 
 def validate_axis(arm, state_precision, argv, warmup_steps, measure_steps):
-    optimizer = "muon" if arm.startswith("muon_") else "adam"
+    optimizer = {
+        "adamw": "adam",
+        "muon": "muon",
+        "frugal": "frugal",
+        "slimadam": "slimadam",
+    }[arm.split("_", 1)[0]]
     if option_value(argv, "--optimizer") != optimizer:
         raise ValueError(f"{arm} requires --optimizer {optimizer}")
     # A bounded probe measures the whole run; a pretraining run measures its first
@@ -94,6 +99,14 @@ def validate_axis(arm, state_precision, argv, warmup_steps, measure_steps):
         raise ValueError("BF16-GEMM arms must not pass FP8 compute flags")
     if "--use-distributed-optimizer" in argv:
         raise ValueError("the first Stage 3 MoE probes use the non-distributed optimizer")
+    if optimizer in {"frugal", "slimadam"}:
+        checkpoint_format = (
+            option_value(argv, "--ckpt-format")
+            if "--ckpt-format" in argv
+            else "torch_dist"
+        )
+        if checkpoint_format != "torch":
+            raise ValueError(f"{optimizer} requires --ckpt-format torch")
 
 
 def install_fp8_adamw():
@@ -131,12 +144,22 @@ def main():
 
     state_fp8 = stage3_args.stage3_arm.endswith("_state_fp8")
     is_muon = stage3_args.stage3_arm.startswith("muon_")
+    is_frugal = stage3_args.stage3_arm.startswith("frugal_")
+    is_slimadam = stage3_args.stage3_arm.startswith("slimadam_")
     if state_fp8:
         install_fp8_adamw()
     if is_muon:
         from stage3_moe.muon import install_muon_contract
 
         install_muon_contract(fp8_states=state_fp8)
+    if is_frugal:
+        from stage3_moe.frugal import install_frugal_contract
+
+        install_frugal_contract()
+    if is_slimadam:
+        from stage3_moe.slim_adam import install_slimadam_contract
+
+        install_slimadam_contract()
 
     from stage3_moe.memory_audit import install as install_memory_audit
     from stage3_moe.result_writer import install_probe

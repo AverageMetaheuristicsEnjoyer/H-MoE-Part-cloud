@@ -5,6 +5,8 @@ ARMS = (
     "muon_bf16_state_fp8",
     "adamw_fp8gemm_state_fp32",
     "muon_fp8gemm_state_fp32",
+    "frugal_bf16_state_fp32",
+    "slimadam_bf16_state_fp32",
 )
 
 TOTAL_PARAMETERS = 1_028_926_976

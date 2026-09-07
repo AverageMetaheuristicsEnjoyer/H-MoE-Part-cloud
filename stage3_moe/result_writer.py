@@ -42,6 +42,8 @@ def assert_fp8_adam_bootstrap(optimizer):
 
 
 def _role(raw):
+    if hasattr(raw, "optimizer_role"):
+        return raw.optimizer_role
     state_specs = getattr(raw, "state_specs", ())
     keys = {spec.name if hasattr(spec, "name") else spec[0] for spec in state_specs}
     if "momentum_buffer" in keys or "Muon" in type(raw).__name__:
@@ -97,7 +99,8 @@ def optimizer_state_ledger(optimizer, arm):
     metadata_bytes = 0
     seen = set()
     raw_optimizers = list(_raw_optimizers(optimizer))
-    adam_only = arm.startswith("adamw_")
+    optimizer_name = arm.split("_", 1)[0]
+    adam_only = optimizer_name == "adamw"
 
     for raw in raw_optimizers:
         role = "adamw_all" if adam_only else _role(raw)
@@ -133,26 +136,61 @@ def optimizer_state_ledger(optimizer, arm):
     )
     saw_adam = False
     saw_muon = False
+    saw_frugal = False
+    saw_slimadam = False
     for raw in raw_optimizers:
         role = "adamw_all" if adam_only else _role(raw)
-        for state in raw.state.values():
+        for parameter, state in raw.state.items():
             if role in {"adamw_all", "adamw_fallback"} and "exp_avg" in state:
                 saw_adam = True
                 if (
                     state["exp_avg"].dtype, state["exp_avg_sq"].dtype
                 ) != expected_adam:
                     raise AssertionError(f"{role} Adam state precision contract failed")
+            if role in {"frugal_matrix", "slimadam_all"} and "exp_avg" in state:
+                if (
+                    state["exp_avg"].dtype != torch.float32
+                    or state["exp_avg_sq"].dtype != torch.float32
+                ):
+                    raise AssertionError(f"{role} state precision contract failed")
+                if state["exp_avg"].shape != parameter.shape:
+                    raise AssertionError(f"{role} first moment shape contract failed")
+                if role == "frugal_matrix":
+                    saw_frugal = True
+                    if state["exp_avg_sq"].shape != parameter.shape:
+                        raise AssertionError("FRUGAL active second moment shape contract failed")
+                else:
+                    saw_slimadam = True
+                    dims = next(
+                        group["slim_compress_dims"]
+                        for group in raw.param_groups
+                        if any(candidate is parameter for candidate in group["params"])
+                    )
+                    expected_shape = list(parameter.shape)
+                    if dims is not None:
+                        for dim in dims:
+                            expected_shape[dim] = 1
+                    if tuple(state["exp_avg_sq"].shape) != tuple(expected_shape):
+                        raise AssertionError(
+                            "SlimAdam second moment shape contract failed"
+                        )
             if role == "muon_matrix" and "momentum_buffer" in state:
                 saw_muon = True
                 expected = torch.float8_e4m3fn if state_fp8 else torch.float32
                 if state["momentum_buffer"].dtype != expected:
                     raise AssertionError("Muon momentum precision contract failed")
-                if state_fp8 and any(key.startswith(("expand_", "sqrt_minmax_")) for key in state):
+                if state_fp8 and any(
+                    key.startswith(("expand_", "sqrt_minmax_")) for key in state
+                ):
                     raise AssertionError("Muon momentum must use maxabs, not DRE")
-    if not saw_adam:
+    if optimizer_name in {"adamw", "muon", "frugal"} and not saw_adam:
         raise AssertionError("no initialized Adam state found")
-    if not adam_only and not saw_muon:
+    if optimizer_name == "muon" and not saw_muon:
         raise AssertionError("no initialized Muon momentum found")
+    if optimizer_name == "frugal" and not saw_frugal:
+        raise AssertionError("no initialized FRUGAL state found")
+    if optimizer_name == "slimadam" and not saw_slimadam:
+        raise AssertionError("no initialized SlimAdam state found")
 
     tensors = [
         {
@@ -183,7 +221,13 @@ def optimizer_state_ledger(optimizer, arm):
     }
 
 
-ROLES = ("adamw_all", "adamw_fallback", "muon_matrix")
+ROLES = (
+    "adamw_all",
+    "adamw_fallback",
+    "muon_matrix",
+    "frugal_matrix",
+    "slimadam_all",
+)
 
 
 def _is_routed_expert(name):
@@ -234,7 +278,8 @@ def parameter_group_ledger(optimizer, arm, parameter_names):
     split_fc1_names = set()
     router_names = set()
     fallback_router_names = set()
-    adam_only = arm.startswith("adamw_")
+    optimizer_name = arm.split("_", 1)[0]
+    adam_only = optimizer_name == "adamw"
     for raw in _raw_optimizers(optimizer):
         role = "adamw_all" if adam_only else _role(raw)
         for group in raw.param_groups:
@@ -248,6 +293,8 @@ def parameter_group_ledger(optimizer, arm, parameter_names):
                 names[role].append(f"{name}:{tuple(parameter.shape)}:{parameter.numel()}")
                 if role == "muon_matrix" and name.endswith(".router.weight"):
                     raise AssertionError("router weight reached Muon")
+                if role == "frugal_matrix" and name.endswith(".router.weight"):
+                    raise AssertionError("router weight reached FRUGAL")
                 if name.endswith(".router.weight"):
                     router_names.add(name)
                     if role == "adamw_fallback":
@@ -258,6 +305,17 @@ def parameter_group_ledger(optimizer, arm, parameter_names):
                         expert_fc1_names.add(name)
                     if group.get("stage3_split_swiglu_fc1"):
                         split_fc1_names.add(name)
+                if role == "slimadam_all":
+                    from stage3_moe.slim_adam import (
+                        SLIM_COMPRESS_DIMS,
+                        slim_compression_dims,
+                    )
+
+                    expected_dims = slim_compression_dims(parameter, name)
+                    if group.get(SLIM_COMPRESS_DIMS) != expected_dims:
+                        raise AssertionError(
+                            f"SlimAdam compression rule mismatch for {name}"
+                        )
 
     # Replicated tensors are identical on every expert rank, so count them once and
     # add only the sharded expert tensors summed across the expert-parallel group.
@@ -271,28 +329,42 @@ def parameter_group_ledger(optimizer, arm, parameter_names):
     }
     global_fc1 = len(fc1_names) - len(expert_fc1_names) + reduced[-1]
 
-    if not adam_only and fc1_names != split_fc1_names:
+    if optimizer_name == "muon" and fc1_names != split_fc1_names:
         missing = sorted(fc1_names - split_fc1_names)
         raise AssertionError(f"Muon SwiGLU FC1 split flag missing for {missing[:3]}")
-    if not adam_only and global_fc1 != 1 + 17 * 65:
+    if optimizer_name == "muon" and global_fc1 != 1 + 17 * 65:
         raise AssertionError(f"expected 1106 Muon SwiGLU FC1 weights, found {global_fc1}")
-    if not adam_only and len(router_names) != 17:
+    if optimizer_name in {"muon", "frugal"} and len(router_names) != 17:
         raise AssertionError(f"expected 17 MoE router weights, found {len(router_names)}")
-    if not adam_only and router_names != fallback_router_names:
+    if optimizer_name in {"muon", "frugal"} and router_names != fallback_router_names:
         raise AssertionError("not every router weight is in the AdamW fallback group")
     if sum(global_counts.values()) != TOTAL_PARAMETERS:
         raise AssertionError(
             f"total parameter mismatch: {sum(global_counts.values())} != {TOTAL_PARAMETERS}"
         )
-    if not adam_only and global_counts != {
-        "muon_matrix": MUON_MATRIX_PARAMETERS,
-        "adamw_fallback": ADAMW_FALLBACK_PARAMETERS,
-    }:
-        raise AssertionError(f"Muon parameter groups do not match the design: {global_counts}")
+    expected_counts = {
+        "adamw": {"adamw_all": TOTAL_PARAMETERS},
+        "muon": {
+            "muon_matrix": MUON_MATRIX_PARAMETERS,
+            "adamw_fallback": ADAMW_FALLBACK_PARAMETERS,
+        },
+        "frugal": {
+            "frugal_matrix": MUON_MATRIX_PARAMETERS,
+            "adamw_fallback": ADAMW_FALLBACK_PARAMETERS,
+        },
+        "slimadam": {"slimadam_all": TOTAL_PARAMETERS},
+    }[optimizer_name]
+    if global_counts != expected_counts:
+        raise AssertionError(
+            f"{optimizer_name} parameter groups do not match the design: {global_counts}"
+        )
     active.update(
-        {"adamw_all": ACTIVE_PARAMETERS}
-        if adam_only
-        else {"muon_matrix": 176_160_768, "adamw_fallback": 104_082_944}
+        {
+            "adamw": {"adamw_all": ACTIVE_PARAMETERS},
+            "muon": {"muon_matrix": 176_160_768, "adamw_fallback": 104_082_944},
+            "frugal": {"frugal_matrix": 176_160_768, "adamw_fallback": 104_082_944},
+            "slimadam": {"slimadam_all": ACTIVE_PARAMETERS},
+        }[optimizer_name]
     )
     return [
         {
@@ -309,10 +381,10 @@ def parameter_group_ledger(optimizer, arm, parameter_names):
     ]
 
 
-def _normalized_match_argv(argv, arm):
+def _normalized_match_argv(argv, arm=None):
     # The match key is what proves two runs controlled the same factors, so it has to
     # ignore exactly what the pair comparison ignores: where this arm reads and writes.
-    argv = mask_arm_in_paths(argv, arm)
+    argv = mask_arm_in_paths(argv, arm) if arm is not None else list(argv)
     normalized = []
     skip = False
     for item in argv:
@@ -331,7 +403,7 @@ def _comparison(arm, argv):
         "\0".join(_normalized_match_argv(argv, arm)).encode()
     ).hexdigest()
     return {
-        "optimizer": "muon" if arm.startswith("muon_") else "adamw",
+        "optimizer": arm.split("_", 1)[0],
         "gemm_mode": "fp8_delayed_hybrid" if "_fp8gemm_" in arm else "bf16",
         "optimizer_state_mode": "fp8_hybrid" if arm.endswith("_state_fp8") else "fp32",
         "match_key_sha256": os.environ.get(

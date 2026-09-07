@@ -16,6 +16,8 @@ ARMS = (
     "muon_bf16_state_fp8",
     "adamw_fp8gemm_state_fp32",
     "muon_fp8gemm_state_fp32",
+    "frugal_bf16_state_fp32",
+    "slimadam_bf16_state_fp32",
 )
 
 
@@ -73,12 +75,12 @@ def test_exact_architecture_and_forbidden_moe_flags():
     assert "--moe-single-grouped-weight" not in args
 
 
-def test_six_arms_keep_state_and_compute_axes_separate():
+def test_eight_arms_keep_state_compute_and_optimizer_axes_separate():
     commands = {arm: dry_run(arm)[1] for arm in ARMS}
 
-    for arm in ARMS[:4]:
+    for arm in (*ARMS[:4], *ARMS[6:]):
         assert "--fp8-format" not in commands[arm]
-    for arm in ARMS[4:]:
+    for arm in ARMS[4:6]:
         assert value(commands[arm], "--fp8-format") == "hybrid"
         assert value(commands[arm], "--fp8-recipe") == "delayed"
         assert value(commands[arm], "--optimizer-state-precision") == "fp32"
@@ -89,6 +91,9 @@ def test_six_arms_keep_state_and_compute_axes_separate():
     assert value(commands["muon_bf16_state_fp8"], "--optimizer-state-precision") == "fp8"
     assert value(commands["muon_bf16_state_fp32"], "--optimizer") == "muon"
     assert "--muon-nesterov" in commands["muon_bf16_state_fp32"]
+    assert value(commands["frugal_bf16_state_fp32"], "--optimizer") == "frugal"
+    assert value(commands["slimadam_bf16_state_fp32"], "--optimizer") == "slimadam"
+    assert all(value(commands[arm], "--ckpt-format") == "torch" for arm in ARMS)
 
 
 def test_probe_and_smoke_step_contract_and_denominators():
@@ -127,7 +132,7 @@ def test_config_counts_and_cloud_delayed_hybrid_route_are_pinned():
     assert "STAGE3_MOE_TOTAL_PARAMETERS=1028926976" in config
     assert "STAGE3_MOE_ACTIVE_PARAMETERS=280243712" in config
     assert "STAGE3_MOE_MCORE_COMMIT=571370c829ca768fe37244f4e2e7f28d8accc4ab" in config
-    assert "STAGE3_MOE_VENDORED_MCORE_TREE=e2d9e7f73d24f3e60527a9d18d441a6de9411fe4" in config
+    assert "STAGE3_MOE_VENDORED_MCORE_TREE=9a150974c18e6769825147ce253470f8c7ddd527" in config
     assert "STAGE3_MOE_EO_COMMIT=1effa026ff096b7fa1063ca2fba19d98be6e6cdf" in config
     assert "STAGE3_MOE_VENDORED_EO_TREE=e6b6cfd986bc0af4cd4f8e2c4ebedad16144e856" in config
     assert "MLSUB_IMAGE:-} != torch28" in cloud

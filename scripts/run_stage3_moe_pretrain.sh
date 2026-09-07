@@ -46,6 +46,8 @@ case "$arm" in
   muon_bf16_state_fp8)   optimizer=muon; state_precision=fp8;  compute=() ;;
   adamw_fp8gemm_state_fp32) optimizer=adam; state_precision=fp32; compute=(--fp8-format hybrid --fp8-recipe delayed) ;;
   muon_fp8gemm_state_fp32)  optimizer=muon; state_precision=fp32; compute=(--fp8-format hybrid --fp8-recipe delayed) ;;
+  frugal_bf16_state_fp32) optimizer=frugal; state_precision=fp32; compute=() ;;
+  slimadam_bf16_state_fp32) optimizer=slimadam; state_precision=fp32; compute=() ;;
   *) echo "unknown arm: $arm" >&2; exit 2 ;;
 esac
 probe_warmup=20
