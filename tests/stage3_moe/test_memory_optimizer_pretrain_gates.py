@@ -69,3 +69,12 @@ def test_cpu_contract_exits_before_allocated_runtime_checks():
     assert gate.index("if [[ $mode == cpu-contract ]]") < gate.index(
         'echo "=== ALLOCATED RUNTIME ==="'
     )
+
+
+def test_gpu_smoke_requires_complete_17_by_64_routing_telemetry():
+    gate = CLOUD_GATE.read_text()
+
+    assert 'last["iteration"] != 25' in gate
+    assert 'len(last["layers"]) != 17' in gate
+    assert 'len(row) != 64' in gate
+    assert 'run_smoke "$gate_arm"' in gate

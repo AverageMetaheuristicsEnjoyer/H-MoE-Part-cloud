@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Bounded Frugal CoordAdamW / SlimAdam checkpoint and calibration gates.
-# Usage: cloud_moe_optimizer_gate.sh cpu-contract|resume|stability|lr-screen|cleanup-stability [RECIPE]
+# Usage: cloud_moe_optimizer_gate.sh cpu-contract|smoke|resume|stability|lr-screen|cleanup-stability [RECIPE]
 set -u
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-mode=${1:?usage: cloud_moe_optimizer_gate.sh cpu-contract|resume|stability|lr-screen|cleanup-stability [RECIPE]}
+mode=${1:?usage: cloud_moe_optimizer_gate.sh cpu-contract|smoke|resume|stability|lr-screen|cleanup-stability [RECIPE]}
 recipe=${2:-}
 gate_arm=${STAGE3_MOE_GATE_ARM:-both}
 ckpt_root=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs2/hmoe-checkpoints/frugal-slimadam-gates}
@@ -145,6 +145,38 @@ fi
 
 run_launcher() {
   "$root/scripts/run_stage3_moe_pretrain.sh" "$1" "$2"
+}
+
+run_smoke() {
+  local arm=$1
+  local suffix=routing-telemetry-smoke-v1
+  local run_dir="$log_root/stage3-$arm-smoke-$suffix"
+  export STAGE3_MOE_RUN_SUFFIX=$suffix
+  if [[ -e $run_dir ]]; then
+    echo "GATE_FAIL arm=$arm gate=smoke reason=run_path_exists path=$run_dir"
+    return 1
+  fi
+  run_launcher "$arm" smoke || return 1
+  python - "$run_dir/routing_telemetry.jsonl" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+records = [json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines() if line]
+last = records[-1]
+if last["iteration"] != 25:
+    raise SystemExit(f"routing telemetry ended at {last['iteration']}, expected 25")
+if len(last["layers"]) != 17:
+    raise SystemExit(f"routing telemetry has {len(last['layers'])} layers, expected 17")
+if any(len(row) != 64 for row in last["batch"]["tokens_per_expert"]):
+    raise SystemExit("routing telemetry expert dimension is not 64")
+if last["dropped_tokens"] != 0:
+    raise SystemExit(f"dropped tokens failed: {last['dropped_tokens']}")
+print(
+    f"TELEMETRY_PASS iteration=25 layers=17 experts=64 "
+    f"rolling_steps={last['rolling_100']['window_steps']}"
+)
+PY
 }
 
 validate_calibration_result() {
@@ -306,6 +338,16 @@ run_calibration() {
 
 status=0
 case "$mode" in
+  smoke)
+    [[ -z $recipe ]] || status=1
+    case "$gate_arm" in
+      frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) status=1 ;;
+    esac
+    if (( status == 0 )); then
+      run_smoke "$gate_arm" || status=1
+    fi
+    ;;
   resume)
     [[ -z $recipe ]] || status=1
     case "$gate_arm" in
