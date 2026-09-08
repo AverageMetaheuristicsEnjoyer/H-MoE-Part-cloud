@@ -149,7 +149,7 @@ run_launcher() {
 
 run_smoke() {
   local arm=$1
-  local suffix=routing-telemetry-smoke-v1
+  local suffix=routing-telemetry-smoke-v2
   local run_dir="$log_root/stage3-$arm-smoke-$suffix"
   export STAGE3_MOE_RUN_SUFFIX=$suffix
   if [[ -e $run_dir ]]; then

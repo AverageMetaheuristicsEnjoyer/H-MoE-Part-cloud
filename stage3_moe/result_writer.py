@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 from collections import defaultdict, deque
-from importlib import metadata
+from importlib import import_module, metadata
 from pathlib import Path
 
 import torch
@@ -870,7 +870,10 @@ class Probe:
 
 def install_probe(*, arm, result_path, warmup_steps, measured_steps, program_start, argv):
     import megatron.training.training as training
-    import megatron.core.distributed.finalize_model_grads as finalize_model_grads
+
+    finalize_model_grads = import_module(
+        "megatron.core.distributed.finalize_model_grads"
+    )
 
     probe = Probe(
         arm=arm,
