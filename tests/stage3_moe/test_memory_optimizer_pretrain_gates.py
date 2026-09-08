@@ -87,6 +87,21 @@ def test_stability_cleanup_is_exact_and_requires_the_235_trackers():
     assert 'rm -rf -- "$path"' in cleanup
 
 
+def test_lr_screen_cleanup_is_exact_and_requires_the_587_trackers():
+    gate = CLOUD_GATE.read_text()
+
+    cleanup = gate.split("if [[ $mode == cleanup-lr-screen ]]", 1)[1].split(
+        "if (( available_kb", 1
+    )[0]
+    assert "frugal_coord_bf16_state_fp32-lr-screen-matched-v1" in cleanup
+    assert "frugal_coord_bf16_state_fp32-lr-screen-efficient-training-1e3-v1" in cleanup
+    assert "frugal_coord_bf16_state_fp32-lr-screen-efficient-training-2e3-v1" in cleanup
+    assert "slimadam_bf16_state_fp32-lr-screen-matched-v1" in cleanup
+    assert "iter_0000587" in cleanup
+    assert '$(cat "$tracker") != 587' in cleanup
+    assert 'rm -rf -- "$path"' in cleanup
+
+
 def test_cpu_contract_exits_before_allocated_runtime_checks():
     gate = CLOUD_GATE.read_text()
 

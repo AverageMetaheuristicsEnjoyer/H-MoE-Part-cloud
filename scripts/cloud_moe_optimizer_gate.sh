@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Bounded Frugal CoordAdamW / SlimAdam checkpoint and calibration gates.
-# Usage: cloud_moe_optimizer_gate.sh cpu-contract|smoke|resume|stability|lr-screen|routing-calibration|cleanup-stability [RECIPE]
+# Usage: cloud_moe_optimizer_gate.sh cpu-contract|smoke|resume|stability|lr-screen|routing-calibration|cleanup-stability|cleanup-lr-screen [RECIPE]
 set -u
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-mode=${1:?usage: cloud_moe_optimizer_gate.sh cpu-contract|smoke|resume|stability|lr-screen|routing-calibration|cleanup-stability [RECIPE]}
+mode=${1:?usage: cloud_moe_optimizer_gate.sh cpu-contract|smoke|resume|stability|lr-screen|routing-calibration|cleanup-stability|cleanup-lr-screen [RECIPE]}
 recipe=${2:-}
 gate_arm=${STAGE3_MOE_GATE_ARM:-both}
 ckpt_root=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs2/hmoe-checkpoints/frugal-slimadam-gates}
@@ -47,6 +47,50 @@ if [[ $mode == cleanup-stability ]]; then
     tracker="$path/latest_checkpointed_iteration.txt"
     iteration_dir="$path/iter_0000235"
     if [[ ! -f $tracker || $(cat "$tracker") != 235 || ! -d $iteration_dir ]]; then
+      echo "GATE_FAIL mode=$mode reason=unexpected_checkpoint_layout path=$path"
+      cleanup_status=1
+      continue
+    fi
+    du -sh -- "$path"
+    find "$path" -mindepth 1 -maxdepth 1 -printf 'CLEANUP_MEMBER=%f\n' | sort
+  done
+  if (( cleanup_status != 0 )); then
+    echo "EXIT=1"
+    exit 0
+  fi
+  for path in "${cleanup_paths[@]}"; do
+    if [[ -e $path ]]; then
+      rm -rf -- "$path"
+      echo "GATE_CKPT_REMOVED=$path"
+    fi
+  done
+  df -h "$ckpt_root" | tail -1
+  echo "GATE_PASS mode=$mode"
+  echo "EXIT=0"
+  exit 0
+fi
+
+if [[ $mode == cleanup-lr-screen ]]; then
+  [[ -z $recipe ]] || {
+    echo "GATE_FAIL mode=$mode reason=unexpected_recipe recipe=$recipe"
+    echo "EXIT=1"
+    exit 0
+  }
+  cleanup_paths=(
+    "$ckpt_root/lr-screen/frugal_coord_bf16_state_fp32-lr-screen-matched-v1"
+    "$ckpt_root/lr-screen/frugal_coord_bf16_state_fp32-lr-screen-efficient-training-1e3-v1"
+    "$ckpt_root/lr-screen/frugal_coord_bf16_state_fp32-lr-screen-efficient-training-2e3-v1"
+    "$ckpt_root/lr-screen/slimadam_bf16_state_fp32-lr-screen-matched-v1"
+  )
+  cleanup_status=0
+  for path in "${cleanup_paths[@]}"; do
+    if [[ ! -e $path ]]; then
+      echo "CLEANUP_ALREADY_ABSENT=$path"
+      continue
+    fi
+    tracker="$path/latest_checkpointed_iteration.txt"
+    iteration_dir="$path/iter_0000587"
+    if [[ ! -f $tracker || $(cat "$tracker") != 587 || ! -d $iteration_dir ]]; then
       echo "GATE_FAIL mode=$mode reason=unexpected_checkpoint_layout path=$path"
       cleanup_status=1
       continue
