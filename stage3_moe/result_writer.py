@@ -8,7 +8,7 @@ import statistics
 import subprocess
 import sys
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from importlib import metadata
 from pathlib import Path
 
@@ -52,6 +52,32 @@ def _role(raw):
 
 
 TOKEN_TALLY = "stage3_tokens_per_expert"
+
+
+def routing_balance_summary(counts):
+    counts = counts.detach().to(device="cpu", dtype=torch.float64)
+    if counts.ndim != 2 or bool((counts.sum(dim=1) <= 0).any()):
+        raise ValueError("routing counts must be a non-empty layer-by-expert matrix")
+    means = counts.mean(dim=1)
+    minimum_to_mean = counts.min(dim=1).values / means
+    maximum_to_mean = counts.max(dim=1).values / means
+    maxvio = maximum_to_mean - 1.0
+    coefficient = counts.std(dim=1, unbiased=False) / means
+    return {
+        "tokens_per_expert": counts.to(torch.int64).tolist(),
+        "maxvio_per_layer": maxvio.tolist(),
+        "maxvio_mean": float(maxvio.mean()),
+        "maxvio_p95": float(torch.quantile(maxvio, 0.95)),
+        "maxvio_max": float(maxvio.max()),
+        "minimum_to_mean_per_layer": minimum_to_mean.tolist(),
+        "minimum_to_mean_min": float(minimum_to_mean.min()),
+        "maximum_to_mean_per_layer": maximum_to_mean.tolist(),
+        "maximum_to_mean_max": float(maximum_to_mean.max()),
+        "coefficient_of_variation_per_layer": coefficient.tolist(),
+        "coefficient_of_variation_max": float(coefficient.max()),
+        "zero_experts_per_layer": (counts == 0).sum(dim=1).tolist(),
+        "zero_experts_max": int((counts == 0).sum(dim=1).max()),
+    }
 
 
 def _moe_routers(model_chunks):
@@ -522,6 +548,146 @@ class Probe:
         self.parameter_names = {}
         self.written = False
         self.model_chunks = []
+        self.router_names = []
+        self.routing_window = deque(maxlen=100)
+        self.pending_routing = None
+        self.previous_load_distribution = None
+        self.previous_bias_update_sign = None
+
+    def capture_router_update(self, counts, expert_bias, updated_expert_bias):
+        counts = counts.detach().to(device="cpu", dtype=torch.float64)
+        expert_bias = expert_bias.detach().to(device="cpu", dtype=torch.float64)
+        updated_expert_bias = updated_expert_bias.detach().to(
+            device="cpu", dtype=torch.float64
+        )
+        if self.router_names and counts.shape[0] != len(self.router_names):
+            raise AssertionError(
+                f"router telemetry layer mismatch: {counts.shape[0]} != {len(self.router_names)}"
+            )
+
+        distribution = counts / counts.sum(dim=1, keepdim=True)
+        if self.previous_load_distribution is None:
+            load_tv = None
+        else:
+            load_tv = 0.5 * (
+                distribution - self.previous_load_distribution
+            ).abs().sum(dim=1)
+        bias_delta = updated_expert_bias - expert_bias
+        bias_update_sign = torch.sign(bias_delta)
+        if self.previous_bias_update_sign is None:
+            bias_flip_fraction = None
+        else:
+            comparable = (bias_update_sign != 0) & (self.previous_bias_update_sign != 0)
+            bias_flip_fraction = float(
+                ((bias_update_sign != self.previous_bias_update_sign) & comparable)
+                .to(torch.float64)
+                .mean()
+            )
+
+        self.routing_window.append(counts)
+        self.pending_routing = {
+            "counts": counts,
+            "expert_bias": updated_expert_bias,
+            "bias_delta_abs_max": float(bias_delta.abs().max()),
+            "bias_update_flip_fraction": bias_flip_fraction,
+            "load_tv": load_tv,
+        }
+        self.previous_load_distribution = distribution
+        self.previous_bias_update_sign = bias_update_sign
+
+    def write_routing_telemetry(self, iteration):
+        if self.pending_routing is None:
+            return
+        from megatron.training import get_args, get_tensorboard_writer, get_wandb_writer
+
+        args = get_args()
+        interval = int(os.environ.get("STAGE3_MOE_ROUTING_TELEMETRY_INTERVAL", 10))
+        emit = iteration == 1 or iteration % interval == 0 or iteration == args.train_iters
+        if not emit:
+            self.pending_routing = None
+            return
+
+        batch = routing_balance_summary(self.pending_routing["counts"])
+        rolling = routing_balance_summary(torch.stack(tuple(self.routing_window)).sum(dim=0))
+        bias = self.pending_routing["expert_bias"]
+        bias_range = bias.max(dim=1).values - bias.min(dim=1).values
+        load_tv = self.pending_routing["load_tv"]
+        record = {
+            "schema_version": 1,
+            "iteration": iteration,
+            "scope": "global_batch_unpadded",
+            "layers": self.router_names,
+            "batch": batch,
+            "rolling_100": {
+                "window_steps": len(self.routing_window),
+                **rolling,
+            },
+            "expert_bias": {
+                "values": bias.tolist(),
+                "minimum_per_layer": bias.min(dim=1).values.tolist(),
+                "maximum_per_layer": bias.max(dim=1).values.tolist(),
+                "mean_per_layer": bias.mean(dim=1).tolist(),
+                "std_per_layer": bias.std(dim=1, unbiased=False).tolist(),
+                "range_per_layer": bias_range.tolist(),
+                "absolute_max": float(bias.abs().max()),
+                "range_max": float(bias_range.max()),
+                "delta_absolute_max": self.pending_routing["bias_delta_abs_max"],
+                "update_flip_fraction": self.pending_routing[
+                    "bias_update_flip_fraction"
+                ],
+            },
+            "drift": {
+                "load_total_variation_from_previous_mean": (
+                    None if load_tv is None else float(load_tv.mean())
+                ),
+                "load_total_variation_from_previous_max": (
+                    None if load_tv is None else float(load_tv.max())
+                ),
+            },
+            "dropped_tokens": 0 if args.moe_expert_capacity_factor is None else None,
+        }
+
+        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+            artifact = self.result_path.parent / "routing_telemetry.jsonl"
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            with artifact.open("a") as handle:
+                handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+        scalars = {
+            "routing/batch_maxvio_mean": batch["maxvio_mean"],
+            "routing/batch_maxvio_max": batch["maxvio_max"],
+            "routing/batch_minimum_to_mean_min": batch["minimum_to_mean_min"],
+            "routing/batch_cv_max": batch["coefficient_of_variation_max"],
+            "routing/rolling100_maxvio_mean": rolling["maxvio_mean"],
+            "routing/rolling100_maxvio_max": rolling["maxvio_max"],
+            "routing/rolling100_minimum_to_mean_min": rolling[
+                "minimum_to_mean_min"
+            ],
+            "routing/rolling100_cv_max": rolling["coefficient_of_variation_max"],
+            "routing/expert_bias_absolute_max": record["expert_bias"]["absolute_max"],
+            "routing/expert_bias_range_max": record["expert_bias"]["range_max"],
+        }
+        if load_tv is not None:
+            scalars["routing/load_tv_previous_mean"] = float(load_tv.mean())
+            scalars["routing/load_tv_previous_max"] = float(load_tv.max())
+        if self.pending_routing["bias_update_flip_fraction"] is not None:
+            scalars["routing/bias_update_flip_fraction"] = self.pending_routing[
+                "bias_update_flip_fraction"
+            ]
+        for index, (batch_maxvio, rolling_maxvio) in enumerate(
+            zip(batch["maxvio_per_layer"], rolling["maxvio_per_layer"])
+        ):
+            scalars[f"routing/layer_{index:02d}_batch_maxvio"] = batch_maxvio
+            scalars[f"routing/layer_{index:02d}_rolling100_maxvio"] = rolling_maxvio
+
+        writer = get_tensorboard_writer()
+        if writer:
+            for name, value in scalars.items():
+                writer.add_scalar(name, value, iteration)
+        wandb_writer = get_wandb_writer()
+        if wandb_writer:
+            wandb_writer.log(scalars, iteration)
+        self.pending_routing = None
 
     def reset(self):
         torch.cuda.synchronize()
@@ -595,13 +761,16 @@ class Probe:
             "dropped_tokens": 0 if capacity_factor is None else None,
         }
 
-    def after_step(self, elapsed, result):
+    def after_step(self, elapsed, result, iteration=None):
         self.step += 1
         if self.step > self.warmup_steps:
             self.full_step_seconds.append(elapsed)
             loss_dict = result[0]
             if "lm loss" in loss_dict:
                 self.losses.append(float(loss_dict["lm loss"]))
+        self.write_routing_telemetry(
+            self.step if iteration is None else int(iteration) + 1
+        )
 
     def write(self, status="completed"):
         if self.written or self.optimizer is None:
@@ -701,6 +870,7 @@ class Probe:
 
 def install_probe(*, arm, result_path, warmup_steps, measured_steps, program_start, argv):
     import megatron.training.training as training
+    import megatron.core.distributed.finalize_model_grads as finalize_model_grads
 
     probe = Probe(
         arm=arm,
@@ -712,6 +882,14 @@ def install_probe(*, arm, result_path, warmup_steps, measured_steps, program_sta
     )
     original = training.train_step
     original_setup = training.setup_model_and_optimizer
+    original_bias_update = finalize_model_grads.get_updated_expert_bias
+
+    def captured_bias_update(tokens_per_expert, expert_bias, *args, **kwargs):
+        updated = original_bias_update(tokens_per_expert, expert_bias, *args, **kwargs)
+        probe.capture_router_update(tokens_per_expert, expert_bias, updated)
+        return updated
+
+    finalize_model_grads.get_updated_expert_bias = captured_bias_update
 
     def named_setup(*args, **kwargs):
         model, optimizer, scheduler = original_setup(*args, **kwargs)
@@ -720,6 +898,7 @@ def install_probe(*, arm, result_path, warmup_steps, measured_steps, program_sta
         probe.optimizer = optimizer
         probe.model_chunks = list(model)
         install_router_tallies(probe.model_chunks)
+        probe.router_names = [name for name, _ in _moe_routers(probe.model_chunks)]
         for chunk_index, chunk in enumerate(model):
             for name, parameter in chunk.named_parameters():
                 stable_name = f"model_chunk{chunk_index}.{name}"
@@ -777,7 +956,9 @@ def install_probe(*, arm, result_path, warmup_steps, measured_steps, program_sta
         start = time.perf_counter()
         result = original(*args, **kwargs)
         torch.cuda.synchronize()
-        probe.after_step(time.perf_counter() - start, result)
+        probe.after_step(
+            time.perf_counter() - start, result, iteration=kwargs.get("iteration")
+        )
         if probe.step == probe.warmup_steps:
             probe.reset()
         if probe.step == probe.warmup_steps + probe.measured_steps:

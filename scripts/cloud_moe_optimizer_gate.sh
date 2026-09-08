@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Bounded Frugal CoordAdamW / SlimAdam checkpoint and calibration gates.
-# Usage: cloud_moe_optimizer_gate.sh resume|stability|lr-screen [RECIPE]
+# Usage: cloud_moe_optimizer_gate.sh resume|stability|lr-screen|cleanup-stability [RECIPE]
 set -u
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-mode=${1:?usage: cloud_moe_optimizer_gate.sh resume|stability|lr-screen [RECIPE]}
+mode=${1:?usage: cloud_moe_optimizer_gate.sh resume|stability|lr-screen|cleanup-stability [RECIPE]}
 recipe=${2:-}
 gate_arm=${STAGE3_MOE_GATE_ARM:-both}
 ckpt_root=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs2/hmoe-checkpoints/frugal-slimadam-gates}
@@ -27,6 +27,49 @@ git -C "$root" status --short --branch
 git -C "$root" rev-parse HEAD
 df -h "$ckpt_root" "$log_root" | awk 'NR == 1 || !seen[$1]++'
 available_kb=$(df -Pk "$ckpt_root" | awk 'NR == 2 {print $4}')
+
+if [[ $mode == cleanup-stability ]]; then
+  [[ -z $recipe ]] || {
+    echo "GATE_FAIL mode=$mode reason=unexpected_recipe recipe=$recipe"
+    echo "EXIT=1"
+    exit 0
+  }
+  cleanup_paths=(
+    "$ckpt_root/stability/frugal_coord_bf16_state_fp32-stability-matched-v1"
+    "$ckpt_root/stability/slimadam_bf16_state_fp32-stability-matched-v1"
+  )
+  cleanup_status=0
+  for path in "${cleanup_paths[@]}"; do
+    if [[ ! -e $path ]]; then
+      echo "CLEANUP_ALREADY_ABSENT=$path"
+      continue
+    fi
+    tracker="$path/latest_checkpointed_iteration.txt"
+    iteration_dir="$path/iter_0000235"
+    if [[ ! -f $tracker || $(cat "$tracker") != 235 || ! -d $iteration_dir ]]; then
+      echo "GATE_FAIL mode=$mode reason=unexpected_checkpoint_layout path=$path"
+      cleanup_status=1
+      continue
+    fi
+    du -sh -- "$path"
+    find "$path" -mindepth 1 -maxdepth 1 -printf 'CLEANUP_MEMBER=%f\n' | sort
+  done
+  if (( cleanup_status != 0 )); then
+    echo "EXIT=1"
+    exit 0
+  fi
+  for path in "${cleanup_paths[@]}"; do
+    if [[ -e $path ]]; then
+      rm -rf -- "$path"
+      echo "GATE_CKPT_REMOVED=$path"
+    fi
+  done
+  df -h "$ckpt_root" | tail -1
+  echo "GATE_PASS mode=$mode"
+  echo "EXIT=0"
+  exit 0
+fi
+
 if (( available_kb < 20971520 )); then
   echo "GATE_FAIL reason=disk available_kb=$available_kb required_kb=20971520"
   echo "EXIT=1"
@@ -53,6 +96,7 @@ count = 0
 for relative in (
     "tests/stage3_moe/test_memory_efficient_optimizers.py",
     "tests/stage3_moe/test_memory_optimizer_pretrain_gates.py",
+    "tests/stage3_moe/test_routing_telemetry.py",
 ):
     namespace = runpy.run_path(root / relative)
     for name, function in sorted(namespace.items()):
@@ -93,31 +137,45 @@ run_launcher() {
 }
 
 validate_calibration_result() {
-  python - "$1" <<'PY'
+  python - "$1" "$2" "$3" <<'PY'
 import json
 import math
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
+telemetry_path = Path(sys.argv[2])
+target = int(sys.argv[3])
 records = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 record = records[-1]
-routing = record["measurement"]["routing"]
 training_loss = record["measurement"]["loss"]["training"]
 if record["status"] != "completed":
     raise SystemExit("result status is not completed")
 if training_loss is None or not math.isfinite(training_loss):
     raise SystemExit("training loss is absent or non-finite")
-if routing["minimum_to_mean"] is None or routing["minimum_to_mean"] < 0.1:
-    raise SystemExit(f"routing minimum/mean failed: {routing['minimum_to_mean']}")
-if routing["coefficient_of_variation"] is None or routing["coefficient_of_variation"] >= 0.2:
-    raise SystemExit(f"routing CV failed: {routing['coefficient_of_variation']}")
-if routing["dropped_tokens"] != 0:
-    raise SystemExit(f"dropped tokens failed: {routing['dropped_tokens']}")
+telemetry = [
+    json.loads(line) for line in telemetry_path.read_text().splitlines() if line.strip()
+]
+last = telemetry[-1]
+if last["iteration"] != target:
+    raise SystemExit(f"routing telemetry ended at {last['iteration']}, expected {target}")
+routing = last["rolling_100"]
+if routing["window_steps"] != 100:
+    raise SystemExit(f"routing window has {routing['window_steps']} steps, expected 100")
+if routing["minimum_to_mean_min"] < 0.1:
+    raise SystemExit(f"routing minimum/mean failed: {routing['minimum_to_mean_min']}")
+if routing["coefficient_of_variation_max"] >= 0.2:
+    raise SystemExit(f"routing CV failed: {routing['coefficient_of_variation_max']}")
+if last["dropped_tokens"] != 0:
+    raise SystemExit(f"dropped tokens failed: {last['dropped_tokens']}")
+measurement = record["measurement"]
 print(
     f"RESULT_PASS training_loss={training_loss:.6f} "
-    f"route_min_mean={routing['minimum_to_mean']:.6f} "
-    f"route_cv={routing['coefficient_of_variation']:.6f} dropped=0"
+    f"route_min_mean={routing['minimum_to_mean_min']:.6f} "
+    f"route_cv={routing['coefficient_of_variation_max']:.6f} dropped=0 "
+    f"full_step_seconds={measurement['timing']['full_step_seconds']} "
+    f"max_allocated_bytes={measurement['memory']['max_allocated_bytes']} "
+    f"optimizer_state_bytes={measurement['optimizer_state']['persistent_total_bytes']}"
 )
 PY
 }
@@ -222,7 +280,8 @@ run_calibration() {
     echo "GATE_FAIL arm=$arm gate=$launcher_mode recipe=$label reason=validation_missing"
     return 1
   fi
-  if ! validate_calibration_result "$run_dir/results.jsonl"; then
+  if ! validate_calibration_result \
+    "$run_dir/results.jsonl" "$run_dir/routing_telemetry.jsonl" "$target"; then
     echo "GATE_FAIL arm=$arm gate=$launcher_mode recipe=$label reason=result_or_routing"
     return 1
   fi
@@ -263,15 +322,18 @@ case "$mode" in
     fi
     ;;
   lr-screen)
-    case "$recipe" in
-      matched)
+    case "$gate_arm:$recipe" in
+      frugal_coord_bf16_state_fp32:matched)
         run_calibration lr-screen frugal_coord_bf16_state_fp32 matched 1.63e-3 1.63e-4 0.95 587 || status=1
         ;;
-      efficient-training-1e3)
+      frugal_coord_bf16_state_fp32:efficient-training-1e3)
         run_calibration lr-screen frugal_coord_bf16_state_fp32 efficient-training-1e3 1e-3 1e-4 0.999 587 || status=1
         ;;
-      efficient-training-2e3)
+      frugal_coord_bf16_state_fp32:efficient-training-2e3)
         run_calibration lr-screen frugal_coord_bf16_state_fp32 efficient-training-2e3 2e-3 2e-4 0.999 587 || status=1
+        ;;
+      slimadam_bf16_state_fp32:matched)
+        run_calibration lr-screen slimadam_bf16_state_fp32 matched 1.63e-3 1.63e-4 0.95 587 || status=1
         ;;
       *) status=1 ;;
     esac

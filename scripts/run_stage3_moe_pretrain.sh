@@ -172,10 +172,10 @@ case "$mode" in
     load_args=()
     ;;
   lr-screen)
-    [[ $arm == frugal_coord_bf16_state_fp32 ]] || {
-      echo "lr-screen is only defined for Frugal CoordAdamW" >&2
-      exit 2
-    }
+    case "$arm" in
+      frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) echo "lr-screen is only defined for Frugal CoordAdamW and SlimAdam" >&2; exit 2 ;;
+    esac
     train_iters=587
     target_iters=$train_iters
     decay_iters=117

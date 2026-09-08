@@ -33,15 +33,31 @@ def test_calibration_budgets_and_optimizer_overrides_are_explicit():
     assert '--lr "$learning_rate"' in launcher
 
 
-def test_cloud_gate_preregisters_only_the_three_frugal_recipes():
+def test_cloud_gate_preregisters_three_frugal_recipes_and_matched_slimadam():
     gate = CLOUD_GATE.read_text()
 
     assert "matched 1.63e-3 1.63e-4 0.95 587" in gate
     assert "efficient-training-1e3 1e-3 1e-4 0.999 587" in gate
     assert "efficient-training-2e3 2e-3 2e-4 0.999 587" in gate
+    assert "slimadam_bf16_state_fp32 matched 1.63e-3 1.63e-4 0.95 587" in gate
     assert "frugal_coord_bf16_state_fp32 matched 1.63e-3 1.63e-4 0.95 235" in gate
     assert "slimadam_bf16_state_fp32 matched 1.63e-3 1.63e-4 0.95 235" in gate
-    assert 'routing["minimum_to_mean"] < 0.1' in gate
-    assert 'routing["coefficient_of_variation"] >= 0.2' in gate
+    assert 'routing["minimum_to_mean_min"] < 0.1' in gate
+    assert 'routing["coefficient_of_variation_max"] >= 0.2' in gate
+    assert 'last["iteration"] != target' in gate
+    assert 'routing["window_steps"] != 100' in gate
     assert "number of nan iterations: +0" in gate
     assert "GATE_CKPT_REMOVED" in gate
+
+
+def test_stability_cleanup_is_exact_and_requires_the_235_trackers():
+    gate = CLOUD_GATE.read_text()
+
+    cleanup = gate.split("if [[ $mode == cleanup-stability ]]", 1)[1].split(
+        "if (( available_kb", 1
+    )[0]
+    assert "frugal_coord_bf16_state_fp32-stability-matched-v1" in cleanup
+    assert "slimadam_bf16_state_fp32-stability-matched-v1" in cleanup
+    assert "iter_0000235" in cleanup
+    assert '$(cat "$tracker") != 235' in cleanup
+    assert 'rm -rf -- "$path"' in cleanup
