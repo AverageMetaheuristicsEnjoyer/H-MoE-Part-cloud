@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Bounded Frugal CoordAdamW / SlimAdam checkpoint and calibration gates.
-# Usage: cloud_moe_optimizer_gate.sh resume|stability|lr-screen|cleanup-stability [RECIPE]
+# Usage: cloud_moe_optimizer_gate.sh cpu-contract|resume|stability|lr-screen|cleanup-stability [RECIPE]
 set -u
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-mode=${1:?usage: cloud_moe_optimizer_gate.sh resume|stability|lr-screen|cleanup-stability [RECIPE]}
+mode=${1:?usage: cloud_moe_optimizer_gate.sh cpu-contract|resume|stability|lr-screen|cleanup-stability [RECIPE]}
 recipe=${2:-}
 gate_arm=${STAGE3_MOE_GATE_ARM:-both}
 ckpt_root=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs2/hmoe-checkpoints/frugal-slimadam-gates}
@@ -108,6 +108,17 @@ PY
 if [[ $? -ne 0 ]]; then
   echo "GATE_FAIL reason=cpu_contract"
   echo "EXIT=1"
+  exit 0
+fi
+
+if [[ $mode == cpu-contract ]]; then
+  [[ -z $recipe ]] || {
+    echo "GATE_FAIL mode=$mode reason=unexpected_recipe recipe=$recipe"
+    echo "EXIT=1"
+    exit 0
+  }
+  echo "GATE_PASS mode=$mode"
+  echo "EXIT=0"
   exit 0
 fi
 

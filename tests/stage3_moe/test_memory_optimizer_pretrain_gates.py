@@ -61,3 +61,11 @@ def test_stability_cleanup_is_exact_and_requires_the_235_trackers():
     assert "iter_0000235" in cleanup
     assert '$(cat "$tracker") != 235' in cleanup
     assert 'rm -rf -- "$path"' in cleanup
+
+
+def test_cpu_contract_exits_before_allocated_runtime_checks():
+    gate = CLOUD_GATE.read_text()
+
+    assert gate.index("if [[ $mode == cpu-contract ]]") < gate.index(
+        'echo "=== ALLOCATED RUNTIME ==="'
+    )
