@@ -213,8 +213,8 @@ case "$mode" in
     ;;
   resume-bench)
     # Steady-state timing. `bench` measures 25 cold iterations of an untrained model,
-    # which is a different regime: at iteration 2254 the router is balanced and the
-    # expert GEMMs are small, and FP8 delayed scaling measures very differently there.
+    # which is a different regime: at iteration 2254 the checkpoint carries trained
+    # router scores and biases, and FP8 delayed scaling measures very differently there.
     # Resume the branch point, run a short window, never write a checkpoint.
     train_iters=$((short_branch + ${STAGE3_MOE_BENCH_ITERS:-150}))
     target_iters=$full_iters
