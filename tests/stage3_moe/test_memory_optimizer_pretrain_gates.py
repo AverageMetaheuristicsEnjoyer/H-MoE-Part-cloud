@@ -20,13 +20,22 @@ def test_calibration_budgets_and_optimizer_overrides_are_explicit():
     launcher = LAUNCHER.read_text()
 
     stability = launcher.split("  stability)", 1)[1].split("  lr-screen)", 1)[0]
-    lr_screen = launcher.split("  lr-screen)", 1)[1].split("  bench)", 1)[0]
+    lr_screen = launcher.split("  lr-screen)", 1)[1].split(
+        "  routing-calibration)", 1
+    )[0]
+    routing_calibration = launcher.split("  routing-calibration)", 1)[1].split(
+        "  bench)", 1
+    )[0]
     assert "train_iters=235" in stability
     assert "decay_iters=47" in stability
     assert "warmup_iters=2" in stability
     assert "train_iters=587" in lr_screen
     assert "decay_iters=117" in lr_screen
     assert "warmup_iters=6" in lr_screen
+    assert "train_iters=587" in routing_calibration
+    assert "target_iters=$full_iters" in routing_calibration
+    assert "decay_iters=$full_decay_iters" in routing_calibration
+    assert "warmup_iters=" not in routing_calibration
     assert 'learning_rate=${STAGE3_MOE_LR:-1.63e-3}' in launcher
     assert 'adam_beta2=${STAGE3_MOE_ADAM_BETA2:-0.95}' in launcher
     assert '--adam-beta1 0.9 --adam-beta2 "$adam_beta2"' in launcher
@@ -48,6 +57,21 @@ def test_cloud_gate_preregisters_three_frugal_recipes_and_matched_slimadam():
     assert 'routing["window_steps"] != 100' in gate
     assert "number of nan iterations: +0" in gate
     assert "GATE_CKPT_REMOVED" in gate
+
+
+def test_routing_calibration_has_matched_adamw_control_and_prefix_schedule():
+    gate = CLOUD_GATE.read_text()
+
+    block = gate.split("  routing-calibration)", 1)[1].split(
+        "\n  *) status=1 ;;\nesac", 1
+    )[0]
+    assert "adamw_bf16_state_fp32" in block
+    assert "frugal_coord_bf16_state_fp32" in block
+    assert "slimadam_bf16_state_fp32" in block
+    assert (
+        'run_calibration routing-calibration "$gate_arm" matched '
+        "1.63e-3 1.63e-4 0.95 587" in block
+    )
 
 
 def test_stability_cleanup_is_exact_and_requires_the_235_trackers():

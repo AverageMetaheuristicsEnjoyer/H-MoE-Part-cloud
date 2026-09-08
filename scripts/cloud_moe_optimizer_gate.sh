@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Bounded Frugal CoordAdamW / SlimAdam checkpoint and calibration gates.
-# Usage: cloud_moe_optimizer_gate.sh cpu-contract|smoke|resume|stability|lr-screen|cleanup-stability [RECIPE]
+# Usage: cloud_moe_optimizer_gate.sh cpu-contract|smoke|resume|stability|lr-screen|routing-calibration|cleanup-stability [RECIPE]
 set -u
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-mode=${1:?usage: cloud_moe_optimizer_gate.sh cpu-contract|smoke|resume|stability|lr-screen|cleanup-stability [RECIPE]}
+mode=${1:?usage: cloud_moe_optimizer_gate.sh cpu-contract|smoke|resume|stability|lr-screen|routing-calibration|cleanup-stability [RECIPE]}
 recipe=${2:-}
 gate_arm=${STAGE3_MOE_GATE_ARM:-both}
 ckpt_root=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs2/hmoe-checkpoints/frugal-slimadam-gates}
@@ -390,6 +390,16 @@ case "$mode" in
         ;;
       *) status=1 ;;
     esac
+    ;;
+  routing-calibration)
+    [[ $recipe == matched ]] || status=1
+    case "$gate_arm" in
+      adamw_bf16_state_fp32|frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) status=1 ;;
+    esac
+    if (( status == 0 )); then
+      run_calibration routing-calibration "$gate_arm" matched 1.63e-3 1.63e-4 0.95 587 || status=1
+    fi
     ;;
   *) status=1 ;;
 esac

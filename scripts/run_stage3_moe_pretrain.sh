@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 3 MoE matched pretraining, WSD trunk-and-branch.
 #
-#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|resume-gate|stability|lr-screen|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|corrected-time-match|time-match-stretched-decay|schedule-tail|schedule-tail-smoke|eval-lm-fixed|eval-routing-fixed|eval-downstream
+#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|resume-gate|stability|lr-screen|routing-calibration|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|corrected-time-match|time-match-stretched-decay|schedule-tail|schedule-tail-smoke|eval-lm-fixed|eval-routing-fixed|eval-downstream
 #
 # smoke exercises save and resume; bench measures throughput and peak memory with no
 # checkpoint traffic; resume-bench does the same from the trunk branch point, so the
@@ -181,6 +181,21 @@ case "$mode" in
     decay_iters=117
     warmup_iters=6
     gate_dir="$ckpt_root/lr-screen/$arm${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
+    mkdir -p "$gate_dir"
+    save_args=(--save "$gate_dir" --save-interval "$train_iters")
+    load_args=()
+    ;;
+  routing-calibration)
+    case "$arm" in
+      adamw_bf16_state_fp32|frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) echo "routing-calibration is only defined for matched AdamW, Frugal CoordAdamW, and SlimAdam" >&2; exit 2 ;;
+    esac
+    # Reproduce the first 587 steps of the full baseline schedule exactly: the
+    # 173-step warmup followed by peak LR, with the full run's decay still far away.
+    train_iters=587
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    gate_dir="$ckpt_root/routing-calibration/$arm${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
     mkdir -p "$gate_dir"
     save_args=(--save "$gate_dir" --save-interval "$train_iters")
     load_args=()
