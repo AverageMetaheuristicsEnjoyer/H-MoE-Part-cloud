@@ -6,6 +6,9 @@
 #     --env STAGE3_MOE_CKPT_ROOT=/workspace-SR006.nfs2/hmoe-checkpoints/stage3-1c-mb4
 #     --env STAGE3_MOE_MICRO_BATCH=4 --env STAGE3_MOE_RUN_SUFFIX=mb4
 #     --env WANDB_API_KEY=... --env WANDB_BASE_URL=https://wandb-radfan.ru
+# A nonstandard branch-point directory can be supplied for a single arm with
+# STAGE3_MOE_BRANCH_CHECKPOINT_DIR. On the same filesystem it is moved atomically into
+# the normal 1C destination so checkpoint rotation can reclaim it after the next save.
 #
 # Seeding: the destination is filled once from the trunk branch point and then owns
 # itself.  Hardlinks are used when source and destination sit on the same volume (free)
@@ -24,6 +27,13 @@ dst_root=${STAGE3_MOE_CKPT_ROOT:?set STAGE3_MOE_CKPT_ROOT to the checkpoint root
 full_dir_name=${STAGE3_MOE_FULL_DIR:-1c}
 branch=2254
 branch_dir=$(printf 'iter_%07d' "$branch")
+direct_source=${STAGE3_MOE_BRANCH_CHECKPOINT_DIR:-}
+
+if [[ -n $direct_source && $# != 1 ]]; then
+  echo "DIRECT_SOURCE_FAIL expected exactly one arm, got $#"
+  echo "EXIT=1"
+  exit 0
+fi
 
 echo "FULL_WAVE root=$dst_root dir=$full_dir_name micro_batch=${STAGE3_MOE_MICRO_BATCH:-4} suffix=${STAGE3_MOE_RUN_SUFFIX:-none}"
 df -h "$src_root" "$dst_root" 2>/dev/null | grep -v ^Filesystem
@@ -37,26 +47,78 @@ for arm in "$@"; do
   tracker="$dst/latest_checkpointed_iteration.txt"
 
   if [[ -f $tracker ]]; then
-    echo "=== ARM $arm RESUME from $(cat "$tracker") in $dst ==="
+    resume_iteration=$(cat "$tracker")
+    if [[ ! $resume_iteration =~ ^[0-9]+$ ]]; then
+      echo "SKIP $arm: invalid resume tracker at $tracker"
+      continue
+    fi
+    resume_dir=$(printf '%s/iter_%07d' "$dst" "$resume_iteration")
+    if [[ ! -d $resume_dir ]]; then
+      echo "SKIP $arm: invalid resume tracker at $tracker"
+      continue
+    fi
+    echo "=== ARM $arm RESUME from $resume_iteration in $dst ==="
   else
-    src="$src_root/trunk/$arm/$branch_dir"
+    if [[ -n $direct_source ]]; then
+      source_tracker="$direct_source/latest_checkpointed_iteration.txt"
+      src="$direct_source/$branch_dir"
+      if [[ ! -f $source_tracker || $(cat "$source_tracker") != "$branch" ]]; then
+        echo "SKIP $arm: direct source tracker is not $branch at $source_tracker"
+        continue
+      fi
+    else
+      src="$src_root/trunk/$arm/$branch_dir"
+    fi
     if [[ ! -d $src ]]; then
       echo "SKIP $arm: no branch point at $src"
       continue
     fi
-    mkdir -p "$dst"
-    if [[ $(stat -c %d "$src") == $(stat -c %d "$dst") ]]; then
-      echo "=== ARM $arm SEED hardlink $src -> $dst ==="
-      cp -al "$src" "$dst/" || { echo "SKIP $arm: hardlink seeding failed"; continue; }
+    mkdir -p "$(dirname "$dst")"
+    if [[ -n $direct_source && $(stat -c %d "$direct_source") == $(stat -c %d "$(dirname "$dst")") ]]; then
+      echo "=== ARM $arm SEED move $direct_source -> $dst ==="
+      mv -- "$direct_source" "$dst" || { echo "SKIP $arm: atomic seed move failed"; continue; }
     else
-      echo "=== ARM $arm SEED copy $src -> $dst (cross-volume, this takes minutes) ==="
-      cp -a "$src" "$dst/.$branch_dir.partial" || { echo "SKIP $arm: copy failed"; continue; }
-      mv "$dst/.$branch_dir.partial" "$dst/$branch_dir" || { echo "SKIP $arm: rename failed"; continue; }
+      mkdir -p "$dst"
+      if [[ $(stat -c %d "$src") == $(stat -c %d "$dst") ]]; then
+        echo "=== ARM $arm SEED hardlink $src -> $dst ==="
+        cp -al "$src" "$dst/" || { echo "SKIP $arm: hardlink seeding failed"; continue; }
+      else
+        echo "=== ARM $arm SEED copy $src -> $dst (cross-volume, this takes minutes) ==="
+        cp -a "$src" "$dst/.$branch_dir.partial" || { echo "SKIP $arm: copy failed"; continue; }
+        mv "$dst/.$branch_dir.partial" "$dst/$branch_dir" || { echo "SKIP $arm: rename failed"; continue; }
+      fi
+      # Written last: the tracker is what marks the seed complete, so a job killed during
+      # the copy leaves no half-seeded directory that a resume would trust.
+      echo "$branch" > "$tracker"
     fi
-    # Written last: the tracker is what marks the seed complete, so a job killed during
-    # the copy leaves no half-seeded directory that a resume would trust.
-    echo "$branch" > "$tracker"
     du -sh "$dst" 2>/dev/null
+  fi
+
+  resume_iteration=$(cat "$tracker" 2>/dev/null)
+  if [[ ! $resume_iteration =~ ^[0-9]+$ ]]; then
+    echo "SKIP $arm: destination has an invalid tracker"
+    continue
+  fi
+  resume_dir=$(printf '%s/iter_%07d' "$dst" "$resume_iteration")
+  if [[ ! -d $resume_dir ]]; then
+    echo "SKIP $arm: destination is not a complete checkpoint"
+    continue
+  fi
+  checkpoint_kb=$(du -sk "$resume_dir" | awk '{print $1}')
+  existing_checkpoints=$(find "$dst" -mindepth 1 -maxdepth 1 -type d -name 'iter_*' | wc -l)
+  additional_checkpoints=1
+  if (( existing_checkpoints == 1 && resume_iteration <= 13794 )); then
+    additional_checkpoints=2
+  fi
+  available_kb=$(df -Pk "$dst_root" | awk 'NR == 2 {print $4}')
+  required_kb=$((additional_checkpoints * checkpoint_kb + 2 * 1024 * 1024))
+  if (( available_kb < required_kb )); then
+    echo "SKIP $arm: insufficient rolling-checkpoint space available_kb=$available_kb required_kb=$required_kb checkpoint_kb=$checkpoint_kb"
+    continue
+  fi
+  echo "FULL_PREFLIGHT_PASS arm=$arm checkpoint=$resume_iteration available_kb=$available_kb required_kb=$required_kb"
+  if [[ ${STAGE3_MOE_PREFLIGHT_ONLY:-0} == 1 ]]; then
+    continue
   fi
 
   "$root/scripts/run_stage3_moe_pretrain.sh" "$arm" full

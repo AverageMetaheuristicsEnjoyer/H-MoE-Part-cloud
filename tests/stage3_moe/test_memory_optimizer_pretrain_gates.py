@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[2]
 LAUNCHER = ROOT / "scripts" / "run_stage3_moe_pretrain.sh"
 CLOUD_GATE = ROOT / "scripts" / "cloud_moe_optimizer_gate.sh"
+CLOUD_FULL = ROOT / "scripts" / "cloud_moe_full.sh"
 
 
 def test_resume_gate_crosses_frugal_refresh_boundary():
@@ -93,6 +94,17 @@ def test_routing_calibration_2254_resumes_then_removes_verified_source():
     assert "successfully saved checkpoint from iteration +2254" in function
     assert function.index('rm -rf -- "$source"') > function.index("no_iteration_2254_save")
     assert '"$run_dir/results.jsonl" "$run_dir/routing_telemetry.jsonl" 2254' in function
+
+
+def test_full_wave_accepts_and_moves_a_direct_branch_checkpoint():
+    cloud = CLOUD_FULL.read_text()
+
+    assert "STAGE3_MOE_BRANCH_CHECKPOINT_DIR" in cloud
+    assert '$(cat "$source_tracker") != "$branch"' in cloud
+    assert 'mv -- "$direct_source" "$dst"' in cloud
+    assert 'FULL_PREFLIGHT_PASS arm=$arm checkpoint=$resume_iteration' in cloud
+    assert "additional_checkpoints * checkpoint_kb + 2 * 1024 * 1024" in cloud
+    assert "STAGE3_MOE_PREFLIGHT_ONLY" in cloud
 
 
 def test_stability_cleanup_is_exact_and_requires_the_235_trackers():
