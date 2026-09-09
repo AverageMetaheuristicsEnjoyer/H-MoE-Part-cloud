@@ -21,12 +21,35 @@ def test_iteration_schedule_sizes_and_resets_extension_phase(monkeypatch):
         eval_iters=32,
         phase_transition_iterations=[13_794],
         iteration=13_794,
+        consumed_valid_samples=0,
     )
     monkeypatch.setattr(training, "get_args", lambda: args)
 
     train_samples, _, _ = training.get_train_valid_test_num_samples()
 
     assert train_samples == (22_208 - 13_794) * 208
+
+
+def test_changed_eval_schedule_keeps_enough_validation_samples_on_resume(monkeypatch):
+    args = SimpleNamespace(
+        train_samples=None,
+        train_iters=2_254,
+        global_batch_size=208,
+        full_validation=False,
+        skip_train=False,
+        eval_interval=2_254,
+        start_eval_at_iter=None,
+        eval_iters=32,
+        phase_transition_iterations=None,
+        iteration=587,
+        consumed_valid_samples=6_656,
+    )
+    monkeypatch.setattr(training, "get_args", lambda: args)
+
+    _, valid_samples, test_samples = training.get_train_valid_test_num_samples()
+
+    assert valid_samples == 19_968
+    assert test_samples == 6_656
 
 
 def test_phase_local_sampler_offset_starts_at_zero():
