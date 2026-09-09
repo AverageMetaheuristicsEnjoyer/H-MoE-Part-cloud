@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 3 MoE matched pretraining, WSD trunk-and-branch.
 #
-#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|resume-gate|stability|lr-screen|routing-calibration|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|corrected-time-match|time-match-stretched-decay|schedule-tail|schedule-tail-smoke|eval-lm-fixed|eval-routing-fixed|eval-downstream
+#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|resume-gate|stability|lr-screen|routing-calibration|routing-calibration-2254|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|corrected-time-match|time-match-stretched-decay|schedule-tail|schedule-tail-smoke|eval-lm-fixed|eval-routing-fixed|eval-downstream
 #
 # smoke exercises save and resume; bench measures throughput and peak memory with no
 # checkpoint traffic; resume-bench does the same from the trunk branch point, so the
@@ -199,6 +199,20 @@ case "$mode" in
     mkdir -p "$gate_dir"
     save_args=(--save "$gate_dir" --save-interval "$train_iters")
     load_args=()
+    ;;
+  routing-calibration-2254)
+    case "$arm" in
+      adamw_bf16_state_fp32|frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) echo "routing-calibration-2254 is only defined for matched AdamW, Frugal CoordAdamW, and SlimAdam" >&2; exit 2 ;;
+    esac
+    routing_source=${STAGE3_MOE_ROUTING_RESUME_SOURCE:?set STAGE3_MOE_ROUTING_RESUME_SOURCE}
+    routing_output=${STAGE3_MOE_ROUTING_RESUME_OUTPUT:?set STAGE3_MOE_ROUTING_RESUME_OUTPUT}
+    train_iters=$short_branch
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    mkdir -p "$routing_output"
+    save_args=(--save "$routing_output" --save-interval "$train_iters")
+    load_args=(--load "$routing_source" --override-opt_param-scheduler)
     ;;
   bench)
     # Throughput and peak memory only. No checkpoint traffic, so an NFS write never

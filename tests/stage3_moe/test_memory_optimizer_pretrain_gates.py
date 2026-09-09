@@ -24,8 +24,11 @@ def test_calibration_budgets_and_optimizer_overrides_are_explicit():
         "  routing-calibration)", 1
     )[0]
     routing_calibration = launcher.split("  routing-calibration)", 1)[1].split(
-        "  bench)", 1
+        "  routing-calibration-2254)", 1
     )[0]
+    routing_calibration_2254 = launcher.split(
+        "  routing-calibration-2254)", 1
+    )[1].split("  bench)", 1)[0]
     assert "train_iters=235" in stability
     assert "decay_iters=47" in stability
     assert "warmup_iters=2" in stability
@@ -36,6 +39,10 @@ def test_calibration_budgets_and_optimizer_overrides_are_explicit():
     assert "target_iters=$full_iters" in routing_calibration
     assert "decay_iters=$full_decay_iters" in routing_calibration
     assert "warmup_iters=" not in routing_calibration
+    assert "train_iters=$short_branch" in routing_calibration_2254
+    assert "target_iters=$full_iters" in routing_calibration_2254
+    assert "decay_iters=$full_decay_iters" in routing_calibration_2254
+    assert '--load "$routing_source" --override-opt_param-scheduler' in routing_calibration_2254
     assert 'learning_rate=${STAGE3_MOE_LR:-1.63e-3}' in launcher
     assert 'adam_beta2=${STAGE3_MOE_ADAM_BETA2:-0.95}' in launcher
     assert '--adam-beta1 0.9 --adam-beta2 "$adam_beta2"' in launcher
@@ -72,6 +79,20 @@ def test_routing_calibration_has_matched_adamw_control_and_prefix_schedule():
         'run_calibration routing-calibration "$gate_arm" matched '
         "1.63e-3 1.63e-4 0.95 587" in block
     )
+
+
+def test_routing_calibration_2254_resumes_then_removes_verified_source():
+    gate = CLOUD_GATE.read_text()
+
+    function = gate.split("run_routing_calibration_2254()", 1)[1].split(
+        "\nstatus=0", 1
+    )[0]
+    assert "source_587_missing" in function
+    assert "output_2254_missing" in function
+    assert "successfully loaded checkpoint.*iteration +587" in function
+    assert "successfully saved checkpoint from iteration +2254" in function
+    assert function.index('rm -rf -- "$source"') > function.index("no_iteration_2254_save")
+    assert '"$run_dir/results.jsonl" "$run_dir/routing_telemetry.jsonl" 2254' in function
 
 
 def test_stability_cleanup_is_exact_and_requires_the_235_trackers():

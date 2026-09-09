@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Bounded Frugal CoordAdamW / SlimAdam checkpoint and calibration gates.
-# Usage: cloud_moe_optimizer_gate.sh cpu-contract|smoke|resume|stability|lr-screen|routing-calibration|cleanup-stability|cleanup-lr-screen [RECIPE]
+# Usage: cloud_moe_optimizer_gate.sh cpu-contract|smoke|resume|stability|lr-screen|routing-calibration|routing-calibration-2254|cleanup-stability|cleanup-lr-screen [RECIPE]
 set -u
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-mode=${1:?usage: cloud_moe_optimizer_gate.sh cpu-contract|smoke|resume|stability|lr-screen|routing-calibration|cleanup-stability|cleanup-lr-screen [RECIPE]}
+mode=${1:?usage: cloud_moe_optimizer_gate.sh cpu-contract|smoke|resume|stability|lr-screen|routing-calibration|routing-calibration-2254|cleanup-stability|cleanup-lr-screen [RECIPE]}
 recipe=${2:-}
 gate_arm=${STAGE3_MOE_GATE_ARM:-both}
 ckpt_root=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs2/hmoe-checkpoints/frugal-slimadam-gates}
@@ -380,6 +380,74 @@ run_calibration() {
   fi
 }
 
+run_routing_calibration_2254() {
+  local arm=$1
+  local source="$ckpt_root/routing-calibration/$arm-routing-calibration-matched-v1"
+  local output_root=${STAGE3_MOE_ROUTING_2254_CKPT_ROOT:-/workspace-SR006.nfs3/hmoe-checkpoints/frugal-slimadam-routing-2254}
+  local output="$output_root/$arm-routing-calibration-2254-matched-v1"
+  local source_tracker="$source/latest_checkpointed_iteration.txt"
+  local output_tracker="$output/latest_checkpointed_iteration.txt"
+  local run_suffix=routing-calibration-2254-matched-v1
+  local run_dir="$log_root/stage3-$arm-routing-calibration-2254-$run_suffix"
+
+  if [[ ! -f $source_tracker || $(cat "$source_tracker") != 587 || ! -d $source/iter_0000587 ]]; then
+    echo "GATE_FAIL arm=$arm gate=routing-calibration-2254 reason=source_587_missing path=$source"
+    return 1
+  fi
+  if [[ -e $output ]]; then
+    echo "GATE_FAIL arm=$arm gate=routing-calibration-2254 reason=output_path_exists path=$output"
+    return 1
+  fi
+  mkdir -p "$output_root"
+  local output_available_kb
+  output_available_kb=$(df -Pk "$output_root" | awk 'NR == 2 {print $4}')
+  if (( output_available_kb < 20971520 )); then
+    echo "GATE_FAIL arm=$arm gate=routing-calibration-2254 reason=output_disk available_kb=$output_available_kb required_kb=20971520"
+    return 1
+  fi
+
+  export STAGE3_MOE_RUN_SUFFIX=$run_suffix
+  export STAGE3_MOE_LR=1.63e-3
+  export STAGE3_MOE_MIN_LR=1.63e-4
+  export STAGE3_MOE_ADAM_BETA2=0.95
+  export STAGE3_MOE_EVAL_INTERVAL=2254
+  export STAGE3_MOE_ROUTING_RESUME_SOURCE=$source
+  export STAGE3_MOE_ROUTING_RESUME_OUTPUT=$output
+
+  echo "=== ROUTING CALIBRATION RESUME arm=$arm source=587 target=2254 output=$output ==="
+  run_launcher "$arm" routing-calibration-2254 || return 1
+  if [[ ! -f $output_tracker || $(cat "$output_tracker") != 2254 || ! -d $output/iter_0002254 ]]; then
+    echo "GATE_FAIL arm=$arm gate=routing-calibration-2254 reason=output_2254_missing path=$output"
+    return 1
+  fi
+  if ! grep -qE 'successfully loaded checkpoint.*iteration +587' "$run_dir"/train-*.log; then
+    echo "GATE_FAIL arm=$arm gate=routing-calibration-2254 reason=no_iteration_587_load"
+    return 1
+  fi
+  if ! grep -qE 'successfully saved checkpoint from iteration +2254' "$run_dir"/train-*.log; then
+    echo "GATE_FAIL arm=$arm gate=routing-calibration-2254 reason=no_iteration_2254_save"
+    return 1
+  fi
+  if ! grep -qE 'number of nan iterations: +0' "$run_dir"/train-*.log; then
+    echo "GATE_FAIL arm=$arm gate=routing-calibration-2254 reason=nan_summary_missing"
+    return 1
+  fi
+  if ! grep -q 'validation loss at iteration' "$run_dir"/train-*.log; then
+    echo "GATE_FAIL arm=$arm gate=routing-calibration-2254 reason=validation_missing"
+    return 1
+  fi
+
+  rm -rf -- "$source"
+  echo "GATE_CKPT_REMOVED=$source"
+
+  if ! validate_calibration_result \
+    "$run_dir/results.jsonl" "$run_dir/routing_telemetry.jsonl" 2254; then
+    echo "GATE_FAIL arm=$arm gate=routing-calibration-2254 reason=result_or_routing"
+    return 1
+  fi
+  echo "GATE_PASS arm=$arm gate=routing-calibration-2254 target=2254"
+}
+
 status=0
 case "$mode" in
   smoke)
@@ -443,6 +511,16 @@ case "$mode" in
     esac
     if (( status == 0 )); then
       run_calibration routing-calibration "$gate_arm" matched 1.63e-3 1.63e-4 0.95 587 || status=1
+    fi
+    ;;
+  routing-calibration-2254)
+    [[ $recipe == matched ]] || status=1
+    case "$gate_arm" in
+      adamw_bf16_state_fp32|frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) status=1 ;;
+    esac
+    if (( status == 0 )); then
+      run_routing_calibration_2254 "$gate_arm" || status=1
     fi
     ;;
   *) status=1 ;;
