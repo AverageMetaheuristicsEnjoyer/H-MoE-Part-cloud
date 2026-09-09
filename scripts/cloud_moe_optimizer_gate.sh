@@ -114,7 +114,7 @@ if [[ $mode == cleanup-lr-screen ]]; then
   exit 0
 fi
 
-if (( available_kb < 20971520 )); then
+if [[ $mode != cpu-contract ]] && (( available_kb < 20971520 )); then
   echo "GATE_FAIL reason=disk available_kb=$available_kb required_kb=20971520"
   echo "EXIT=1"
   exit 0
@@ -134,6 +134,7 @@ python - "$root" <<'PY'
 import runpy
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 root = Path(sys.argv[1])
 count = 0
@@ -147,6 +148,31 @@ for relative in (
         if name.startswith("test_") and callable(function):
             function()
             count += 1
+
+from megatron.training import training
+
+args = SimpleNamespace(
+    train_samples=None,
+    train_iters=2_254,
+    global_batch_size=208,
+    full_validation=False,
+    skip_train=False,
+    eval_interval=2_254,
+    start_eval_at_iter=None,
+    eval_iters=32,
+    phase_transition_iterations=None,
+    iteration=587,
+    consumed_valid_samples=6_656,
+)
+original_get_args = training.get_args
+try:
+    training.get_args = lambda: args
+    _, valid_samples, test_samples = training.get_train_valid_test_num_samples()
+finally:
+    training.get_args = original_get_args
+assert valid_samples == 19_968
+assert test_samples == 6_656
+count += 1
 print(f"CPU_CONTRACT_PASS tests={count}")
 PY
 if [[ $? -ne 0 ]]; then
