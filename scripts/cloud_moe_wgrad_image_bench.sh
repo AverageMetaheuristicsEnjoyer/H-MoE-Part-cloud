@@ -89,11 +89,14 @@ PY
     export STAGE3_MOE_EVAL_ITERS=1
     export STAGE3_MOE_LOG_ROOT=$log_root
     export WANDB_MODE=offline
+    # This benchmark loads our own trusted checkpoint, including its NumPy RNG state.
+    # PyTorch 2.6+ otherwise defaults torch.load() to weights_only=True.
+    export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
     result_files=()
     for fusion in 0 1; do
       if (( fusion == 0 )); then label=unfused; else label=fused; fi
       export STAGE3_MOE_WGRAD_FUSION=$fusion
-      export STAGE3_MOE_RUN_SUFFIX="wgrad-${MLSUB_IMAGE:-unknown}-$label-v4"
+      export STAGE3_MOE_RUN_SUFFIX="wgrad-${MLSUB_IMAGE:-unknown}-$label-v5"
       echo "=== BENCH image=${MLSUB_IMAGE:-unknown} fusion=$fusion label=$label ==="
       "$root/scripts/run_stage3_moe_pretrain.sh" "$arm" resume-bench
       run_dir="$log_root/stage3-$arm-resume-bench-$STAGE3_MOE_RUN_SUFFIX"
