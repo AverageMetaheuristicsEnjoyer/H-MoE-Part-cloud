@@ -34,7 +34,7 @@ for d in "$lg"/*/; do
   newest=$(ls -1t "$d"/train-*.log 2>/dev/null | head -1)
   if [ -n "$newest" ]; then
     echo "  LOG $newest"
-    grep -iE "loading checkpoint|could not find|will not load|checkpoint .*at iteration|setting training iteration|does not match the optimizer|live group sizes" \
+    grep -iE "loading checkpoint|could not find|will not load|checkpoint .*at iteration|successfully saved checkpoint|setting training iteration|does not match the optimizer|live group sizes" \
       "$newest" 2>/dev/null | head -6 | sed 's/^/    /'
     grep -E "^( +)?(train_data_path|phase_transition_iterations|lr_decay_iters|lr_wsd_decay_iters|train_iters) +\." \
       "$newest" 2>/dev/null | sed 's/^/    CONTRACT /'
