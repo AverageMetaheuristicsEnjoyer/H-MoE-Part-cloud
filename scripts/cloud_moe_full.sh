@@ -28,7 +28,7 @@ full_dir_name=${STAGE3_MOE_FULL_DIR:-1c}
 branch=2254
 branch_dir=$(printf 'iter_%07d' "$branch")
 direct_source=${STAGE3_MOE_BRANCH_CHECKPOINT_DIR:-}
-retain_interval=${STAGE3_MOE_SAVE_RETAIN_INTERVAL:-13794}
+retain_interval=13794
 
 if [[ -n $direct_source && $# != 1 ]]; then
   echo "DIRECT_SOURCE_FAIL expected exactly one arm, got $#"

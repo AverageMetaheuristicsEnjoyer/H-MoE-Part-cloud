@@ -26,7 +26,6 @@ full_decay_iters=3448     # final 20%, starts at step 13,795
 time_match_branch=13794
 time_match_plateau_iters=2328
 warmup_iters=173          # first 1%
-full_save_retain_interval=${STAGE3_MOE_SAVE_RETAIN_INTERVAL:-13794}
 short_iters=2818          # 1,200,422,912 tokens
 short_decay_iters=564     # final 20% of the short budget
 short_branch=$((short_iters - short_decay_iters))   # 2254
@@ -96,8 +95,7 @@ case "$mode" in
     # 2254. Without it those cost a 13,794-step re-run. 13,794 is the only multiple of
     # itself below 17,242, so precisely one checkpoint is ever retained; everything else is
     # dropped as soon as its successor is on disk and the tracker points at it.
-    save_args=(--save "$full_dir" --save-interval 363
-               --save-retain-interval "$full_save_retain_interval")
+    save_args=(--save "$full_dir" --save-interval 363 --save-retain-interval 13794)
     load_args=(--load "$full_dir" --override-opt_param-scheduler)
     ;;
   trunk)
