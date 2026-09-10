@@ -105,6 +105,11 @@ def test_full_wave_accepts_and_moves_a_direct_branch_checkpoint():
     assert 'FULL_PREFLIGHT_PASS arm=$arm checkpoint=$resume_iteration' in cloud
     assert "additional_checkpoints * checkpoint_kb + 2 * 1024 * 1024" in cloud
     assert "STAGE3_MOE_PREFLIGHT_ONLY" in cloud
+    assert "STAGE3_MOE_SAVE_RETAIN_INTERVAL" in cloud
+
+    launcher = LAUNCHER.read_text()
+    assert 'full_save_retain_interval=${STAGE3_MOE_SAVE_RETAIN_INTERVAL:-13794}' in launcher
+    assert '--save-retain-interval "$full_save_retain_interval"' in launcher
 
 
 def test_stability_cleanup_is_exact_and_requires_the_235_trackers():

@@ -28,6 +28,7 @@ full_dir_name=${STAGE3_MOE_FULL_DIR:-1c}
 branch=2254
 branch_dir=$(printf 'iter_%07d' "$branch")
 direct_source=${STAGE3_MOE_BRANCH_CHECKPOINT_DIR:-}
+retain_interval=${STAGE3_MOE_SAVE_RETAIN_INTERVAL:-13794}
 
 if [[ -n $direct_source && $# != 1 ]]; then
   echo "DIRECT_SOURCE_FAIL expected exactly one arm, got $#"
@@ -107,7 +108,7 @@ for arm in "$@"; do
   checkpoint_kb=$(du -sk "$resume_dir" | awk '{print $1}')
   existing_checkpoints=$(find "$dst" -mindepth 1 -maxdepth 1 -type d -name 'iter_*' | wc -l)
   additional_checkpoints=1
-  if (( existing_checkpoints == 1 && resume_iteration <= 13794 )); then
+  if (( retain_interval <= 17242 && existing_checkpoints == 1 && resume_iteration <= retain_interval )); then
     additional_checkpoints=2
   fi
   available_kb=$(df -Pk "$dst_root" | awk 'NR == 2 {print $4}')
@@ -116,7 +117,7 @@ for arm in "$@"; do
     echo "SKIP $arm: insufficient rolling-checkpoint space available_kb=$available_kb required_kb=$required_kb checkpoint_kb=$checkpoint_kb"
     continue
   fi
-  echo "FULL_PREFLIGHT_PASS arm=$arm checkpoint=$resume_iteration available_kb=$available_kb required_kb=$required_kb"
+  echo "FULL_PREFLIGHT_PASS arm=$arm checkpoint=$resume_iteration retain_interval=$retain_interval available_kb=$available_kb required_kb=$required_kb"
   if [[ ${STAGE3_MOE_PREFLIGHT_ONLY:-0} == 1 ]]; then
     continue
   fi
