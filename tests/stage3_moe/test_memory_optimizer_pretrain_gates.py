@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -135,6 +136,13 @@ def test_pinned_mcore_imports_override_on_python_310():
 
     assert "from typing_extensions import override" in hybrid
     assert "from typing import Any, Callable, ClassVar, Literal, override" not in hybrid
+
+
+def test_pinned_emerging_optimizers_imports_support_python_310():
+    root = ROOT / "third_party" / "emerging-optimizers" / "emerging_optimizers"
+    sources = "\n".join(path.read_text() for path in root.rglob("*.py"))
+
+    assert not re.search(r"from typing import [^\n]*\b(?:override|Self)\b", sources)
 
 
 def test_stability_cleanup_is_exact_and_requires_the_235_trackers():
