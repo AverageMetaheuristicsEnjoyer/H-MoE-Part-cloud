@@ -122,6 +122,21 @@ def test_wgrad_image_bench_is_matched_and_checkpoint_read_only():
     assert "--save" not in bench_mode
 
 
+def test_pinned_mcore_imports_override_on_python_310():
+    hybrid = (
+        ROOT
+        / "third_party"
+        / "Megatron-LM"
+        / "megatron"
+        / "training"
+        / "models"
+        / "hybrid.py"
+    ).read_text()
+
+    assert "from typing_extensions import override" in hybrid
+    assert "from typing import Any, Callable, ClassVar, Literal, override" not in hybrid
+
+
 def test_stability_cleanup_is_exact_and_requires_the_235_trackers():
     gate = CLOUD_GATE.read_text()
 

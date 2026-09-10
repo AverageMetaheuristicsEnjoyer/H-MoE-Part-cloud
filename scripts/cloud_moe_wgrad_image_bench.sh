@@ -51,6 +51,9 @@ case "$mode" in
     validate_snapshot || { echo "BENCH_FAIL snapshot missing: $snapshot_dir"; echo "EXIT=1"; exit 0; }
     echo "IMAGE=${MLSUB_IMAGE:-unknown}"
     nvidia-smi --query-gpu=name,uuid,memory.total,driver_version --format=csv,noheader
+    nvidia_lib_path=$(find /home/user/conda/lib/python*/site-packages/nvidia \
+      -mindepth 2 -maxdepth 2 -type d -name lib -print 2>/dev/null | paste -sd: - || true)
+    export LD_LIBRARY_PATH=${nvidia_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
     python - <<'PY'
 import importlib.util
 import platform
@@ -63,6 +66,7 @@ print(f"PYTHON={platform.python_version()}")
 print(f"TORCH={torch.__version__} CUDA={torch.version.cuda}")
 print(f"TE={transformer_engine.__version__}")
 print(f"APEX={importlib.util.find_spec('apex') is not None}")
+print(f"AMP_C={importlib.util.find_spec('amp_C') is not None}")
 print(f"FUSED_WGRAD={importlib.util.find_spec('fused_weight_gradient_mlp_cuda') is not None}")
 print(f"EXECUTABLE={sys.executable}")
 PY
@@ -72,6 +76,9 @@ PY
       echo "EXIT=1"
       exit 0
     fi
+    find /home/user/conda /usr/local /opt -maxdepth 7 -type f \
+      \( -name 'fused_weight_gradient_mlp_cuda*.so' -o -name 'amp_C*.so' \) \
+      -print 2>/dev/null | sed 's/^/EXTENSION_FILE=/' | head -20
 
     export STAGE3_MOE_BENCH_LOAD=$snapshot_dir
     export STAGE3_MOE_BENCH_ITERS=${STAGE3_MOE_BENCH_ITERS:-50}
@@ -82,7 +89,7 @@ PY
     for fusion in 0 1; do
       if (( fusion == 0 )); then label=unfused; else label=fused; fi
       export STAGE3_MOE_WGRAD_FUSION=$fusion
-      export STAGE3_MOE_RUN_SUFFIX="wgrad-${MLSUB_IMAGE:-unknown}-$label-v1"
+      export STAGE3_MOE_RUN_SUFFIX="wgrad-${MLSUB_IMAGE:-unknown}-$label-v2"
       echo "=== BENCH image=${MLSUB_IMAGE:-unknown} fusion=$fusion label=$label ==="
       "$root/scripts/run_stage3_moe_pretrain.sh" "$arm" resume-bench
       run_dir="$log_root/stage3-$arm-resume-bench-$STAGE3_MOE_RUN_SUFFIX"
@@ -91,7 +98,13 @@ PY
         grep -E "successfully loaded checkpoint|iteration +[0-9]+/|Traceback|Error" "$newest" | tail -35
       fi
       result="$run_dir/results.jsonl"
-      [[ -f $result ]] && result_files+=("$result")
+      if [[ -f $result ]]; then
+        result_files+=("$result")
+      else
+        echo "BENCH_FAIL no result for image=${MLSUB_IMAGE:-unknown} label=$label"
+        echo "EXIT=1"
+        exit 0
+      fi
     done
 
     if (( ${#result_files[@]} != 2 )); then
