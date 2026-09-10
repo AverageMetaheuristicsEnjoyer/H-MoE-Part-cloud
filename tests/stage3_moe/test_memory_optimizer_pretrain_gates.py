@@ -5,6 +5,7 @@ ROOT = Path(__file__).parents[2]
 LAUNCHER = ROOT / "scripts" / "run_stage3_moe_pretrain.sh"
 CLOUD_GATE = ROOT / "scripts" / "cloud_moe_optimizer_gate.sh"
 CLOUD_FULL = ROOT / "scripts" / "cloud_moe_full.sh"
+WGRAD_BENCH = ROOT / "scripts" / "cloud_moe_wgrad_image_bench.sh"
 
 
 def test_resume_gate_crosses_frugal_refresh_boundary():
@@ -105,6 +106,20 @@ def test_full_wave_accepts_and_moves_a_direct_branch_checkpoint():
     assert 'FULL_PREFLIGHT_PASS arm=$arm checkpoint=$resume_iteration' in cloud
     assert "additional_checkpoints * checkpoint_kb + 2 * 1024 * 1024" in cloud
     assert "STAGE3_MOE_PREFLIGHT_ONLY" in cloud
+
+
+def test_wgrad_image_bench_is_matched_and_checkpoint_read_only():
+    launcher = LAUNCHER.read_text()
+    bench = WGRAD_BENCH.read_text()
+
+    assert 'bench_load=${STAGE3_MOE_BENCH_LOAD:-$trunk_dir}' in launcher
+    assert "STAGE3_MOE_BENCH_ITERS" in bench
+    assert 'for fusion in 0 1' in bench
+    assert 'export STAGE3_MOE_WGRAD_FUSION=$fusion' in bench
+    assert "FUSION_SPEEDUP=" in bench
+    assert 'cp -al "$source_dir/$iter_dir" "$partial/"' in bench
+    bench_mode = bench.split('  bench)', 1)[1].split('  cleanup)', 1)[0]
+    assert "--save" not in bench_mode
 
 
 def test_stability_cleanup_is_exact_and_requires_the_235_trackers():

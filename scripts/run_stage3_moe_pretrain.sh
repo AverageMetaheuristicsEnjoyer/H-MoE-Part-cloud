@@ -238,7 +238,8 @@ case "$mode" in
     # trunk's, and refuses to load on the mismatch. Weight decay is constant here
     # (start_wd = end_wd = 0.1) and every LR argument matches the trunk, so overriding
     # rebuilds the identical schedule; num_steps still comes from the checkpoint.
-    load_args=(--load "$trunk_dir" --override-opt_param-scheduler)
+    bench_load=${STAGE3_MOE_BENCH_LOAD:-$trunk_dir}
+    load_args=(--load "$bench_load" --override-opt_param-scheduler)
     ;;
   resume-replay)
     [[ $arm == adamw_fp8gemm_state_fp32 ]] || {
