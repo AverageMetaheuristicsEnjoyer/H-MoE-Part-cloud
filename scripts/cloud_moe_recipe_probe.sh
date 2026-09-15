@@ -4,8 +4,10 @@
 #   mlsub run --repo ... --branch stage3/fp8-recipe-probe \
 #     --entry scripts/cloud_moe_recipe_probe.sh --gpus 1 --image torch28 \
 #     --note fp8-recipe-probe-adamw \
-#     --env STAGE3_MOE_LOG_ROOT=/workspace-SR006.nfs2/hmoe-cloud/pretrain \
 #     --args "bf16 delayed_h1 delayed_h1024max current current_nowgrad"
+#
+# Needs no --env: everything it writes goes to /tmp and the summary to stdout. The only
+# shared volume it reads is the corpus on /home/jovyan.
 #
 # Every variant resumes the SAME bf16 checkpoint at iteration 13,794 -- deep in the 1C
 # plateau, where the FP8-GEMM arms exceeded grad norm 0.3 on ~3.7 % of logged steps while
@@ -19,7 +21,12 @@
 set -u
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-log_root=${STAGE3_MOE_LOG_ROOT:-/workspace-SR006.nfs2/hmoe-cloud/pretrain}
+# Node-local, like the checkpoint staging and for a harder reason: a shared NFS mount that
+# has gone bad blocks in uninterruptible I/O, where `timeout` cannot help -- SIGTERM is not
+# delivered to a process in D state. So the rule for a probe is not "touch nfs2 carefully",
+# it is "do not touch it". The summary goes to stdout, which the platform captures anyway,
+# and nothing else here is worth keeping past the job.
+log_root=${STAGE3_MOE_LOG_ROOT:-/tmp/hmoe-recipe-probe/logs}
 # Node-local by default, and deliberately: the shared volumes move by tens of GB between
 # sessions (nfs2 went 55 G free on 09-07 to 6.8 G by 09-15 and killed the first attempt),
 # while /tmp is ~485 G on the node and the archive re-downloads at ~490 MB/s -- 32 s for
@@ -115,13 +122,20 @@ if [[ -z ${STAGE3_MOE_DATA_ROOT:-} ]]; then
   exit 0
 fi
 echo "DATA_ROOT=$STAGE3_MOE_DATA_ROOT"
-export STAGE3_MOE_DATA_CACHE=${STAGE3_MOE_DATA_CACHE:-$log_root/data-cache}
+# One index build per job instead of a cache on a shared volume. Every variant in the job
+# shares the same train_iters and split, so only the first pays for it.
+export STAGE3_MOE_DATA_CACHE=${STAGE3_MOE_DATA_CACHE:-/tmp/hmoe-recipe-probe/data-cache}
+# The launcher mkdirs its checkpoint root even when nothing is ever saved; keep that off
+# the shared volumes too.
+export STAGE3_MOE_CKPT_ROOT=${STAGE3_MOE_CKPT_ROOT:-/tmp/hmoe-recipe-probe/ckpt}
 
 # --- base checkpoint -------------------------------------------------------------------
 base_dir="$stage_root/$base_arm"
 iter_dir=$(printf '%s/iter_%07d' "$base_dir" "$base_iter")
+# Only the mount we actually use. Statting a wedged one hangs the job before it starts,
+# which is what happened to the 09-15 smoke -- it never reached a single FP8 step.
 echo "=== volumes ==="
-df -h /tmp /home/jovyan /workspace-SR006.nfs2 /workspace-SR006.nfs3 2>/dev/null | grep -v '^Filesystem'
+df -h /tmp 2>/dev/null | tail -1
 
 if [[ ! -f "$iter_dir/mp_rank_00/model_optim_rng.pt" ]]; then
   echo "=== staging $hf_prefix/$base_arm/iter_$base_iter from HF into $stage_root ==="
