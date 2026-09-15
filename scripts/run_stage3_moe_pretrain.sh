@@ -181,7 +181,7 @@ case "$mode" in
     # the FP8-GEMM arms exceeded 0.3 on ~3.7 % of logged steps between 6k and 15k while
     # no bf16 arm ever passed 0.15 in 17,242 steps -- so a few hundred steps already
     # separate a recipe that spikes from one that does not. Nothing is saved.
-    train_iters=$((time_match_branch + ${STAGE3_MOE_PROBE_ITERS:-400}))
+    train_iters=$(( ${STAGE3_MOE_PROBE_BASE_ITER:-$time_match_branch} + ${STAGE3_MOE_PROBE_ITERS:-400} ))
     target_iters=$full_iters
     decay_iters=$full_decay_iters
     probe_load=${STAGE3_MOE_PROBE_LOAD:?set STAGE3_MOE_PROBE_LOAD to the base checkpoint directory}

@@ -20,12 +20,21 @@ set -u
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 log_root=${STAGE3_MOE_LOG_ROOT:-/workspace-SR006.nfs2/hmoe-cloud/pretrain}
-stage_root=${STAGE3_MOE_PROBE_STAGE:-/workspace-SR006.nfs2/hmoe-checkpoints/recipe-probe}
+# Node-local by default, and deliberately: the shared volumes move by tens of GB between
+# sessions (nfs2 went 55 G free on 09-07 to 6.8 G by 09-15 and killed the first attempt),
+# while /tmp is ~485 G on the node and the archive re-downloads at ~490 MB/s -- 32 s for
+# the 14.4 GB checkpoint. One job runs every variant, so it is fetched once either way.
+stage_root=${STAGE3_MOE_PROBE_STAGE:-/tmp/hmoe-recipe-probe}
 base_arm=${STAGE3_MOE_PROBE_BASE_ARM:-adamw_bf16_state_fp32}
 base_iter=${STAGE3_MOE_PROBE_BASE_ITER:-13794}
 hf_repo=${STAGE3_MOE_PROBE_HF_REPO:-AverageMetaheuristicsEnjoyer/hmoe-stage3-checkpoints}
 hf_prefix=${STAGE3_MOE_PROBE_HF_PREFIX:-1c-mb4}
-export HF_HOME=${STAGE3_MOE_HF_HOME:-/workspace-SR006.nfs2/hmoe-hf-cache}
+export HF_HOME=${STAGE3_MOE_HF_HOME:-/tmp/hmoe-hf-cache}
+# The launcher swallows the trainer's exit code unless told not to, and a variant that
+# dies has to be visible per variant rather than buried in a log tail.
+export STAGE3_MOE_PROPAGATE_EXIT=1
+# The launcher builds its window from this too; keep them from drifting apart.
+export STAGE3_MOE_PROBE_BASE_ITER="$base_iter"
 
 # The compute axis was measured at micro-batch 16 and mb is worth ~0.01 % of loss, so the
 # probe keeps 16: it is 2.5x cheaper per step at the same global batch.
@@ -111,37 +120,43 @@ export STAGE3_MOE_DATA_CACHE=${STAGE3_MOE_DATA_CACHE:-$log_root/data-cache}
 # --- base checkpoint -------------------------------------------------------------------
 base_dir="$stage_root/$base_arm"
 iter_dir=$(printf '%s/iter_%07d' "$base_dir" "$base_iter")
+echo "=== volumes ==="
+df -h /tmp /home/jovyan /workspace-SR006.nfs2 /workspace-SR006.nfs3 2>/dev/null | grep -v '^Filesystem'
+
 if [[ ! -f "$iter_dir/mp_rank_00/model_optim_rng.pt" ]]; then
-  echo "=== staging $hf_prefix/$base_arm/iter_$base_iter from HF ==="
-  df -h "$stage_root" 2>/dev/null | tail -1 || df -h "$(dirname "$stage_root")" | tail -1
+  echo "=== staging $hf_prefix/$base_arm/iter_$base_iter from HF into $stage_root ==="
   mkdir -p "$base_dir"
+  free_kb=$(df -Pk "$stage_root" | awk 'NR==2 {print $4}')
+  if [[ ${free_kb:-0} -lt 20000000 ]]; then
+    echo "PROBE_ABORT=only $((free_kb / 1024)) MB free at $stage_root, need ~20 GB"
+    exit 0
+  fi
   pip install --user --no-cache-dir hf_transfer 2>&1 | tail -2
-  HF_HUB_ENABLE_HF_TRANSFER=1 python - "$hf_repo" "$hf_prefix/$base_arm/iter_$(printf '%07d' "$base_iter")" "$base_dir" <<'PY'
-import sys, os, shutil, time
+  # Asking for the accelerated transfer without the package installed is a hard error in
+  # huggingface_hub, so only turn it on once it imports.
+  if python -c 'import hf_transfer' >/dev/null 2>&1; then
+    export HF_HUB_ENABLE_HF_TRANSFER=1
+  fi
+  python - "$hf_repo" "$hf_prefix/$base_arm" "$base_dir" "$(printf 'iter_%07d' "$base_iter")" <<'PY'
+import sys, os, time
 from huggingface_hub import snapshot_download
 
-repo, remote, dest = sys.argv[1], sys.argv[2], sys.argv[3]
+repo, remote, dest, name = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 start = time.time()
-# The repo is public, so no token: an unauthenticated download is the whole point of
-# having flipped it public when the private-storage quota blocked the last offload.
-local = snapshot_download(repo_id=repo, allow_patterns=[f"{remote}/**"],
-                          max_workers=8)
-src = os.path.join(local, remote)
-name = os.path.basename(remote)
-target = os.path.join(dest, name)
-os.makedirs(target, exist_ok=True)
-for dirpath, _, files in os.walk(src):
-    rel = os.path.relpath(dirpath, src)
-    out = os.path.join(target, rel) if rel != "." else target
-    os.makedirs(out, exist_ok=True)
+# local_dir writes the files straight into place instead of filling a blob cache and then
+# copying out of it -- the first attempt needed 2 x 14.4 GB and ran out of room.
+# The repo is public, so no token; that is what flipping it public bought.
+snapshot_download(repo_id=repo, allow_patterns=[f"{remote}/{name}/**"],
+                  local_dir=dest, max_workers=8)
+staged = os.path.join(dest, remote, name)
+# snapshot_download keeps the repo-relative path; the launcher wants dest/iter_XXXXXXX.
+final = os.path.join(dest, name)
+if os.path.isdir(staged) and not os.path.isdir(final):
+    os.renames(staged, final)
+for dirpath, _, files in os.walk(final):
     for f in files:
-        dst = os.path.join(out, f)
-        if os.path.exists(dst):
-            continue
-        # The snapshot is a symlink farm into the HF cache; copy so the cache can be
-        # cleared without pulling the checkpoint out from under a running job.
-        shutil.copyfile(os.path.join(dirpath, f), dst)
-        print("STAGED", dst, os.path.getsize(dst))
+        p = os.path.join(dirpath, f)
+        print("STAGED", p, os.path.getsize(p))
 print(f"STAGE_SECONDS={time.time() - start:.0f}")
 PY
   echo "STAGE_EXIT=$?"

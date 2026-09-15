@@ -69,8 +69,24 @@ print("te_delayed_default_amax_history_len=", ds_default.amax_history_len)
 print("te_delayed_default_amax_compute_algo=", ds_default.amax_compute_algo)
 print("te_delayed_default_margin=", ds_default.margin)
 
+# The images disagree on the TE API: torch28 carries TE 2.16 (te.autocast(recipe=...),
+# te.is_*_available), te3 carries TE 2.5 (te.fp8_autocast(fp8_recipe=...), and the support
+# checks still live in transformer_engine.pytorch.fp8 as check_*_support).
+try:
+    from transformer_engine.pytorch import fp8 as te_fp8
+except Exception:
+    te_fp8 = None
+
+_LEGACY_CHECK = {
+    "fp8": "check_fp8_support",
+    "fp8_block_scaling": "check_fp8_block_scaling_support",
+    "mxfp8": "check_mxfp8_support",
+}
+
 def availability(name):
     fn = getattr(te, f"is_{name}_available", None)
+    if fn is None and te_fp8 is not None:
+        fn = getattr(te_fp8, _LEGACY_CHECK[name], None)
     if fn is None:
         print(f"available_{name}= absent from this TE build")
         return
@@ -85,12 +101,19 @@ def availability(name):
         except Exception as exc:
             print(f"available_{name}= error: {exc}")
             return
+    print(f"available_{name}= no accepted signature")
 
 for _name in ("fp8", "fp8_block_scaling", "mxfp8"):
     availability(_name)
 
-# TE renamed fp8_autocast -> autocast during 2.x; accept either.
-autocast = getattr(te, "autocast", None) or te.fp8_autocast
+# TE renamed fp8_autocast -> autocast during 2.x and renamed the recipe keyword with it.
+_raw_autocast = getattr(te, "autocast", None) or te.fp8_autocast
+
+def autocast(enabled=True, recipe=None):
+    try:
+        return _raw_autocast(enabled=enabled, recipe=recipe)
+    except TypeError:
+        return _raw_autocast(enabled=enabled, fp8_recipe=recipe)
 
 def build_recipes():
     F = te_recipe.Format
