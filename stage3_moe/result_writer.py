@@ -332,6 +332,13 @@ def _comparison(arm, argv):
     ).hexdigest()
     return {
         "optimizer": "muon" if arm.startswith("muon_") else "adamw",
+        # Coarse label, derived from the arm and not from the recipe actually passed. It
+        # was written when hybrid/delayed was the only FP8-GEMM recipe the contract
+        # allowed; the contract now also accepts tensorwise and blockwise, and for those
+        # this string is wrong. The recipe is still recoverable -- provenance carries the
+        # effective MCore argv -- but pair_results matches on this literal, so a run that
+        # is meant to produce a paired verdict under a different recipe needs this, the
+        # schema enum and pair_results' expected_modes changed together.
         "gemm_mode": "fp8_delayed_hybrid" if "_fp8gemm_" in arm else "bf16",
         "optimizer_state_mode": "fp8_hybrid" if arm.endswith("_state_fp8") else "fp32",
         "match_key_sha256": os.environ.get(

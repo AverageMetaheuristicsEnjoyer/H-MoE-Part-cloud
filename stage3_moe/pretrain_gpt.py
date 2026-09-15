@@ -86,10 +86,18 @@ def validate_axis(arm, state_precision, argv, warmup_steps, measure_steps):
     compute_fp8 = "_fp8gemm_" in arm
     has_fp8 = "--fp8-format" in argv or "--fp8-recipe" in argv
     if compute_fp8:
-        if option_value(argv, "--fp8-format") != "hybrid":
-            raise ValueError("FP8 GEMM arms require --fp8-format hybrid")
-        if option_value(argv, "--fp8-recipe") != "delayed":
-            raise ValueError("FP8 GEMM arms require --fp8-recipe delayed")
+        # The 1C arms ran hybrid/delayed and this check used to pin exactly that. Delayed
+        # scaling turned out to be the wrong choice -- MCore's defaults make it
+        # amax_history_len=1 / most_recent, and only the FP8-GEMM arms threw grad-norm
+        # spikes of 14-29 against a 0.15 ceiling everywhere else -- so the recipe is now a
+        # variable. What the check still guarantees is that an FP8-GEMM arm runs FP8 and
+        # that the recipe is one we understand; the record carries which one it was.
+        if option_value(argv, "--fp8-format") not in ("hybrid", "e4m3"):
+            raise ValueError("FP8 GEMM arms require --fp8-format hybrid or e4m3")
+        if option_value(argv, "--fp8-recipe") not in ("delayed", "tensorwise", "blockwise"):
+            raise ValueError(
+                "FP8 GEMM arms require --fp8-recipe delayed, tensorwise or blockwise"
+            )
     elif has_fp8:
         raise ValueError("BF16-GEMM arms must not pass FP8 compute flags")
     if "--use-distributed-optimizer" in argv:

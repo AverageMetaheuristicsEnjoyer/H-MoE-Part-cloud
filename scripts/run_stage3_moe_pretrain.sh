@@ -39,13 +39,24 @@ test_data_prefix=${STAGE3_MOE_TEST_DATA_PREFIX:-$data_root/final}
 ckpt_root=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs3/hmoe-checkpoints/stage3}
 log_root=${STAGE3_MOE_LOG_ROOT:-/home/jovyan/hmoe-cloud/pretrain}
 
+# What an FP8-GEMM arm passes to MCore. The default is what every 1C arm ran: per-tensor
+# delayed scaling on MCore's own dataclass defaults, i.e. amax_history_len=1 and
+# most_recent -- neither TE's default (1024/max) nor the 1024/max of NVIDIA's reference
+# FP8 scripts, and the opposite of docs/design.md:735-740, which rejected delayed scaling
+# outright. STAGE3_MOE_FP8_COMPUTE_ARGS replaces the whole list so a recipe probe can vary
+# it without minting an arm per variant. Unset, every existing mode reproduces byte for byte.
+fp8_compute=(--fp8-format hybrid --fp8-recipe delayed)
+if [[ -n ${STAGE3_MOE_FP8_COMPUTE_ARGS:-} ]]; then
+  read -ra fp8_compute <<<"$STAGE3_MOE_FP8_COMPUTE_ARGS"
+fi
+
 case "$arm" in
   adamw_bf16_state_fp32) optimizer=adam; state_precision=fp32; compute=() ;;
   adamw_bf16_state_fp8)  optimizer=adam; state_precision=fp8;  compute=() ;;
   muon_bf16_state_fp32)  optimizer=muon; state_precision=fp32; compute=() ;;
   muon_bf16_state_fp8)   optimizer=muon; state_precision=fp8;  compute=() ;;
-  adamw_fp8gemm_state_fp32) optimizer=adam; state_precision=fp32; compute=(--fp8-format hybrid --fp8-recipe delayed) ;;
-  muon_fp8gemm_state_fp32)  optimizer=muon; state_precision=fp32; compute=(--fp8-format hybrid --fp8-recipe delayed) ;;
+  adamw_fp8gemm_state_fp32) optimizer=adam; state_precision=fp32; compute=("${fp8_compute[@]}") ;;
+  muon_fp8gemm_state_fp32)  optimizer=muon; state_precision=fp32; compute=("${fp8_compute[@]}") ;;
   *) echo "unknown arm: $arm" >&2; exit 2 ;;
 esac
 probe_warmup=20
@@ -159,6 +170,28 @@ case "$mode" in
     # (start_wd = end_wd = 0.1) and every LR argument matches the trunk, so overriding
     # rebuilds the identical schedule; num_steps still comes from the checkpoint.
     load_args=(--load "$trunk_dir" --override-opt_param-scheduler)
+    ;;
+  recipe-probe)
+    # Compare FP8 recipes against each other and against bf16 on the same weights, the
+    # same optimizer state and the same data. The base is a *bf16* checkpoint on purpose:
+    # it carries no TE FP8 metadata, so no variant inherits another recipe's amax history
+    # and every arm starts from an identical, recipe-neutral state.
+    #
+    # The window sits inside the 1C plateau where the grad-norm spikes actually happen --
+    # the FP8-GEMM arms exceeded 0.3 on ~3.7 % of logged steps between 6k and 15k while
+    # no bf16 arm ever passed 0.15 in 17,242 steps -- so a few hundred steps already
+    # separate a recipe that spikes from one that does not. Nothing is saved.
+    train_iters=$((time_match_branch + ${STAGE3_MOE_PROBE_ITERS:-400}))
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    probe_load=${STAGE3_MOE_PROBE_LOAD:?set STAGE3_MOE_PROBE_LOAD to the base checkpoint directory}
+    save_args=()
+    # Same reason as resume-bench: train_iters no longer equals the one the checkpoint was
+    # written with, so the scheduler has to be rebuilt. Every LR argument is unchanged, so
+    # the rebuilt schedule is the 1C schedule and num_steps still comes from the checkpoint.
+    load_args=(--load "$probe_load" --override-opt_param-scheduler)
+    probe_warmup=0
+    probe_measure=1
     ;;
   resume-replay)
     [[ $arm == adamw_fp8gemm_state_fp32 ]] || {
