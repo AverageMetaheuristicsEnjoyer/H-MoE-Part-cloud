@@ -261,4 +261,8 @@ done
 echo "=== RECIPE PROBE SUMMARY ==="
 cat "$summary"
 echo "SUMMARY_FILE=$summary"
+# Repeated at the end on purpose: `mlsub logs` keeps only the tail, so anything printed
+# during startup is gone by the time the job is read back.
+echo -n "ENV image=${MLSUB_IMAGE:-unset} "
+python -c 'import sys, torch, numpy, transformer_engine as te; print(f"PY={sys.version.split()[0]} TORCH={torch.__version__} NUMPY={numpy.__version__} TE={te.__version__}")' 2>&1 | tail -1
 exit 0

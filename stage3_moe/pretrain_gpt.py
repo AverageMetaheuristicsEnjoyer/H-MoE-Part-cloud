@@ -31,19 +31,16 @@ def _allow_cross_numpy_checkpoints():
     an image carrying numpy 1.x the names do not match and `weights_only=True` refuses the
     load -- which is how every te3 variant died once the typing shim let it get that far.
 
-    Preferring the explicit allowlist keeps `weights_only=True` wherever the name does
-    resolve; the fallback only relaxes the default, and never an explicit argument, for
-    checkpoints this project wrote and published itself.
+    Allowlisting the function object does not fix it, which cost a round trip to learn:
+    `add_safe_globals` derives the name from `__module__`, and numpy keeps that at
+    `numpy.core.multiarray` for backward compatibility even under numpy 2.x, so the
+    registered name still never matches the `numpy._core...` spelling in the pickle.
+
+    So the default is relaxed instead -- never an explicit argument, so MCore's own
+    `safe_load_from_bytes(weights_only=True)` is untouched -- and only for checkpoints
+    this project wrote and published itself.
     """
     import torch
-
-    try:
-        from numpy._core.multiarray import _reconstruct  # numpy 2.x spelling
-    except ImportError:
-        pass
-    else:
-        torch.serialization.add_safe_globals([_reconstruct])
-        return
 
     original_load = torch.load
 
