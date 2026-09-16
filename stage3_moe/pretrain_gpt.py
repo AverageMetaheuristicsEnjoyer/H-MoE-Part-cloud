@@ -40,6 +40,15 @@ def _allow_cross_numpy_checkpoints():
     `safe_load_from_bytes(weights_only=True)` is untouched -- and only for checkpoints
     this project wrote and published itself.
     """
+    import numpy
+
+    # Only numpy 1.x has the problem: under numpy 2.x the running spelling and the pickled
+    # spelling agree, MCore's allowlist resolves, and weights_only stays True. The te4
+    # image ships numpy 2.2.6, so this is a no-op there and the safety property is kept
+    # wherever it can be.
+    if int(numpy.__version__.split(".")[0]) >= 2:
+        return
+
     import torch
 
     original_load = torch.load
