@@ -2,8 +2,24 @@ import argparse
 import runpy
 import sys
 import time
+import typing
 from pathlib import Path
 
+
+# `typing.override` is 3.12+, and the pinned MCore and Emerging Optimizers trees import it
+# from `typing` in a dozen files. The torch28 image is 3.12 and never noticed; the te3
+# image (torch 2.8+cu129, TE 2.5) is 3.10 and every arm died on the import before reaching
+# a single step.
+#
+# Patching the vendored files is the obvious fix and the wrong one here: their tree hashes
+# are pinned in configs/stage3-moe-1p029b.sh and verified by run_stage3_moe_probe.sh, and
+# the whole point of a recipe probe is to stay comparable to the 1C arms that ran against
+# those exact trees. So the backport goes here, in our own entry point, before anything
+# imports them. typing_extensions.override is the same object on every version.
+if not hasattr(typing, "override"):  # pragma: no cover - depends on the image's Python
+    from typing_extensions import override as _override
+
+    typing.override = _override
 
 PROGRAM_START = time.perf_counter()
 ROOT = Path(__file__).resolve().parents[1]
