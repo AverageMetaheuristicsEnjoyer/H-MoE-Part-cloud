@@ -60,7 +60,22 @@ variants=("$@")
 variant_arm() {
   case "$1" in
     bf16) echo "$base_arm" ;;
+    # The state axis is a different arm entirely: bf16 GEMMs, FP8 optimizer state.
+    state_*) echo "${base_arm/_bf16_state_fp32/_bf16_state_fp8}" ;;
     *) echo "${base_arm/_bf16_state_fp32/_fp8gemm_state_fp32}" ;;
+  esac
+}
+
+# Adam's two moment formats, colon separated (mlsub rejects a comma in an env value).
+# Resuming an FP32-state checkpoint is what makes these comparable: the step dequantizes
+# only state that is already FP8, so FP32 moments pass through untouched and are quantized
+# at the end of the first step -- both variants therefore start from identical moments and
+# differ only in the format they are written back in.
+variant_state_dtypes() {
+  case "$1" in
+    state_e4m3_e5m2) echo "e4m3:e5m2" ;;   # what every arm so far ran
+    state_e4m3_e4m3) echo "e4m3:e4m3" ;;   # what the dense code base uses for both moments
+    *) echo "" ;;
   esac
 }
 
@@ -69,6 +84,9 @@ variant_flags() {
     # What every 1C FP8-GEMM arm actually ran: MCore's dataclass defaults, i.e. an amax
     # history of ONE with most_recent. Kept as the FP8-side control.
     bf16)              echo "" ;;
+    # State-axis variants run bf16 GEMMs; the format they vary is the optimizer state,
+    # carried by STAGE3_MOE_FP8_STATE_DTYPES rather than by MCore flags.
+    state_e4m3_e5m2|state_e4m3_e4m3) echo "" ;;
     delayed_h1)        echo "--fp8-format hybrid --fp8-recipe delayed" ;;
     # TE's own default and the setting in NVIDIA's reference FP8 pretraining scripts.
     delayed_h1024max)  echo "--fp8-format hybrid --fp8-recipe delayed --fp8-amax-history-len 1024 --fp8-amax-compute-algo max" ;;
@@ -200,7 +218,8 @@ for variant in "${variants[@]}"; do
   arm=$(variant_arm "$variant")
   export STAGE3_MOE_RUN_SUFFIX="recipe-$variant"
   export STAGE3_MOE_FP8_COMPUTE_ARGS="$flags"
-  echo "=== VARIANT=$variant ARM=$arm FLAGS=${flags:-none} ==="
+  export STAGE3_MOE_FP8_STATE_DTYPES="$(variant_state_dtypes "$variant")"
+  echo "=== VARIANT=$variant ARM=$arm FLAGS=${flags:-none} STATE=${STAGE3_MOE_FP8_STATE_DTYPES:-default} ==="
   start=$SECONDS
   "$root/scripts/run_stage3_moe_pretrain.sh" "$arm" recipe-probe
   code=$?

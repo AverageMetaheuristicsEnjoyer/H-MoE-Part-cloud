@@ -40,6 +40,40 @@ ADAM_STATE_SPECS = (
     StateSpec("exp_avg", True, torch.float8_e4m3fn, "dre"),
     StateSpec("exp_avg_sq", False, torch.float8_e5m2, "dre"),
 )
+
+FP8_DTYPE_BY_NAME = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2}
+
+
+def adam_state_specs():
+    """Adam's state formats, overridable through ``STAGE3_MOE_FP8_STATE_DTYPES``.
+
+    The default above is what every arm so far has run. It is also a divergence from the
+    dense code base, which quantizes **both** moments to E4M3 (`--fp8-second-order-bit
+    E4M3`), and the measured costs differ by a factor of twenty: FP8 state costs AdamW
+    +0.70 % of validation loss here against +0.035 % there. E5M2 carries two mantissa bits
+    against E4M3's three, and the second moment enters the update as 1/sqrt(v), so the
+    error lands directly on the size of every step -- which also fits the axis being
+    AdamW-only, since Muon has no second moment and pays nothing (-0.06 %).
+
+    The value is colon separated, one name per spec in order, e.g. ``e4m3:e4m3``; mlsub
+    rejects an environment value containing a comma.
+    """
+    requested = os.environ.get("STAGE3_MOE_FP8_STATE_DTYPES", "").strip()
+    if not requested:
+        return ADAM_STATE_SPECS
+    names = [name.strip().lower() for name in requested.split(":")]
+    if len(names) != len(ADAM_STATE_SPECS):
+        raise ValueError(
+            f"STAGE3_MOE_FP8_STATE_DTYPES needs {len(ADAM_STATE_SPECS)} names "
+            f"({', '.join(spec.name for spec in ADAM_STATE_SPECS)}), got {requested!r}"
+        )
+    unknown = [name for name in names if name not in FP8_DTYPE_BY_NAME]
+    if unknown:
+        raise ValueError(f"unknown FP8 state dtype(s): {unknown}")
+    return tuple(
+        StateSpec(spec.name, spec.signed, FP8_DTYPE_BY_NAME[name], spec.recipe)
+        for spec, name in zip(ADAM_STATE_SPECS, names)
+    )
 MUON_STATE_SPECS = (
     StateSpec("momentum_buffer", True, torch.float8_e4m3fn, "maxabs"),
 )
@@ -469,7 +503,7 @@ class FP8StateOptimizerMixin(FP8StateDictMixin):
 
 def make_fp8_adamw(base_class):
     class FP8StateAdamW(FP8StateOptimizerMixin, base_class):
-        state_specs = ADAM_STATE_SPECS
+        state_specs = adam_state_specs()
 
     FP8StateAdamW.__name__ = "FP8StateAdamW"
     return FP8StateAdamW
