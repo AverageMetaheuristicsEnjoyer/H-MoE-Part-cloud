@@ -126,11 +126,17 @@ def optimizer_state_ledger(optimizer, arm):
                     data_bytes += bytes_
 
     state_fp8 = arm.endswith("_state_fp8")
-    expected_adam = (
-        (torch.float8_e4m3fn, torch.float8_e5m2)
-        if state_fp8
-        else (torch.float32, torch.float32)
-    )
+    if state_fp8:
+        # Check against the formats this run was configured with, not against a constant.
+        # The guard exists to catch the optimizer quietly storing something other than
+        # what the arm declares; reading the declaration from the same resolver keeps that
+        # property while letting STAGE3_MOE_FP8_STATE_DTYPES vary it. Imported lazily so
+        # nothing that merely writes a record has to pull in triton.
+        from stage3_moe.optimizer_states import adam_state_specs
+
+        expected_adam = tuple(spec.dtype for spec in adam_state_specs())
+    else:
+        expected_adam = (torch.float32, torch.float32)
     saw_adam = False
     saw_muon = False
     for raw in raw_optimizers:
