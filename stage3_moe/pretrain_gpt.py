@@ -21,6 +21,41 @@ if not hasattr(typing, "override"):  # pragma: no cover - depends on the image's
 
     typing.override = _override
 
+
+def _allow_cross_numpy_checkpoints():
+    """Let an image read a checkpoint another image's numpy wrote.
+
+    MCore allowlists numpy's unpickler as `from numpy.core.multiarray import _reconstruct`
+    (`megatron/core/safe_globals.py`), which is the numpy 1.x path. A checkpoint written
+    under numpy 2.x pickles that function as `numpy._core.multiarray._reconstruct`, so on
+    an image carrying numpy 1.x the names do not match and `weights_only=True` refuses the
+    load -- which is how every te3 variant died once the typing shim let it get that far.
+
+    Preferring the explicit allowlist keeps `weights_only=True` wherever the name does
+    resolve; the fallback only relaxes the default, and never an explicit argument, for
+    checkpoints this project wrote and published itself.
+    """
+    import torch
+
+    try:
+        from numpy._core.multiarray import _reconstruct  # numpy 2.x spelling
+    except ImportError:
+        pass
+    else:
+        torch.serialization.add_safe_globals([_reconstruct])
+        return
+
+    original_load = torch.load
+
+    def load(*args, **kwargs):
+        kwargs.setdefault("weights_only", False)
+        return original_load(*args, **kwargs)
+
+    torch.load = load
+
+
+_allow_cross_numpy_checkpoints()
+
 PROGRAM_START = time.perf_counter()
 ROOT = Path(__file__).resolve().parents[1]
 MCORE_ROOT = ROOT / "third_party" / "Megatron-LM"

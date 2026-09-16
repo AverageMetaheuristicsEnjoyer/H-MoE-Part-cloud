@@ -103,6 +103,9 @@ export NVTE_FP8_BLOCK_SCALING_FP32_SCALES=${NVTE_FP8_BLOCK_SCALING_FP32_SCALES:-
 
 echo "IMAGE=${MLSUB_IMAGE:-unset} VARIANTS=${variants[*]} ITERS=$STAGE3_MOE_PROBE_ITERS mb=$STAGE3_MOE_MICRO_BATCH"
 nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
+# The images disagree on more than FP8: python, TE and -- the one that bit -- numpy's
+# major version, which decides whether a checkpoint written elsewhere can be unpickled.
+python -c 'import sys, torch, numpy, transformer_engine as te; print(f"PY={sys.version.split()[0]} TORCH={torch.__version__} NUMPY={numpy.__version__} TE={te.__version__}")' 2>&1 | tail -1
 
 # --- data ------------------------------------------------------------------------------
 # The corpus has moved between volumes more than once; take the first root that has one.
