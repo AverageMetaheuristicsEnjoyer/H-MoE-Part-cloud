@@ -87,12 +87,16 @@ print("STATE_ENTRIES", len(state))
 EXPERT_NUMEL = {2 * 256 * 1024, 1024 * 256}
 DENSE_FFN_NUMEL = {2 * 2816 * 1024, 1024 * 2816}
 
-def classify(numel):
+def classify(numel, shape):
     if numel in EXPERT_NUMEL:
         return "expert"
     if numel in DENSE_FFN_NUMEL:
         return "dense_ffn"
-    return "other"
+    # Everything else -- attention, embeddings, router, norms -- is reported by its own
+    # shape instead of being lumped together or dropped. Attention is the honest
+    # comparison group for an expert; a first pass compared 2210 expert tensors against
+    # the two dense-FFN ones, which is no comparison at all.
+    return "other" + str(tuple(shape))
 
 def roundtrip(value, dtype, recipe="dre", signed=True):
     spec = StateSpec("probe", signed, dtype, recipe)
@@ -101,11 +105,20 @@ def roundtrip(value, dtype, recipe="dre", signed=True):
     init_fp8_state(holder, spec, value)
     quantize_fp8_state_(holder, spec, value)
     back = dequantize_fp8_state(holder, spec)
-    denom = value.norm()
-    rel = ((back - value).norm() / denom).item() if denom > 0 else float("nan")
-    cos = torch.nn.functional.cosine_similarity(
-        back.view(1, -1), value.view(1, -1)
-    ).item()
+    # In float64, and scaled first. exp_avg_sq holds squared gradients, so its elements
+    # are small enough that a float32 dot product underflows: the first pass reported
+    # cosine 0.071 alongside a relative error of 0.005, which cannot both be true.
+    reference = value.double()
+    restored = back.double()
+    denom = reference.norm()
+    if denom == 0:
+        return float("nan"), float("nan")
+    reference = reference / denom
+    restored = restored / denom
+    rel = (restored - reference).norm().item()
+    cos = torch.dot(restored.view(-1), reference.view(-1)).item() / max(
+        restored.norm().item(), 1e-300
+    )
     return rel, cos
 
 counts = collections.Counter()
@@ -117,10 +130,8 @@ for entry in state.values():
         value = entry.get(name)
         if not isinstance(value, torch.Tensor) or value.dtype != torch.float32:
             continue
-        kind = classify(value.numel())
+        kind = classify(value.numel(), value.shape)
         counts[(kind, name)] += 1
-        if kind == "other":
-            continue
         for label, dtype in (("e4m3", torch.float8_e4m3fn), ("e5m2", torch.float8_e5m2)):
             rel, cos = roundtrip(value, dtype, signed=signed)
             acc[(kind, name, label)].append((rel, cos))
@@ -128,7 +139,8 @@ for entry in state.values():
 print("TENSOR_COUNTS", dict(counts))
 print()
 print(f"{'class':10s} {'state':11s} {'fmt':5s} {'n':>5s} {'rel_L2 mean':>12s} {'median':>10s} {'p95':>10s} {'cos mean':>10s}")
-for key in sorted(acc):
+keep = {k for k in {c for c, _, _ in acc} if sum(len(acc[j]) for j in acc if j[0] == k) >= 4}
+for key in sorted(k for k in acc if k[0] in keep):
     kind, name, label = key
     rows = acc[key]
     rel = sorted(r for r, _ in rows)
