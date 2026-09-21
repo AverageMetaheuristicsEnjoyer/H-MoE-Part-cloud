@@ -192,6 +192,13 @@ case "$mode" in
     load_args=(--load "$probe_load" --override-opt_param-scheduler)
     probe_warmup=0
     probe_measure=1
+    # A data-switch probe needs the phase-local offset: with the transition set to the very
+    # iteration being resumed, consumed_train_samples_in_current_phase is 0, so the new
+    # corpus is read from its start instead of at the old stream's offset -- which would
+    # land past the end of a smaller corpus and silently start a second epoch.
+    if [[ -n ${STAGE3_MOE_PROBE_PHASE_TRANSITION:-} ]]; then
+      phase_args=(--phase-transition-iterations "$STAGE3_MOE_PROBE_PHASE_TRANSITION")
+    fi
     ;;
   resume-replay)
     [[ $arm == adamw_fp8gemm_state_fp32 ]] || {
