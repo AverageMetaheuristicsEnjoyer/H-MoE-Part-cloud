@@ -216,7 +216,11 @@ for variant in "${variants[@]}"; do
     continue
   fi
   arm=$(variant_arm "$variant")
-  export STAGE3_MOE_RUN_SUFFIX="recipe-$variant"
+  # The run id is built from arm + suffix, and variant_arm() maps every state_* variant
+  # to the same arm whichever base it resumed, so two jobs probing the same format from
+  # different bases collide on one W&B run and interleave their metrics. The tag is what
+  # keeps them apart; the train log the summary is parsed from was never affected.
+  export STAGE3_MOE_RUN_SUFFIX="recipe-${STAGE3_MOE_PROBE_TAG:+${STAGE3_MOE_PROBE_TAG}-}$variant"
   export STAGE3_MOE_FP8_COMPUTE_ARGS="$flags"
   export STAGE3_MOE_FP8_STATE_DTYPES="$(variant_state_dtypes "$variant")"
   echo "=== VARIANT=$variant ARM=$arm FLAGS=${flags:-none} STATE=${STAGE3_MOE_FP8_STATE_DTYPES:-default} ==="
