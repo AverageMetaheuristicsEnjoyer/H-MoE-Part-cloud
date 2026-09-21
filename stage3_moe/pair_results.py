@@ -6,6 +6,14 @@ from pathlib import Path
 
 
 PAIR_ARMS = {
+    ("optimizer_state", "frugal"): (
+        "frugal_coord_bf16_state_fp32",
+        "frugal_coord_bf16_state_fp8",
+    ),
+    ("fp8_gemm", "frugal"): (
+        "frugal_coord_bf16_state_fp32",
+        "frugal_coord_fp8gemm_state_fp32",
+    ),
     ("optimizer_state", "adamw"): (
         "adamw_bf16_state_fp32",
         "adamw_bf16_state_fp8",
@@ -90,13 +98,21 @@ def _normalized_pair_argv(baseline_argv, treatment_argv, axis,
         return list(baseline_argv), list(treatment_argv)
 
     normalized = list(treatment_argv)
-    for option, expected in (("--fp8-format", "hybrid"), ("--fp8-recipe", "delayed")):
+    settings = {}
+    for option in ("--fp8-format", "--fp8-recipe"):
         if normalized.count(option) != 1:
             raise ValueError(f"treatment argv must contain exactly one {option}")
         index = normalized.index(option)
-        if index + 1 >= len(normalized) or normalized[index + 1] != expected:
-            raise ValueError(f"treatment argv requires {option} {expected}")
+        if index + 1 >= len(normalized):
+            raise ValueError(f"treatment argv missing value for {option}")
+        settings[option] = normalized[index + 1]
         del normalized[index:index + 2]
+    if (settings["--fp8-recipe"], settings["--fp8-format"]) not in {
+        ("delayed", "hybrid"), ("delayed", "e4m3"),
+        ("tensorwise", "hybrid"), ("tensorwise", "e4m3"),
+        ("blockwise", "e4m3"),
+    }:
+        raise ValueError("unsupported FP8 recipe/format pair")
     return list(baseline_argv), normalized
 
 
@@ -328,16 +344,27 @@ def compare_runs(baseline, treatment):
     axis, optimizer = pair_key
     if base_cmp["optimizer"] != optimizer:
         raise ValueError("arm pair and optimizer disagree")
-    expected_modes = {
-        "optimizer_state": (("bf16", "fp32"), ("bf16", "fp8_hybrid")),
-        "fp8_gemm": (("bf16", "fp32"), ("fp8_delayed_hybrid", "fp32")),
+    treatment_modes = {
+        "optimizer_state": {("bf16", "fp8_hybrid"), ("bf16", "fp8_e4m3")},
+        "fp8_gemm": {
+            (f"fp8_{recipe}_{fmt}", "fp32")
+            for recipe, fmt in (("delayed", "hybrid"), ("delayed", "e4m3"),
+                                ("tensorwise", "hybrid"), ("tensorwise", "e4m3"),
+                                ("blockwise", "e4m3"))
+        },
     }[axis]
     actual_modes = (
         (base_cmp["gemm_mode"], base_cmp["optimizer_state_mode"]),
         (treat_cmp["gemm_mode"], treat_cmp["optimizer_state_mode"]),
     )
-    if actual_modes != expected_modes:
+    if actual_modes[0] != ("bf16", "fp32") or actual_modes[1] not in treatment_modes:
         raise ValueError("pair changes more than its declared comparison axis")
+    if axis == "fp8_gemm":
+        argv = treatment["provenance"]["argv"]
+        recipe = argv[argv.index("--fp8-recipe") + 1]
+        fp8_format = argv[argv.index("--fp8-format") + 1]
+        if treat_cmp["gemm_mode"] != f"fp8_{recipe}_{fp8_format}":
+            raise ValueError("GEMM mode disagrees with effective recipe/format")
     if base_cmp["match_key_sha256"] != treat_cmp["match_key_sha256"]:
         raise ValueError("pair controlled-factor hashes differ")
     for run in (baseline, treatment):

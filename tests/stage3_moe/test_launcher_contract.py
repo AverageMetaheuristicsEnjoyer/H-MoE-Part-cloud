@@ -132,9 +132,9 @@ def test_config_counts_and_cloud_delayed_hybrid_route_are_pinned():
     assert "STAGE3_MOE_TOTAL_PARAMETERS=1028926976" in config
     assert "STAGE3_MOE_ACTIVE_PARAMETERS=280243712" in config
     assert "STAGE3_MOE_MCORE_COMMIT=571370c829ca768fe37244f4e2e7f28d8accc4ab" in config
-    assert "STAGE3_MOE_VENDORED_MCORE_TREE=9a150974c18e6769825147ce253470f8c7ddd527" in config
+    assert "STAGE3_MOE_VENDORED_MCORE_TREE=f0eee4cbb00b6c8a2960ff8429ba327cc38226cb" in config
     assert "STAGE3_MOE_EO_COMMIT=1effa026ff096b7fa1063ca2fba19d98be6e6cdf" in config
-    assert "STAGE3_MOE_VENDORED_EO_TREE=e6b6cfd986bc0af4cd4f8e2c4ebedad16144e856" in config
+    assert "STAGE3_MOE_VENDORED_EO_TREE=4b485d24907e6d9ec2a88e166b5949c3281194e4" in config
     assert "MLSUB_IMAGE:-} != torch28" in cloud
     assert "DelayedScaling" in cloud
     assert "Format.HYBRID" in cloud

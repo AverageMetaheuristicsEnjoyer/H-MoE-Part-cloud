@@ -129,7 +129,7 @@ def make_run(arm, role, axis, optimizer, gemm, state, *, protocol="formal_timing
 
 
 def state_pair(protocol="formal_timing", optimizer="adamw"):
-    prefix = optimizer
+    prefix = "frugal_coord" if optimizer == "frugal" else optimizer
     baseline = make_run(
         f"{prefix}_bf16_state_fp32", "baseline", "optimizer_state", optimizer, "bf16", "fp32", protocol=protocol
     )
@@ -153,7 +153,7 @@ def state_pair(protocol="formal_timing", optimizer="adamw"):
 
 
 def compute_pair(protocol="formal_timing", optimizer="muon"):
-    prefix = optimizer
+    prefix = "frugal_coord" if optimizer == "frugal" else optimizer
     baseline = make_run(
         f"{prefix}_bf16_state_fp32", "baseline", "fp8_gemm", optimizer, "bf16", "fp32", protocol=protocol
     )
@@ -190,6 +190,21 @@ def compute_pair(protocol="formal_timing", optimizer="muon"):
 
 
 class PairResultsTest(unittest.TestCase):
+    def test_corrected_fp8_pairs_and_recipe_label_mismatch(self):
+        for optimizer in ("adamw", "muon", "frugal"):
+            with self.subTest(optimizer=optimizer):
+                baseline, treatment = state_pair(optimizer=optimizer)
+                treatment["comparison"]["optimizer_state_mode"] = "fp8_e4m3"
+                self.assertEqual(compare_runs(baseline, treatment)["axis"], "optimizer_state")
+                baseline, treatment = compute_pair(optimizer=optimizer)
+                treatment["provenance"]["argv"] = [
+                    "probe", "--fp8-format", "e4m3", "--fp8-recipe", "blockwise"
+                ]
+                with self.assertRaisesRegex(ValueError, "GEMM mode disagrees"):
+                    compare_runs(baseline, treatment)
+                treatment["comparison"]["gemm_mode"] = "fp8_blockwise_e4m3"
+                self.assertEqual(compare_runs(baseline, treatment)["axis"], "fp8_gemm")
+
     @unittest.skipUnless(jsonschema, "jsonschema is not installed")
     def test_json_schema_accepts_all_run_and_pair_fixtures(self):
         schema = json.loads((ROOT / "stage3_moe" / "result.schema.json").read_text())
