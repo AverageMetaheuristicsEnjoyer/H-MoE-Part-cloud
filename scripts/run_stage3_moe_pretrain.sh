@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 3 MoE matched pretraining, WSD trunk-and-branch.
 #
-#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|smoke|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|corrected-time-match|time-match-stretched-decay|schedule-tail|schedule-tail-smoke|eval-lm-fixed|eval-routing-fixed|eval-downstream
+#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|lr-sweep|smoke|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|corrected-time-match|time-match-stretched-decay|schedule-tail|schedule-tail-smoke|eval-lm-fixed|eval-routing-fixed|eval-downstream
 #
 # smoke exercises save and resume; bench measures throughput and peak memory with no
 # checkpoint traffic; resume-bench does the same from the trunk branch point, so the
@@ -29,6 +29,14 @@ warmup_iters=173          # first 1%
 short_iters=2818          # 1,200,422,912 tokens
 short_decay_iters=564     # final 20% of the short budget
 short_branch=$((short_iters - short_decay_iters))   # 2254
+
+# The peak LR is the one LR argument that differs from the dense code base (1.63e-3 here
+# against 3e-4 in run_stage4_dense.sh); the decay style, the 3448/17242 split and the
+# min_lr = 0.1 x lr ratio are identical. Unset, this reproduces the arms byte for byte.
+peak_lr=${STAGE3_MOE_LR:-1.63e-3}
+# LC_ALL=C is not decoration: under a comma-decimal locale awk prints "0,000163" and MCore
+# gets a value it cannot parse as a float.
+min_lr=${STAGE3_MOE_MIN_LR:-$(LC_ALL=C awk -v l="$peak_lr" 'BEGIN{printf "%.6g", l/10}')}
 
 global_batch=208
 micro_batch=${STAGE3_MOE_MICRO_BATCH:-4}            # 4 x DP2 x accum26 = 208
@@ -363,6 +371,22 @@ case "$mode" in
                  --no-save-optim --no-save-rng)
     fi
     ;;
+  lr-sweep)
+    # A 1.2B arm run end to end instead of branched from the shared trunk. That is the whole
+    # point: the LR being swept acts through the plateau, so reusing the trunk would hold it
+    # fixed exactly where it matters. The shape is the same one the real 1.2B arms ended up
+    # with -- warmup 173, constant peak to 2,254, exponential decay over the final 564 to
+    # 0.1x -- because WSD with target 2818 and a 564 decay starts decaying at 2,254.
+    # Nothing is saved: only the end-of-training validation and test numbers are wanted,
+    # and the volumes have no room (nfs2 full, nfs3 at 4.6 G on 2026-09-21).
+    train_iters=$short_iters
+    target_iters=$short_iters
+    decay_iters=$short_decay_iters
+    save_args=()
+    load_args=()
+    probe_warmup=0
+    probe_measure=1
+    ;;
   eval-lm-fixed)
     # Model-only evaluation on the first validation and test windows. --skip-train
     # makes both samplers start at zero instead of restoring consumed_valid_samples.
@@ -554,8 +578,8 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   --transformer-impl transformer_engine \
   --bf16 \
   --adam-beta1 0.9 --adam-beta2 0.95 --adam-eps 1e-8 \
-  --lr 1.63e-3 \
-  --min-lr 1.63e-4 \
+  --lr "$peak_lr" \
+  --min-lr "$min_lr" \
   --lr-decay-style WSD \
   --lr-decay-iters "$target_iters" \
   --lr-wsd-decay-iters "$decay_iters" \
