@@ -183,10 +183,10 @@ def optimizer_state_ledger(optimizer, arm):
                 ) != expected_adam:
                     raise AssertionError(f"{role} Adam state precision contract failed")
             if role in {"frugal_matrix", "slimadam_all"} and "exp_avg" in state:
+                expected_matrix = expected_adam if role == "frugal_matrix" else (torch.float32, torch.float32)
                 if (
-                    state["exp_avg"].dtype != torch.float32
-                    or state["exp_avg_sq"].dtype != torch.float32
-                ):
+                    state["exp_avg"].dtype, state["exp_avg_sq"].dtype
+                ) != expected_matrix:
                     raise AssertionError(f"{role} state precision contract failed")
                 if role == "frugal_matrix":
                     from stage3_moe.frugal import FRUGAL_DENSITY

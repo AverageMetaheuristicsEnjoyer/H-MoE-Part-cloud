@@ -37,6 +37,7 @@ from stage3_moe.result_writer import (
     _environment,
     _normalized_match_argv,
     assert_fp8_adam_bootstrap,
+    optimizer_state_ledger,
     parameter_group_ledger,
 )
 
@@ -284,15 +285,32 @@ def test_bootstrap_assert_rejects_plain_adam():
         assert_fp8_adam_bootstrap(chained)
 
 
-def test_bootstrap_checks_only_adam_fallback_in_frugal_chain():
+def test_bootstrap_checks_only_adam_fallback_in_frugal_chain(monkeypatch):
     from types import SimpleNamespace
 
+    monkeypatch.setenv("STAGE3_MOE_FP8_STATE_DTYPES", "e4m3:e4m3")
     frugal = make_fp8_frugal(FrugalCoordAdamW)([torch.nn.Parameter(torch.zeros(4, 4))])
     fallback = make_fp8_adamw(torch.optim.AdamW)([torch.nn.Parameter(torch.zeros(4))])
     chained = SimpleNamespace(chained_optimizers=[
         SimpleNamespace(optimizer=frugal), SimpleNamespace(optimizer=fallback)
     ])
     assert_fp8_adam_bootstrap(chained)
+    matrix = frugal.param_groups[0]["params"][0]
+    vector = fallback.param_groups[0]["params"][0]
+    frugal.state[matrix] = {
+        "exp_avg": torch.zeros(4, 1, dtype=torch.float8_e4m3fn),
+        "exp_avg_sq": torch.zeros(4, 1, dtype=torch.float8_e4m3fn),
+        "coord_indices": torch.zeros(1, dtype=torch.long),
+    }
+    fallback.state[vector] = {
+        "exp_avg": torch.zeros(4, dtype=torch.float8_e4m3fn),
+        "exp_avg_sq": torch.zeros(4, dtype=torch.float8_e4m3fn),
+    }
+    ledger = optimizer_state_ledger(chained, "frugal_coord_bf16_state_fp8")
+    assert all(row["quantized"] for row in ledger["tensors"] if row["state_key"] != "metadata")
+    frugal.state[matrix]["exp_avg"] = torch.zeros(4, 1)
+    with pytest.raises(AssertionError, match="frugal_matrix state precision"):
+        optimizer_state_ledger(chained, "frugal_coord_bf16_state_fp8")
     chained.chained_optimizers[1].optimizer = torch.optim.AdamW([
         torch.nn.Parameter(torch.zeros(4))
     ])
