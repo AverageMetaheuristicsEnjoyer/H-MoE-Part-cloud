@@ -132,12 +132,14 @@ def _frugal_config_to_kwargs(config, model_chunks, pg_collection):
     }
 
 
-def install_frugal_contract() -> None:
+def install_frugal_contract(*, fp8_states: bool = False) -> None:
     fallback = ParamWithNamePredicate(
         name="stage3_frugal_adam_fallback", fn=is_frugal_fallback
     )
+    from stage3_moe.optimizer_states import make_fp8_frugal
+
     _EMERGING_OPTIMIZERS["frugal"] = EmergingOptimizerEntry(
-        optimizer_cls=FrugalCoordAdamW,
+        optimizer_cls=make_fp8_frugal(FrugalCoordAdamW) if fp8_states else FrugalCoordAdamW,
         config_to_kwargs=_frugal_config_to_kwargs,
         default_param_overrides={
             ParamKey(with_name_predicate=fallback): {"optimizer": "adam"}

@@ -507,3 +507,27 @@ def make_fp8_adamw(base_class):
 
     FP8StateAdamW.__name__ = "FP8StateAdamW"
     return FP8StateAdamW
+
+
+def make_fp8_frugal(base_class):
+    """Frugal CoordAdamW with FP8 moments.
+
+    Frugal keeps Adam's two moments, only narrowed to the active columns, so the Adam specs
+    apply unchanged -- STAGE3_MOE_FP8_STATE_DTYPES included, which is why this resolves them
+    at install time rather than at import.
+
+    The coordinate refresh needs no special handling even though it calls ``state.clear()``
+    and puts fresh FP32 moments back every ``update_gap`` steps: the mixin re-runs
+    ``init_fp8_state`` after every wrapped step and sizes the holders from whatever tensor is
+    there, so the quantised buffers are rebuilt on the same step they were dropped. The case
+    it does not cover is a parameter that never receives a gradient -- the refresh
+    re-initialises its moments but the quantise pass only walks parameters with a grad, so
+    they stay FP32. That corrupts nothing: result_writer's precision contract asserts the
+    state dtypes, so such a run fails loudly instead of quietly costing memory.
+    """
+
+    class FP8StateFrugalCoordAdamW(FP8StateOptimizerMixin, base_class):
+        state_specs = adam_state_specs()
+
+    FP8StateFrugalCoordAdamW.__name__ = "FP8StateFrugalCoordAdamW"
+    return FP8StateFrugalCoordAdamW

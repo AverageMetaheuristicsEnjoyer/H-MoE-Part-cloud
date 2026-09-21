@@ -20,12 +20,15 @@ from stage3_moe.muon import (
     is_router_weight,
     is_swiglu_fc1_weight,
 )
+from stage3_moe.frugal import FrugalCoordAdamW
 from stage3_moe.optimizer_states import (
     ADAM_STATE_SPECS,
+    FP8_DTYPES,
     MUON_STATE_SPECS,
     dequantize_fp8_state,
     init_fp8_state,
     make_fp8_adamw,
+    make_fp8_frugal,
     num_groups,
     quantize_fp8_state_,
 )
@@ -333,3 +336,79 @@ def test_parameter_ledger_uses_stable_names(monkeypatch):
     assert rows[0]["parameters"] == 74
     assert rows[0]["active_parameters_per_token"] == 18
     assert len(rows[0]["named_parameter_manifest_sha256"]) == 64
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_frugal_fp8_state_survives_a_coordinate_refresh():
+    """The refresh is the one place Frugal and the FP8 codec can disagree.
+
+    Every ``update_gap`` steps Frugal calls ``state.clear()`` and puts fresh FP32 moments
+    back, which drops the quantised buffers the mixin keeps beside them. That is safe only
+    because the mixin re-runs ``init_fp8_state`` after each wrapped step -- this pins it, so
+    a future change to either side cannot silently leave a run training on FP32 moments.
+    """
+    optimizer_class = make_fp8_frugal(FrugalCoordAdamW)
+    parameter = torch.nn.Parameter(torch.randn(64, 32, device="cuda"))
+    optimizer = optimizer_class(
+        [{"params": [parameter]}],
+        lr=1e-3,
+        betas=(0.9, 0.95),
+        eps=1e-8,
+        density=0.5,
+        update_gap=3,
+    )
+
+    seen_refresh = False
+    previous = None
+    for step in range(7):
+        parameter.grad = torch.randn_like(parameter)
+        optimizer.step()
+        state = optimizer.state[parameter]
+
+        # Both moments are quantised at the end of every step, refresh step included.
+        for spec in ADAM_STATE_SPECS:
+            assert state[spec.name].dtype in FP8_DTYPES, f"{spec.name} at step {step}"
+            assert state[f"scale_{spec.name}"].shape == (
+                num_groups(state[spec.name].numel()),
+            )
+        assert state["coord_indices"].dtype == torch.long
+        assert torch.isfinite(parameter).all()
+
+        columns = state["coord_indices"]
+        if previous is not None and not torch.equal(columns, previous):
+            seen_refresh = True
+        previous = columns.clone()
+
+    assert seen_refresh, "update_gap=3 over 7 steps must have refreshed the coordinates"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_frugal_fp8_state_tracks_the_unquantised_optimizer():
+    """Quantising the moments must perturb the trajectory, not change it.
+
+    Both optimizers are driven with the same gradients and the same RNG, so the coordinate
+    draws match and the only difference left is the codec.
+    """
+    torch.manual_seed(0)
+    reference_parameter = torch.nn.Parameter(torch.randn(64, 32, device="cuda"))
+    fp8_parameter = torch.nn.Parameter(reference_parameter.detach().clone())
+
+    kwargs = dict(lr=1e-3, betas=(0.9, 0.95), eps=1e-8, density=0.5, update_gap=3)
+    reference = FrugalCoordAdamW([{"params": [reference_parameter]}], **kwargs)
+    quantised = make_fp8_frugal(FrugalCoordAdamW)([{"params": [fp8_parameter]}], **kwargs)
+
+    for step in range(7):
+        gradient = torch.randn(64, 32, device="cuda")
+        # The coordinate draw is a torch.randperm, so both runs need the same RNG to pick
+        # the same columns; otherwise this compares two different optimisation problems.
+        rng = torch.cuda.get_rng_state()
+        reference_parameter.grad = gradient.clone()
+        reference.step()
+        torch.cuda.set_rng_state(rng)
+        fp8_parameter.grad = gradient.clone()
+        quantised.step()
+
+    assert torch.isfinite(fp8_parameter).all()
+    scale = reference_parameter.detach().abs().mean()
+    drift = (fp8_parameter.detach() - reference_parameter.detach()).abs().mean() / scale
+    assert drift < 0.02, f"FP8 Frugal drifted {drift:.4f} from the unquantised run"

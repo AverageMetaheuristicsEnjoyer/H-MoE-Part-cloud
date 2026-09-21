@@ -64,6 +64,7 @@ case "$arm" in
   # FP8 GEMM independently worsens early routing (AdamW's first-window CV .2254 against
   # .0587 in bf16). Both together will look alarming early and must not be read as failure.
   frugal_coord_fp8gemm_state_fp32) optimizer=frugal; state_precision=fp32; compute=("${fp8_compute[@]}") ;;
+  frugal_coord_bf16_state_fp8) optimizer=frugal; state_precision=fp8;  compute=() ;;
   slimadam_bf16_state_fp32) optimizer=slimadam; state_precision=fp32; compute=() ;;
   *) echo "unknown arm: $arm" >&2; exit 2 ;;
 esac

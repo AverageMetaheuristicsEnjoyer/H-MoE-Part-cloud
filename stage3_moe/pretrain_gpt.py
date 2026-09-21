@@ -220,7 +220,7 @@ def main():
     if is_frugal:
         from stage3_moe.frugal import install_frugal_contract
 
-        install_frugal_contract()
+        install_frugal_contract(fp8_states=state_fp8)
     if is_slimadam:
         from stage3_moe.slim_adam import install_slimadam_contract
 
