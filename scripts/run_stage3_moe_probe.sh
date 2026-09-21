@@ -103,6 +103,14 @@ case "$arm" in
     optimizer_args+=("${STAGE3_MOE_MUON_ARGS[@]}")
     compute_args+=(--fp8-format hybrid --fp8-recipe delayed)
     ;;
+  frugal_coord_bf16_state_fp32)
+    optimizer=frugal
+    state_precision=fp32
+    ;;
+  slimadam_bf16_state_fp32)
+    optimizer=slimadam
+    state_precision=fp32
+    ;;
   *) echo "unknown arm: $arm" >&2; exit 2 ;;
 esac
 
@@ -216,7 +224,7 @@ else
 fi
 
 fusion_args=()
-if "${runtime_prefix[@]}" "$python_bin" -c 'import fused_weight_gradient_mlp_cuda' >/dev/null 2>&1; then
+if "${runtime_prefix[@]}" "$python_bin" -c 'import torch; import fused_weight_gradient_mlp_cuda' >/dev/null 2>&1; then
   grad_accum_fusion=enabled
 else
   grad_accum_fusion=disabled
@@ -271,6 +279,7 @@ cmd=(
   "${compute_args[@]}"
   "${fusion_args[@]}"
   "${data_args[@]}"
+  --ckpt-format torch
   --train-iters "$train_iters"
 )
 

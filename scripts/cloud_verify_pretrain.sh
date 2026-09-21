@@ -34,7 +34,7 @@ for d in "$lg"/*/; do
   newest=$(ls -1t "$d"/train-*.log 2>/dev/null | head -1)
   if [ -n "$newest" ]; then
     echo "  LOG $newest"
-    grep -iE "loading checkpoint|could not find|will not load|checkpoint .*at iteration|setting training iteration|does not match the optimizer|live group sizes" \
+    grep -iE "loading checkpoint|could not find|will not load|checkpoint .*at iteration|successfully saved checkpoint|setting training iteration|does not match the optimizer|live group sizes" \
       "$newest" 2>/dev/null | head -6 | sed 's/^/    /'
     grep -E "^( +)?(train_data_path|phase_transition_iterations|lr_decay_iters|lr_wsd_decay_iters|train_iters) +\." \
       "$newest" 2>/dev/null | sed 's/^/    CONTRACT /'
@@ -97,6 +97,38 @@ for line in open(sys.argv[1]):
           f" route_cv={r['coefficient_of_variation']}"
           f" dropped={r['dropped_tokens']}")
 PYX
+  fi
+  if [ -f "$d/routing_telemetry.jsonl" ]; then
+    python - "$d/routing_telemetry.jsonl" <<'PYR'
+import json, sys
+
+rows = [json.loads(line) for line in open(sys.argv[1]) if line.strip()]
+first, last = rows[0], rows[-1]
+routing = last["rolling_100"]
+bias_first, bias_last = first["expert_bias"], last["expert_bias"]
+drift_rows = [row["drift"] for row in rows[1:]]
+drift_mean = [row["load_total_variation_from_previous_mean"] for row in drift_rows]
+drift_max = [row["load_total_variation_from_previous_max"] for row in drift_rows]
+print(
+    f"  ROUTING_FINAL iteration={last['iteration']} window={routing['window_steps']}"
+    f" min_mean={routing['minimum_to_mean_min']}"
+    f" cv_max={routing['coefficient_of_variation_max']}"
+    f" maxvio_mean={routing['maxvio_mean']}"
+    f" maxvio_p95={routing['maxvio_p95']}"
+    f" maxvio_max={routing['maxvio_max']}"
+    f" dropped={last['dropped_tokens']}"
+)
+print(
+    f"  BIAS_DRIFT first_abs_max={bias_first['absolute_max']}"
+    f" final_abs_max={bias_last['absolute_max']}"
+    f" first_range_max={bias_first['range_max']}"
+    f" final_range_max={bias_last['range_max']}"
+    f" final_delta_abs_max={bias_last['delta_absolute_max']}"
+    f" final_flip_fraction={bias_last['update_flip_fraction']}"
+    f" final_tv_mean={drift_mean[-1]} final_tv_max={drift_max[-1]}"
+    f" peak_tv_mean={max(drift_mean)} peak_tv_max={max(drift_max)}"
+)
+PYR
   fi
 done
 echo "EXIT=0"

@@ -4145,7 +4145,23 @@ def get_train_valid_test_num_samples():
                 skipped_eval_points = args.start_eval_at_iter // args.eval_interval
                 total_eval_points = max(0, total_eval_points - skipped_eval_points)
             eval_iters = total_eval_points * args.eval_iters
-        eval_samples = eval_iters * getattr(args, 'eval_global_batch_size', args.global_batch_size)
+        eval_batch_size = getattr(args, 'eval_global_batch_size', args.global_batch_size)
+        eval_samples = eval_iters * eval_batch_size
+        if not args.skip_train and args.iteration > 0 and args.consumed_valid_samples > 0:
+            skipped_eval_points = (
+                args.start_eval_at_iter // args.eval_interval
+                if args.start_eval_at_iter is not None
+                else 0
+            )
+            completed_eval_points = max(
+                0, args.iteration // args.eval_interval - skipped_eval_points
+            )
+            scheduled_eval_points = max(0, total_eval_points - 1)
+            future_eval_points = max(0, scheduled_eval_points - completed_eval_points)
+            required_eval_samples = args.consumed_valid_samples + (
+                future_eval_points + 1
+            ) * args.eval_iters * eval_batch_size
+            eval_samples = max(eval_samples, required_eval_samples)
     test_samples = args.eval_iters * getattr(args, 'eval_global_batch_size', args.global_batch_size)
 
     # Get train_samples in current phase.

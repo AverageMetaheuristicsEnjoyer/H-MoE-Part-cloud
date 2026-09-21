@@ -36,7 +36,11 @@ prefix=${STAGE3_MOE_HF_PREFIX:-1c-mb4}
 echo "HF_OFFLOAD repo=$repo delete=$delete wait=${wait_min}min root=$root iter=$iter"
 df -h "$root" | tail -1
 
-: "${HF_TOKEN:?set HF_TOKEN with mlsub run --env}"
+token_file=${STAGE3_MOE_HF_TOKEN_FILE:-/home/jovyan/.cache/huggingface/token}
+if [[ -z ${HF_TOKEN:-} && ! -s $token_file ]]; then
+  echo "HF_TOKEN_MISSING: set HF_TOKEN or provide $token_file" >&2
+  exit 1
+fi
 unset PYTHONNOUSERSITE
 python -c 'import huggingface_hub' 2>/dev/null || pip install --user -q huggingface_hub
 # A resumable checkpoint is one ~14 GB file, so file-level parallelism buys nothing and
@@ -49,7 +53,8 @@ else
 fi
 
 HMOE_REPO=$repo HMOE_DELETE=$delete HMOE_WAIT=$wait_min HMOE_ROOT=$root \
-HMOE_ITER=$iter HMOE_PREFIX=$prefix HMOE_ARMS=$arms_arg python - <<'PY'
+HMOE_ITER=$iter HMOE_PREFIX=$prefix HMOE_ARMS=$arms_arg \
+HMOE_TOKEN_FILE=$token_file HMOE_COMPLETE_ITER=${STAGE3_MOE_COMPLETE_ITER:-} python - <<'PY'
 import os, pathlib, shutil, sys, time
 from huggingface_hub import HfApi
 
@@ -61,7 +66,10 @@ iteration = int(os.environ["HMOE_ITER"])
 prefix = os.environ["HMOE_PREFIX"]
 name = f"iter_{iteration:07d}"
 
-api = HfApi(token=os.environ["HF_TOKEN"])
+token = os.environ.get("HF_TOKEN")
+if not token:
+    token = pathlib.Path(os.environ["HMOE_TOKEN_FILE"]).read_text().strip()
+api = HfApi(token=token)
 if "/" not in repo:
     # Resolve the namespace from the token rather than guessing it: a wrong owner is a
     # 403 halfway through a multi-hour upload.
@@ -127,7 +135,7 @@ def reclaim(arm):
     # and a resubmitted job would try to load exactly what the tracker names. Deleting
     # is deferred, never retried as a re-upload: verification already stands.
     live = tracker_of(arm)
-    if live == str(iteration):
+    if live == str(iteration) and os.environ["HMOE_COMPLETE_ITER"] != live:
         print(f"DELETE_DEFERRED {arm}: tracker still at {live}, it is the resume point", flush=True)
         return False
     shutil.rmtree(root / arm / name)

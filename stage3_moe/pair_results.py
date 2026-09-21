@@ -127,7 +127,7 @@ def validate_run(run):
         ["optimizer", "gemm_mode", "optimizer_state_mode", "match_key_sha256"],
         "comparison",
     )
-    if comparison["optimizer"] not in {"adamw", "muon"}:
+    if comparison["optimizer"] not in {"adamw", "muon", "frugal", "slimadam"}:
         raise ValueError("comparison: unsupported optimizer")
     _require(
         run["provenance"],

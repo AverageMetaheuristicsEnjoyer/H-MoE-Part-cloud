@@ -8,8 +8,8 @@ import statistics
 import subprocess
 import sys
 import time
-from collections import defaultdict
-from importlib import metadata
+from collections import defaultdict, deque
+from importlib import import_module, metadata
 from pathlib import Path
 
 import torch
@@ -42,6 +42,8 @@ def assert_fp8_adam_bootstrap(optimizer):
 
 
 def _role(raw):
+    if hasattr(raw, "optimizer_role"):
+        return raw.optimizer_role
     state_specs = getattr(raw, "state_specs", ())
     keys = {spec.name if hasattr(spec, "name") else spec[0] for spec in state_specs}
     if "momentum_buffer" in keys or "Muon" in type(raw).__name__:
@@ -50,6 +52,32 @@ def _role(raw):
 
 
 TOKEN_TALLY = "stage3_tokens_per_expert"
+
+
+def routing_balance_summary(counts):
+    counts = counts.detach().to(device="cpu", dtype=torch.float64)
+    if counts.ndim != 2 or bool((counts.sum(dim=1) <= 0).any()):
+        raise ValueError("routing counts must be a non-empty layer-by-expert matrix")
+    means = counts.mean(dim=1)
+    minimum_to_mean = counts.min(dim=1).values / means
+    maximum_to_mean = counts.max(dim=1).values / means
+    maxvio = maximum_to_mean - 1.0
+    coefficient = counts.std(dim=1, unbiased=False) / means
+    return {
+        "tokens_per_expert": counts.to(torch.int64).tolist(),
+        "maxvio_per_layer": maxvio.tolist(),
+        "maxvio_mean": float(maxvio.mean()),
+        "maxvio_p95": float(torch.quantile(maxvio, 0.95)),
+        "maxvio_max": float(maxvio.max()),
+        "minimum_to_mean_per_layer": minimum_to_mean.tolist(),
+        "minimum_to_mean_min": float(minimum_to_mean.min()),
+        "maximum_to_mean_per_layer": maximum_to_mean.tolist(),
+        "maximum_to_mean_max": float(maximum_to_mean.max()),
+        "coefficient_of_variation_per_layer": coefficient.tolist(),
+        "coefficient_of_variation_max": float(coefficient.max()),
+        "zero_experts_per_layer": (counts == 0).sum(dim=1).tolist(),
+        "zero_experts_max": int((counts == 0).sum(dim=1).max()),
+    }
 
 
 def _moe_routers(model_chunks):
@@ -97,7 +125,8 @@ def optimizer_state_ledger(optimizer, arm):
     metadata_bytes = 0
     seen = set()
     raw_optimizers = list(_raw_optimizers(optimizer))
-    adam_only = arm.startswith("adamw_")
+    optimizer_name = arm.split("_", 1)[0]
+    adam_only = optimizer_name == "adamw"
 
     for raw in raw_optimizers:
         role = "adamw_all" if adam_only else _role(raw)
@@ -139,26 +168,71 @@ def optimizer_state_ledger(optimizer, arm):
         expected_adam = (torch.float32, torch.float32)
     saw_adam = False
     saw_muon = False
+    saw_frugal = False
+    saw_slimadam = False
     for raw in raw_optimizers:
         role = "adamw_all" if adam_only else _role(raw)
-        for state in raw.state.values():
+        for parameter, state in raw.state.items():
             if role in {"adamw_all", "adamw_fallback"} and "exp_avg" in state:
                 saw_adam = True
                 if (
                     state["exp_avg"].dtype, state["exp_avg_sq"].dtype
                 ) != expected_adam:
                     raise AssertionError(f"{role} Adam state precision contract failed")
+            if role in {"frugal_matrix", "slimadam_all"} and "exp_avg" in state:
+                if (
+                    state["exp_avg"].dtype != torch.float32
+                    or state["exp_avg_sq"].dtype != torch.float32
+                ):
+                    raise AssertionError(f"{role} state precision contract failed")
+                if role == "frugal_matrix":
+                    from stage3_moe.frugal import FRUGAL_DENSITY
+
+                    saw_frugal = True
+                    expected_shape = (
+                        parameter.shape[0],
+                        int(parameter.shape[1] * FRUGAL_DENSITY),
+                    )
+                    if state["exp_avg"].shape != expected_shape:
+                        raise AssertionError("FRUGAL coordinate first moment shape contract failed")
+                    if state["exp_avg_sq"].shape != expected_shape:
+                        raise AssertionError("FRUGAL coordinate second moment shape contract failed")
+                    if state["coord_indices"].shape != (expected_shape[1],):
+                        raise AssertionError("FRUGAL coordinate index shape contract failed")
+                else:
+                    saw_slimadam = True
+                    if state["exp_avg"].shape != parameter.shape:
+                        raise AssertionError("SlimAdam first moment shape contract failed")
+                    dims = next(
+                        group["slim_compress_dims"]
+                        for group in raw.param_groups
+                        if any(candidate is parameter for candidate in group["params"])
+                    )
+                    expected_shape = list(parameter.shape)
+                    if dims is not None:
+                        for dim in dims:
+                            expected_shape[dim] = 1
+                    if tuple(state["exp_avg_sq"].shape) != tuple(expected_shape):
+                        raise AssertionError(
+                            "SlimAdam second moment shape contract failed"
+                        )
             if role == "muon_matrix" and "momentum_buffer" in state:
                 saw_muon = True
                 expected = torch.float8_e4m3fn if state_fp8 else torch.float32
                 if state["momentum_buffer"].dtype != expected:
                     raise AssertionError("Muon momentum precision contract failed")
-                if state_fp8 and any(key.startswith(("expand_", "sqrt_minmax_")) for key in state):
+                if state_fp8 and any(
+                    key.startswith(("expand_", "sqrt_minmax_")) for key in state
+                ):
                     raise AssertionError("Muon momentum must use maxabs, not DRE")
-    if not saw_adam:
+    if optimizer_name in {"adamw", "muon", "frugal"} and not saw_adam:
         raise AssertionError("no initialized Adam state found")
-    if not adam_only and not saw_muon:
+    if optimizer_name == "muon" and not saw_muon:
         raise AssertionError("no initialized Muon momentum found")
+    if optimizer_name == "frugal" and not saw_frugal:
+        raise AssertionError("no initialized FRUGAL state found")
+    if optimizer_name == "slimadam" and not saw_slimadam:
+        raise AssertionError("no initialized SlimAdam state found")
 
     tensors = [
         {
@@ -189,7 +263,13 @@ def optimizer_state_ledger(optimizer, arm):
     }
 
 
-ROLES = ("adamw_all", "adamw_fallback", "muon_matrix")
+ROLES = (
+    "adamw_all",
+    "adamw_fallback",
+    "muon_matrix",
+    "frugal_matrix",
+    "slimadam_all",
+)
 
 
 def _is_routed_expert(name):
@@ -240,7 +320,8 @@ def parameter_group_ledger(optimizer, arm, parameter_names):
     split_fc1_names = set()
     router_names = set()
     fallback_router_names = set()
-    adam_only = arm.startswith("adamw_")
+    optimizer_name = arm.split("_", 1)[0]
+    adam_only = optimizer_name == "adamw"
     for raw in _raw_optimizers(optimizer):
         role = "adamw_all" if adam_only else _role(raw)
         for group in raw.param_groups:
@@ -254,6 +335,8 @@ def parameter_group_ledger(optimizer, arm, parameter_names):
                 names[role].append(f"{name}:{tuple(parameter.shape)}:{parameter.numel()}")
                 if role == "muon_matrix" and name.endswith(".router.weight"):
                     raise AssertionError("router weight reached Muon")
+                if role == "frugal_matrix" and name.endswith(".router.weight"):
+                    raise AssertionError("router weight reached FRUGAL")
                 if name.endswith(".router.weight"):
                     router_names.add(name)
                     if role == "adamw_fallback":
@@ -264,6 +347,17 @@ def parameter_group_ledger(optimizer, arm, parameter_names):
                         expert_fc1_names.add(name)
                     if group.get("stage3_split_swiglu_fc1"):
                         split_fc1_names.add(name)
+                if role == "slimadam_all":
+                    from stage3_moe.slim_adam import (
+                        SLIM_COMPRESS_DIMS,
+                        slim_compression_dims,
+                    )
+
+                    expected_dims = slim_compression_dims(parameter, name)
+                    if group.get(SLIM_COMPRESS_DIMS) != expected_dims:
+                        raise AssertionError(
+                            f"SlimAdam compression rule mismatch for {name}"
+                        )
 
     # Replicated tensors are identical on every expert rank, so count them once and
     # add only the sharded expert tensors summed across the expert-parallel group.
@@ -277,28 +371,42 @@ def parameter_group_ledger(optimizer, arm, parameter_names):
     }
     global_fc1 = len(fc1_names) - len(expert_fc1_names) + reduced[-1]
 
-    if not adam_only and fc1_names != split_fc1_names:
+    if optimizer_name == "muon" and fc1_names != split_fc1_names:
         missing = sorted(fc1_names - split_fc1_names)
         raise AssertionError(f"Muon SwiGLU FC1 split flag missing for {missing[:3]}")
-    if not adam_only and global_fc1 != 1 + 17 * 65:
+    if optimizer_name == "muon" and global_fc1 != 1 + 17 * 65:
         raise AssertionError(f"expected 1106 Muon SwiGLU FC1 weights, found {global_fc1}")
-    if not adam_only and len(router_names) != 17:
+    if optimizer_name in {"muon", "frugal"} and len(router_names) != 17:
         raise AssertionError(f"expected 17 MoE router weights, found {len(router_names)}")
-    if not adam_only and router_names != fallback_router_names:
+    if optimizer_name in {"muon", "frugal"} and router_names != fallback_router_names:
         raise AssertionError("not every router weight is in the AdamW fallback group")
     if sum(global_counts.values()) != TOTAL_PARAMETERS:
         raise AssertionError(
             f"total parameter mismatch: {sum(global_counts.values())} != {TOTAL_PARAMETERS}"
         )
-    if not adam_only and global_counts != {
-        "muon_matrix": MUON_MATRIX_PARAMETERS,
-        "adamw_fallback": ADAMW_FALLBACK_PARAMETERS,
-    }:
-        raise AssertionError(f"Muon parameter groups do not match the design: {global_counts}")
+    expected_counts = {
+        "adamw": {"adamw_all": TOTAL_PARAMETERS},
+        "muon": {
+            "muon_matrix": MUON_MATRIX_PARAMETERS,
+            "adamw_fallback": ADAMW_FALLBACK_PARAMETERS,
+        },
+        "frugal": {
+            "frugal_matrix": MUON_MATRIX_PARAMETERS,
+            "adamw_fallback": ADAMW_FALLBACK_PARAMETERS,
+        },
+        "slimadam": {"slimadam_all": TOTAL_PARAMETERS},
+    }[optimizer_name]
+    if global_counts != expected_counts:
+        raise AssertionError(
+            f"{optimizer_name} parameter groups do not match the design: {global_counts}"
+        )
     active.update(
-        {"adamw_all": ACTIVE_PARAMETERS}
-        if adam_only
-        else {"muon_matrix": 176_160_768, "adamw_fallback": 104_082_944}
+        {
+            "adamw": {"adamw_all": ACTIVE_PARAMETERS},
+            "muon": {"muon_matrix": 176_160_768, "adamw_fallback": 104_082_944},
+            "frugal": {"frugal_matrix": 176_160_768, "adamw_fallback": 104_082_944},
+            "slimadam": {"slimadam_all": ACTIVE_PARAMETERS},
+        }[optimizer_name]
     )
     return [
         {
@@ -315,10 +423,10 @@ def parameter_group_ledger(optimizer, arm, parameter_names):
     ]
 
 
-def _normalized_match_argv(argv, arm):
+def _normalized_match_argv(argv, arm=None):
     # The match key is what proves two runs controlled the same factors, so it has to
     # ignore exactly what the pair comparison ignores: where this arm reads and writes.
-    argv = mask_arm_in_paths(argv, arm)
+    argv = mask_arm_in_paths(argv, arm) if arm is not None else list(argv)
     normalized = []
     skip = False
     for item in argv:
@@ -337,7 +445,8 @@ def _comparison(arm, argv):
         "\0".join(_normalized_match_argv(argv, arm)).encode()
     ).hexdigest()
     return {
-        "optimizer": "muon" if arm.startswith("muon_") else "adamw",
+        # split, not a muon/adamw ternary: the arm set now also carries frugal and slimadam.
+        "optimizer": arm.split("_", 1)[0],
         # Coarse label, derived from the arm and not from the recipe actually passed. It
         # was written when hybrid/delayed was the only FP8-GEMM recipe the contract
         # allowed; the contract now also accepts tensorwise and blockwise, and for those
@@ -453,6 +562,146 @@ class Probe:
         self.parameter_names = {}
         self.written = False
         self.model_chunks = []
+        self.router_names = []
+        self.routing_window = deque(maxlen=100)
+        self.pending_routing = None
+        self.previous_load_distribution = None
+        self.previous_bias_update_sign = None
+
+    def capture_router_update(self, counts, expert_bias, updated_expert_bias):
+        counts = counts.detach().to(device="cpu", dtype=torch.float64)
+        expert_bias = expert_bias.detach().to(device="cpu", dtype=torch.float64)
+        updated_expert_bias = updated_expert_bias.detach().to(
+            device="cpu", dtype=torch.float64
+        )
+        if self.router_names and counts.shape[0] != len(self.router_names):
+            raise AssertionError(
+                f"router telemetry layer mismatch: {counts.shape[0]} != {len(self.router_names)}"
+            )
+
+        distribution = counts / counts.sum(dim=1, keepdim=True)
+        if self.previous_load_distribution is None:
+            load_tv = None
+        else:
+            load_tv = 0.5 * (
+                distribution - self.previous_load_distribution
+            ).abs().sum(dim=1)
+        bias_delta = updated_expert_bias - expert_bias
+        bias_update_sign = torch.sign(bias_delta)
+        if self.previous_bias_update_sign is None:
+            bias_flip_fraction = None
+        else:
+            comparable = (bias_update_sign != 0) & (self.previous_bias_update_sign != 0)
+            bias_flip_fraction = float(
+                ((bias_update_sign != self.previous_bias_update_sign) & comparable)
+                .to(torch.float64)
+                .mean()
+            )
+
+        self.routing_window.append(counts)
+        self.pending_routing = {
+            "counts": counts,
+            "expert_bias": updated_expert_bias,
+            "bias_delta_abs_max": float(bias_delta.abs().max()),
+            "bias_update_flip_fraction": bias_flip_fraction,
+            "load_tv": load_tv,
+        }
+        self.previous_load_distribution = distribution
+        self.previous_bias_update_sign = bias_update_sign
+
+    def write_routing_telemetry(self, iteration):
+        if self.pending_routing is None:
+            return
+        from megatron.training import get_args, get_tensorboard_writer, get_wandb_writer
+
+        args = get_args()
+        interval = int(os.environ.get("STAGE3_MOE_ROUTING_TELEMETRY_INTERVAL", 10))
+        emit = iteration == 1 or iteration % interval == 0 or iteration == args.train_iters
+        if not emit:
+            self.pending_routing = None
+            return
+
+        batch = routing_balance_summary(self.pending_routing["counts"])
+        rolling = routing_balance_summary(torch.stack(tuple(self.routing_window)).sum(dim=0))
+        bias = self.pending_routing["expert_bias"]
+        bias_range = bias.max(dim=1).values - bias.min(dim=1).values
+        load_tv = self.pending_routing["load_tv"]
+        record = {
+            "schema_version": 1,
+            "iteration": iteration,
+            "scope": "global_batch_unpadded",
+            "layers": self.router_names,
+            "batch": batch,
+            "rolling_100": {
+                "window_steps": len(self.routing_window),
+                **rolling,
+            },
+            "expert_bias": {
+                "values": bias.tolist(),
+                "minimum_per_layer": bias.min(dim=1).values.tolist(),
+                "maximum_per_layer": bias.max(dim=1).values.tolist(),
+                "mean_per_layer": bias.mean(dim=1).tolist(),
+                "std_per_layer": bias.std(dim=1, unbiased=False).tolist(),
+                "range_per_layer": bias_range.tolist(),
+                "absolute_max": float(bias.abs().max()),
+                "range_max": float(bias_range.max()),
+                "delta_absolute_max": self.pending_routing["bias_delta_abs_max"],
+                "update_flip_fraction": self.pending_routing[
+                    "bias_update_flip_fraction"
+                ],
+            },
+            "drift": {
+                "load_total_variation_from_previous_mean": (
+                    None if load_tv is None else float(load_tv.mean())
+                ),
+                "load_total_variation_from_previous_max": (
+                    None if load_tv is None else float(load_tv.max())
+                ),
+            },
+            "dropped_tokens": 0 if args.moe_expert_capacity_factor is None else None,
+        }
+
+        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+            artifact = self.result_path.parent / "routing_telemetry.jsonl"
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            with artifact.open("a") as handle:
+                handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+        scalars = {
+            "routing/batch_maxvio_mean": batch["maxvio_mean"],
+            "routing/batch_maxvio_max": batch["maxvio_max"],
+            "routing/batch_minimum_to_mean_min": batch["minimum_to_mean_min"],
+            "routing/batch_cv_max": batch["coefficient_of_variation_max"],
+            "routing/rolling100_maxvio_mean": rolling["maxvio_mean"],
+            "routing/rolling100_maxvio_max": rolling["maxvio_max"],
+            "routing/rolling100_minimum_to_mean_min": rolling[
+                "minimum_to_mean_min"
+            ],
+            "routing/rolling100_cv_max": rolling["coefficient_of_variation_max"],
+            "routing/expert_bias_absolute_max": record["expert_bias"]["absolute_max"],
+            "routing/expert_bias_range_max": record["expert_bias"]["range_max"],
+        }
+        if load_tv is not None:
+            scalars["routing/load_tv_previous_mean"] = float(load_tv.mean())
+            scalars["routing/load_tv_previous_max"] = float(load_tv.max())
+        if self.pending_routing["bias_update_flip_fraction"] is not None:
+            scalars["routing/bias_update_flip_fraction"] = self.pending_routing[
+                "bias_update_flip_fraction"
+            ]
+        for index, (batch_maxvio, rolling_maxvio) in enumerate(
+            zip(batch["maxvio_per_layer"], rolling["maxvio_per_layer"])
+        ):
+            scalars[f"routing/layer_{index:02d}_batch_maxvio"] = batch_maxvio
+            scalars[f"routing/layer_{index:02d}_rolling100_maxvio"] = rolling_maxvio
+
+        writer = get_tensorboard_writer()
+        if writer:
+            for name, value in scalars.items():
+                writer.add_scalar(name, value, iteration)
+        wandb_writer = get_wandb_writer()
+        if wandb_writer:
+            wandb_writer.log(scalars, iteration)
+        self.pending_routing = None
 
     def reset(self):
         torch.cuda.synchronize()
@@ -526,13 +775,16 @@ class Probe:
             "dropped_tokens": 0 if capacity_factor is None else None,
         }
 
-    def after_step(self, elapsed, result):
+    def after_step(self, elapsed, result, iteration=None):
         self.step += 1
         if self.step > self.warmup_steps:
             self.full_step_seconds.append(elapsed)
             loss_dict = result[0]
             if "lm loss" in loss_dict:
                 self.losses.append(float(loss_dict["lm loss"]))
+        self.write_routing_telemetry(
+            self.step if iteration is None else int(iteration) + 1
+        )
 
     def write(self, status="completed"):
         if self.written or self.optimizer is None:
@@ -633,6 +885,10 @@ class Probe:
 def install_probe(*, arm, result_path, warmup_steps, measured_steps, program_start, argv):
     import megatron.training.training as training
 
+    finalize_model_grads = import_module(
+        "megatron.core.distributed.finalize_model_grads"
+    )
+
     probe = Probe(
         arm=arm,
         result_path=result_path,
@@ -643,6 +899,14 @@ def install_probe(*, arm, result_path, warmup_steps, measured_steps, program_sta
     )
     original = training.train_step
     original_setup = training.setup_model_and_optimizer
+    original_bias_update = finalize_model_grads.get_updated_expert_bias
+
+    def captured_bias_update(tokens_per_expert, expert_bias, *args, **kwargs):
+        updated = original_bias_update(tokens_per_expert, expert_bias, *args, **kwargs)
+        probe.capture_router_update(tokens_per_expert, expert_bias, updated)
+        return updated
+
+    finalize_model_grads.get_updated_expert_bias = captured_bias_update
 
     def named_setup(*args, **kwargs):
         model, optimizer, scheduler = original_setup(*args, **kwargs)
@@ -651,6 +915,7 @@ def install_probe(*, arm, result_path, warmup_steps, measured_steps, program_sta
         probe.optimizer = optimizer
         probe.model_chunks = list(model)
         install_router_tallies(probe.model_chunks)
+        probe.router_names = [name for name, _ in _moe_routers(probe.model_chunks)]
         for chunk_index, chunk in enumerate(model):
             for name, parameter in chunk.named_parameters():
                 stable_name = f"model_chunk{chunk_index}.{name}"
@@ -708,7 +973,9 @@ def install_probe(*, arm, result_path, warmup_steps, measured_steps, program_sta
         start = time.perf_counter()
         result = original(*args, **kwargs)
         torch.cuda.synchronize()
-        probe.after_step(time.perf_counter() - start, result)
+        probe.after_step(
+            time.perf_counter() - start, result, iteration=kwargs.get("iteration")
+        )
         if probe.step == probe.warmup_steps:
             probe.reset()
         if probe.step == probe.warmup_steps + probe.measured_steps:

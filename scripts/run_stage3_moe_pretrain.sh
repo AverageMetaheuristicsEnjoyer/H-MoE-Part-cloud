@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 3 MoE matched pretraining, WSD trunk-and-branch.
 #
-#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|lr-sweep|smoke|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|corrected-time-match|time-match-stretched-decay|schedule-tail|schedule-tail-smoke|eval-lm-fixed|eval-routing-fixed|eval-downstream
+#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|lr-sweep|smoke|resume-gate|stability|lr-screen|routing-calibration|routing-calibration-2254|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|corrected-time-match|time-match-stretched-decay|schedule-tail|schedule-tail-smoke|eval-lm-fixed|eval-routing-fixed|eval-downstream
 #
 # smoke exercises save and resume; bench measures throughput and peak memory with no
 # checkpoint traffic; resume-bench does the same from the trunk branch point, so the
@@ -30,14 +30,6 @@ short_iters=2818          # 1,200,422,912 tokens
 short_decay_iters=564     # final 20% of the short budget
 short_branch=$((short_iters - short_decay_iters))   # 2254
 
-# The peak LR is the one LR argument that differs from the dense code base (1.63e-3 here
-# against 3e-4 in run_stage4_dense.sh); the decay style, the 3448/17242 split and the
-# min_lr = 0.1 x lr ratio are identical. Unset, this reproduces the arms byte for byte.
-peak_lr=${STAGE3_MOE_LR:-1.63e-3}
-# LC_ALL=C is not decoration: under a comma-decimal locale awk prints "0,000163" and MCore
-# gets a value it cannot parse as a float.
-min_lr=${STAGE3_MOE_MIN_LR:-$(LC_ALL=C awk -v l="$peak_lr" 'BEGIN{printf "%.6g", l/10}')}
-
 global_batch=208
 micro_batch=${STAGE3_MOE_MICRO_BATCH:-4}            # 4 x DP2 x accum26 = 208
 data_root=${STAGE3_MOE_DATA_ROOT:-/home/jovyan/data/fineweb-edu-gpt2-megatron/data}
@@ -65,12 +57,26 @@ case "$arm" in
   muon_bf16_state_fp8)   optimizer=muon; state_precision=fp8;  compute=() ;;
   adamw_fp8gemm_state_fp32) optimizer=adam; state_precision=fp32; compute=("${fp8_compute[@]}") ;;
   muon_fp8gemm_state_fp32)  optimizer=muon; state_precision=fp32; compute=("${fp8_compute[@]}") ;;
+  frugal_coord_bf16_state_fp32) optimizer=frugal; state_precision=fp32; compute=() ;;
+  # FP8 GEMM is a model-level setting, so it composes with any optimizer. Routing telemetry
+  # matters more here than on the other arms: Frugal's experts look collapsed for the first
+  # few hundred steps (min/mean 0.0 at 235, 0.002 at 587, recovered to 0.792 by 2,750) and
+  # FP8 GEMM independently worsens early routing (AdamW's first-window CV .2254 against
+  # .0587 in bf16). Both together will look alarming early and must not be read as failure.
+  frugal_coord_fp8gemm_state_fp32) optimizer=frugal; state_precision=fp32; compute=("${fp8_compute[@]}") ;;
+  slimadam_bf16_state_fp32) optimizer=slimadam; state_precision=fp32; compute=() ;;
   *) echo "unknown arm: $arm" >&2; exit 2 ;;
 esac
 probe_warmup=20
 probe_measure=100
 optimizer_args=()
 [[ $optimizer == muon ]] && optimizer_args=("${STAGE3_MOE_MUON_ARGS[@]}")
+learning_rate=${STAGE3_MOE_LR:-1.63e-3}
+# Derived rather than a second literal, so sweeping the peak carries the floor with it and
+# the 0.1x ratio cannot silently drift. LC_ALL=C is not decoration: under a comma-decimal
+# locale awk prints "0,000163" and MCore gets a value it cannot parse as a float.
+min_learning_rate=${STAGE3_MOE_MIN_LR:-$(LC_ALL=C awk -v l="$learning_rate" 'BEGIN{printf "%.6g", l/10}')}
+adam_beta2=${STAGE3_MOE_ADAM_BETA2:-0.95}
 
 trunk_dir="$ckpt_root/trunk/$arm"
 decay_dir="$ckpt_root/1p2b/$arm"
@@ -153,6 +159,81 @@ case "$mode" in
     probe_warmup=5
     probe_measure=10
     ;;
+  resume-gate)
+    case "$arm" in
+      frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) echo "resume-gate is only defined for Frugal CoordAdamW and SlimAdam" >&2; exit 2 ;;
+    esac
+    train_iters=52
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    resume_dir="$ckpt_root/resume-gate/$arm${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
+    mkdir -p "$resume_dir"
+    save_args=(--save "$resume_dir" --save-interval 50)
+    load_args=(--load "$resume_dir")
+    if [[ ! -f $resume_dir/latest_checkpointed_iteration.txt ]]; then
+      exit_args=(--exit-interval 50)
+    fi
+    probe_warmup=0
+    probe_measure=2
+    ;;
+  stability)
+    case "$arm" in
+      frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) echo "stability is only defined for Frugal CoordAdamW and SlimAdam" >&2; exit 2 ;;
+    esac
+    train_iters=235
+    target_iters=$train_iters
+    decay_iters=47
+    warmup_iters=2
+    gate_dir="$ckpt_root/stability/$arm${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
+    mkdir -p "$gate_dir"
+    save_args=(--save "$gate_dir" --save-interval "$train_iters")
+    load_args=()
+    ;;
+  lr-screen)
+    case "$arm" in
+      frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) echo "lr-screen is only defined for Frugal CoordAdamW and SlimAdam" >&2; exit 2 ;;
+    esac
+    train_iters=587
+    target_iters=$train_iters
+    decay_iters=117
+    warmup_iters=6
+    gate_dir="$ckpt_root/lr-screen/$arm${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
+    mkdir -p "$gate_dir"
+    save_args=(--save "$gate_dir" --save-interval "$train_iters")
+    load_args=()
+    ;;
+  routing-calibration)
+    case "$arm" in
+      adamw_bf16_state_fp32|frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) echo "routing-calibration is only defined for matched AdamW, Frugal CoordAdamW, and SlimAdam" >&2; exit 2 ;;
+    esac
+    # Reproduce the first 587 steps of the full baseline schedule exactly: the
+    # 173-step warmup followed by peak LR, with the full run's decay still far away.
+    train_iters=587
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    gate_dir="$ckpt_root/routing-calibration/$arm${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
+    mkdir -p "$gate_dir"
+    save_args=(--save "$gate_dir" --save-interval "$train_iters")
+    load_args=()
+    ;;
+  routing-calibration-2254)
+    case "$arm" in
+      adamw_bf16_state_fp32|frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) echo "routing-calibration-2254 is only defined for matched AdamW, Frugal CoordAdamW, and SlimAdam" >&2; exit 2 ;;
+    esac
+    routing_source=${STAGE3_MOE_ROUTING_RESUME_SOURCE:?set STAGE3_MOE_ROUTING_RESUME_SOURCE}
+    routing_output=${STAGE3_MOE_ROUTING_RESUME_OUTPUT:?set STAGE3_MOE_ROUTING_RESUME_OUTPUT}
+    train_iters=$short_branch
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    mkdir -p "$routing_output"
+    save_args=(--save "$routing_output" --save-interval "$train_iters")
+    load_args=(--load "$routing_source" --override-opt_param-scheduler)
+    ;;
   bench)
     # Throughput and peak memory only. No checkpoint traffic, so an NFS write never
     # lands inside the measured window and topologies stay comparable.
@@ -166,8 +247,8 @@ case "$mode" in
     ;;
   resume-bench)
     # Steady-state timing. `bench` measures 25 cold iterations of an untrained model,
-    # which is a different regime: at iteration 2254 the router is balanced and the
-    # expert GEMMs are small, and FP8 delayed scaling measures very differently there.
+    # which is a different regime: at iteration 2254 the checkpoint carries trained
+    # router scores and biases, and FP8 delayed scaling measures very differently there.
     # Resume the branch point, run a short window, never write a checkpoint.
     train_iters=$((short_branch + ${STAGE3_MOE_BENCH_ITERS:-150}))
     target_iters=$full_iters
@@ -177,7 +258,8 @@ case "$mode" in
     # trunk's, and refuses to load on the mismatch. Weight decay is constant here
     # (start_wd = end_wd = 0.1) and every LR argument matches the trunk, so overriding
     # rebuilds the identical schedule; num_steps still comes from the checkpoint.
-    load_args=(--load "$trunk_dir" --override-opt_param-scheduler)
+    bench_load=${STAGE3_MOE_BENCH_LOAD:-$trunk_dir}
+    load_args=(--load "$bench_load" --override-opt_param-scheduler)
     ;;
   recipe-probe)
     # Compare FP8 recipes against each other and against bf16 on the same weights, the
@@ -512,7 +594,7 @@ fi
 fusion_args=()
 if [[ ${STAGE3_MOE_WGRAD_FUSION:-0} == 1 ]]; then
   echo "GRADIENT_ACCUMULATION_FUSION=requested (TE layers fuse, LM head falls back)"
-elif ! python -c 'import fused_weight_gradient_mlp_cuda' >/dev/null 2>&1; then
+elif ! python -c 'import torch; import fused_weight_gradient_mlp_cuda' >/dev/null 2>&1; then
   fusion_args=(--no-gradient-accumulation-fusion)
   echo "GRADIENT_ACCUMULATION_FUSION=disabled"
 fi
@@ -555,6 +637,7 @@ echo "ARM=$arm MODE=$mode GPUS=$gpu_count micro_batch=$micro_batch global_batch=
 echo "DATA train=$train_data_prefix valid=$valid_data_prefix test=$test_data_prefix"
 echo "FP8_DEQUANT_CHUNK=${STAGE3_MOE_FP8_DEQUANT_CHUNK:-0} (0 = every state in FP32 at once)"
 echo "SCHEDULE target_iters=$target_iters decay_iters=$decay_iters warmup=$warmup_iters train_iters=$train_iters"
+echo "OPTIMIZER_HPARAMS lr=$learning_rate min_lr=$min_learning_rate beta1=0.9 beta2=$adam_beta2 weight_decay=0.1"
 echo "CKPT save=${save_args[*]} load=${load_args[*]}"
 
 train_log="$log_root/$run_id/train-$(date -u +%Y%m%dT%H%M%SZ).log"
@@ -577,9 +660,9 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   --expert-tensor-parallel-size 1 \
   --transformer-impl transformer_engine \
   --bf16 \
-  --adam-beta1 0.9 --adam-beta2 0.95 --adam-eps 1e-8 \
-  --lr "$peak_lr" \
-  --min-lr "$min_lr" \
+  --adam-beta1 0.9 --adam-beta2 "$adam_beta2" --adam-eps 1e-8 \
+  --lr "$learning_rate" \
+  --min-lr "$min_learning_rate" \
   --lr-decay-style WSD \
   --lr-decay-iters "$target_iters" \
   --lr-wsd-decay-iters "$decay_iters" \
