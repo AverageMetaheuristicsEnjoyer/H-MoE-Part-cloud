@@ -21,6 +21,9 @@ log_root=${STAGE3_MOE_LOG_ROOT:-/tmp/hmoe-fullsplit-eval/logs}
 stage_root=${STAGE3_MOE_FULLSPLIT_STAGE:-/tmp/hmoe-fullsplit-eval}
 arm=${STAGE3_MOE_FULLSPLIT_ARM:-adamw_fp8gemm_state_fp32}
 hf_repo=${STAGE3_MOE_PROBE_HF_REPO:-AverageMetaheuristicsEnjoyer/hmoe-stage3-checkpoints}
+# The archive is split by the micro-batch the arm trained at: the FP8-GEMM arms are under
+# 1c-mb16, everything else -- Frugal included -- under 1c-mb4.
+hf_prefix=${STAGE3_MOE_FULLSPLIT_HF_PREFIX:-1c-mb16}
 export HF_HOME=${STAGE3_MOE_HF_HOME:-/tmp/hmoe-fullsplit-eval/hf}
 export STAGE3_MOE_EVAL_ITERS=${STAGE3_MOE_EVAL_ITERS:-240}
 export STAGE3_MOE_MICRO_BATCH=${STAGE3_MOE_MICRO_BATCH:-16}
@@ -39,13 +42,13 @@ df -h /tmp | tail -1
 
 # The 1C reference is the baseline every other row is measured against and it is the one
 # endpoint no longer on the volumes -- it went to the HF archive with the rest of 1C.
-ref_dir="$stage_root/1c-mb16/$arm"
+ref_dir="$stage_root/$hf_prefix/$arm"
 if [[ ! -f "$ref_dir/iter_0017242/mp_rank_00/model_optim_rng.pt" ]]; then
-  echo "=== staging 1c-mb16/$arm/iter_0017242 ==="
+  echo "=== staging $hf_prefix/$arm/iter_0017242 ==="
   mkdir -p "$ref_dir"
   pip install --user --no-cache-dir hf_transfer 2>&1 | tail -1
   python -c 'import hf_transfer' >/dev/null 2>&1 && export HF_HUB_ENABLE_HF_TRANSFER=1
-  python - "$hf_repo" "1c-mb16/$arm" "$ref_dir" iter_0017242 <<'PY'
+  python - "$hf_repo" "$hf_prefix/$arm" "$ref_dir" iter_0017242 <<'PY'
 import os, sys
 from huggingface_hub import snapshot_download
 repo, remote, dest, name = sys.argv[1:5]
