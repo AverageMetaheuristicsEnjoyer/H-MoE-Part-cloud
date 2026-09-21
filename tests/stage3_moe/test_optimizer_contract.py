@@ -284,6 +284,25 @@ def test_bootstrap_assert_rejects_plain_adam():
         assert_fp8_adam_bootstrap(chained)
 
 
+def test_bootstrap_checks_only_adam_fallback_in_frugal_chain():
+    from types import SimpleNamespace
+
+    frugal = make_fp8_frugal(FrugalCoordAdamW)([torch.nn.Parameter(torch.zeros(4, 4))])
+    fallback = make_fp8_adamw(torch.optim.AdamW)([torch.nn.Parameter(torch.zeros(4))])
+    chained = SimpleNamespace(chained_optimizers=[
+        SimpleNamespace(optimizer=frugal), SimpleNamespace(optimizer=fallback)
+    ])
+    assert_fp8_adam_bootstrap(chained)
+    chained.chained_optimizers[1].optimizer = torch.optim.AdamW([
+        torch.nn.Parameter(torch.zeros(4))
+    ])
+    with pytest.raises(AssertionError, match="raw classes"):
+        assert_fp8_adam_bootstrap(chained)
+    chained.chained_optimizers.pop()
+    with pytest.raises(AssertionError, match="raw classes"):
+        assert_fp8_adam_bootstrap(chained)
+
+
 def test_environment_reports_source_pins(monkeypatch):
     monkeypatch.setenv("STAGE3_MOE_MCORE_COMMIT", "a" * 40)
     monkeypatch.setenv("STAGE3_MOE_EO_COMMIT", "b" * 40)

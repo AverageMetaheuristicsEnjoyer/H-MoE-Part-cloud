@@ -35,7 +35,10 @@ def _raw_optimizers(optimizer):
 
 
 def assert_fp8_adam_bootstrap(optimizer):
-    adam_optimizers = [raw for raw in _raw_optimizers(optimizer) if _role(raw) != "muon_matrix"]
+    adam_optimizers = [
+        raw for raw in _raw_optimizers(optimizer)
+        if _role(raw) not in {"muon_matrix", "frugal_matrix"}
+    ]
     if not adam_optimizers or any(type(raw).__name__ != "FP8StateAdamW" for raw in adam_optimizers):
         classes = [type(raw).__name__ for raw in adam_optimizers]
         raise AssertionError(f"FP8 Adam bootstrap failed; raw classes={classes}")
