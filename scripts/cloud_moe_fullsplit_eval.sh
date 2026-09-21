@@ -26,7 +26,11 @@ export STAGE3_MOE_EVAL_ITERS=${STAGE3_MOE_EVAL_ITERS:-240}
 export STAGE3_MOE_MICRO_BATCH=${STAGE3_MOE_MICRO_BATCH:-16}
 export STAGE3_MOE_LOG_ROOT="$log_root"
 export STAGE3_MOE_CKPT_ROOT=${STAGE3_MOE_CKPT_ROOT:-/tmp/hmoe-fullsplit-eval/ckpt}
-export STAGE3_MOE_DATA_CACHE=${STAGE3_MOE_DATA_CACHE:-/tmp/hmoe-fullsplit-eval/data-cache}
+# The launcher reads STAGE3_MOE_DATA_CACHE_PATH, not STAGE3_MOE_DATA_CACHE. With the flag
+# missing MCore falls back to writing the index next to the corpus itself
+# (gpt_dataset.py:411-414), which for the extension corpus is nfs2 -- full since
+# 2026-09-21, and the job dies with Errno 28 the moment a new index size is needed.
+export STAGE3_MOE_DATA_CACHE_PATH=${STAGE3_MOE_DATA_CACHE_PATH:-/tmp/hmoe-fullsplit-eval/data-cache}
 export STAGE3_MOE_PROPAGATE_EXIT=1
 
 echo "IMAGE=${MLSUB_IMAGE:-unset} EVAL_ITERS=$STAGE3_MOE_EVAL_ITERS ARM=$arm"

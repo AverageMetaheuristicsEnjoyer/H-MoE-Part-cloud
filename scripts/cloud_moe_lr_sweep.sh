@@ -29,7 +29,11 @@ export STAGE3_MOE_MICRO_BATCH=${STAGE3_MOE_MICRO_BATCH:-16}
 export STAGE3_MOE_GLOBAL_BATCH=${STAGE3_MOE_GLOBAL_BATCH:-208}
 export STAGE3_MOE_LOG_ROOT="$log_root"
 export STAGE3_MOE_CKPT_ROOT=${STAGE3_MOE_CKPT_ROOT:-/tmp/hmoe-lr-sweep/ckpt}
-export STAGE3_MOE_DATA_CACHE=${STAGE3_MOE_DATA_CACHE:-/tmp/hmoe-lr-sweep/data-cache}
+# The launcher reads STAGE3_MOE_DATA_CACHE_PATH, not STAGE3_MOE_DATA_CACHE. With the flag
+# missing MCore falls back to writing the index next to the corpus itself
+# (gpt_dataset.py:411-414), which for the extension corpus is nfs2 -- full since
+# 2026-09-21, and the job dies with Errno 28 the moment a new index size is needed.
+export STAGE3_MOE_DATA_CACHE_PATH=${STAGE3_MOE_DATA_CACHE_PATH:-/tmp/hmoe-lr-sweep/data-cache}
 export STAGE3_MOE_PROPAGATE_EXIT=1
 # Every point is one job, so the run id has to carry the LR or two of them collide on one
 # W&B run and interleave -- the same trap the recipe probe hit.

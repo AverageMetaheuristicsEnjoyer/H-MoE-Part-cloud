@@ -145,7 +145,11 @@ fi
 echo "DATA_ROOT=$STAGE3_MOE_DATA_ROOT"
 # One index build per job instead of a cache on a shared volume. Every variant in the job
 # shares the same train_iters and split, so only the first pays for it.
-export STAGE3_MOE_DATA_CACHE=${STAGE3_MOE_DATA_CACHE:-/tmp/hmoe-recipe-probe/data-cache}
+# The launcher reads STAGE3_MOE_DATA_CACHE_PATH, not STAGE3_MOE_DATA_CACHE. With the flag
+# missing MCore falls back to writing the index next to the corpus itself
+# (gpt_dataset.py:411-414), which for the extension corpus is nfs2 -- full since
+# 2026-09-21, and the job dies with Errno 28 the moment a new index size is needed.
+export STAGE3_MOE_DATA_CACHE_PATH=${STAGE3_MOE_DATA_CACHE_PATH:-/tmp/hmoe-recipe-probe/data-cache}
 # The launcher mkdirs its checkpoint root even when nothing is ever saved; keep that off
 # the shared volumes too.
 export STAGE3_MOE_CKPT_ROOT=${STAGE3_MOE_CKPT_ROOT:-/tmp/hmoe-recipe-probe/ckpt}
