@@ -15,9 +15,21 @@ targets=("$@")
 
 export PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root"
 unset PYTHONNOUSERSITE
-nvidia_lib_path=$(find /home/user/conda/lib/python3.12/site-packages/nvidia \
-  -mindepth 2 -maxdepth 2 -type d -name lib -print 2>/dev/null | paste -sd: - || true)
+# Transformer Engine dlopens cudart from the pip `nvidia` packages and dies with "cudart
+# shared object not found" without them. The launcher hardcodes the torch28 conda prefix;
+# that is wrong here, because TE itself resolves out of /home/jovyan/.local-torch28 and the
+# conda glob then finds nothing. Ask the interpreter where `nvidia` actually is, which is
+# the same search path TE will use.
+nvidia_lib_path=$(python - <<'PYEOF' 2>/dev/null || true
+import importlib.util, pathlib
+spec = importlib.util.find_spec("nvidia")
+roots = list(spec.submodule_search_locations) if spec and spec.submodule_search_locations else []
+libs = [str(p) for root in roots for p in sorted(pathlib.Path(root).glob("*/lib")) if p.is_dir()]
+print(":".join(libs))
+PYEOF
+)
 [[ -n $nvidia_lib_path ]] && export LD_LIBRARY_PATH=${nvidia_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+echo "NVIDIA_LIBS=${nvidia_lib_path:-none}"
 
 echo "IMAGE=${MLSUB_IMAGE:-unset} TARGETS=${targets[*]}"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
