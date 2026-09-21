@@ -30,6 +30,29 @@ Relative to each pair's baseline (val):
 
 Muon beats AdamW by **0.9448 %** val at matched settings (bf16, FP32 states, mb=4).
 
+## Frugal CoordAdamW, recovered 2026-09-21
+
+That arm's 1C run logged to W&B **offline** and was never synced, so its numbers were absent
+from this ledger, from W&B and from the job logs. Recovered by re-scoring the HF checkpoint
+with `scripts/cloud_moe_fullsplit_eval.sh` at `--eval-iters 240` -- 49,920 sequences, which is
+the whole of `final` (48,828) and 12.8 epochs of `development` (3,906), both read from offset
+zero. `adamw_bf16_state_fp32` was re-scored the same way so the comparison is on one footing.
+
+| arm | val | test | vs AdamW (test) |
+|---|---:|---:|---:|
+| `adamw_bf16_state_fp32` | 2.673121 | 2.659813 | — |
+| `frugal_coord_bf16_state_fp32` | 2.762506 | 2.748215 | **+3.3236 %** |
+
+**Frugal costs 3.32 % of test loss against AdamW at a matched budget** -- more than FP8 GEMM
+(1.83 %) and FP8 optimizer state (0.70 %) together.
+
+The re-scored AdamW **test** agrees with the `--eval-iters 32` row above to **0.030 %**
+(2.659813 vs 2.659013), which is the measurement noise of that window. The **val** differs by
+0.088 %, and that is expected rather than a discrepancy: during training `consumed_valid_samples`
+advances, so the final val window sits deep in the 117-epoch dev index, while `eval-lm-fixed`
+passes `--skip-train` and starts both samplers at zero. Compare val across rows only when both
+were produced the same way.
+
 The state-axis numbers reproduce the 1.2B round (+0.662 % / -0.093 %) to within 0.05 pp:
 the cost of FP8 optimizer state is stable across a 6x token budget.
 
