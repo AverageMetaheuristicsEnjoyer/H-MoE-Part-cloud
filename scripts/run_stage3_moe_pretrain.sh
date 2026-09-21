@@ -155,7 +155,7 @@ case "$mode" in
     target_iters=$full_iters
     decay_iters=$full_decay_iters
     smoke_dir="$ckpt_root/smoke/$arm${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
-    save_args=(--save "$smoke_dir" --save-interval 10)
+    save_args=(--save "$smoke_dir" --save-interval 10 --save-retain-interval 1000000)
     load_args=(--load "$smoke_dir" --override-opt_param-scheduler)
     probe_warmup=5
     probe_measure=10
