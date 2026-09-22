@@ -23,7 +23,7 @@ ARMS = {
 if ARM not in ARMS:
     raise ValueError(f"unsupported corrected arm: {ARM}")
 
-WAVE = "fp8-corrected-20260922"
+WAVE = os.environ.get("STAGE3_MOE_WAVE", "fp8-corrected-20260922")
 REPO = "AverageMetaheuristicsEnjoyer/hmoe-stage3-checkpoints"
 PREFIX = f"{WAVE}/{ARM}"
 CHECKPOINT_ROOT = Path(f"/tmp/hmoe-{WAVE}")
@@ -56,14 +56,18 @@ else:
 def archive(iteration, api):
     directory = CHECKPOINT / f"iter_{iteration:07d}"
     remote = f"{PREFIX}/{directory.name}"
+    staging = CHECKPOINT.parent / f".{ARM}-archive-{iteration}"
+    if staging.exists():
+        shutil.rmtree(staging)
+    shutil.copytree(directory, staging, copy_function=os.link)
     files = {}
-    for path in directory.rglob("*.pt"):
+    for path in staging.rglob("*.pt"):
         with path.open("rb") as handle:
             digest = hashlib.file_digest(handle, "sha256").hexdigest()
-        files[str(path.relative_to(directory))] = (path.stat().st_size, digest)
+        files[str(path.relative_to(staging))] = (path.stat().st_size, digest)
     if not files or any(size == 0 for size, _ in files.values()):
         raise RuntimeError(f"empty checkpoint: {directory}")
-    api.upload_folder(repo_id=REPO, folder_path=str(directory), path_in_repo=remote,
+    api.upload_folder(repo_id=REPO, folder_path=str(staging), path_in_repo=remote,
                       repo_type="model", allow_patterns=["*.pt"])
     entries = {p.path.removeprefix(remote + "/"): p for p in api.list_repo_tree(
         REPO, path_in_repo=remote, repo_type="model", recursive=True
@@ -75,6 +79,50 @@ def archive(iteration, api):
         if item is None or item.size != size or remote_digest != digest:
             raise RuntimeError(f"checkpoint verification failed: {remote}/{name}")
     print(f"HF_VERIFIED iteration={iteration} files={len(files)} path={remote}", flush=True)
+    shutil.rmtree(staging)
+    return files
+
+
+def restore(api):
+    tracker = CHECKPOINT / "latest_checkpointed_iteration.txt"
+    local = int(tracker.read_text().strip()) if tracker.is_file() else 0
+    pointer = f"{PREFIX}/resume.json"
+    remote = None
+    if api.file_exists(REPO, pointer, repo_type="model"):
+        from huggingface_hub import hf_hub_download
+        filename = hf_hub_download(REPO, pointer, token=env["HF_TOKEN"], force_download=True,
+                                   cache_dir=f"/tmp/hmoe-{WAVE}-hf-cache")
+        remote = json.loads(Path(filename).read_text())
+        iteration = remote["iteration"]
+        if iteration > local:
+            for name, (size, digest) in remote["files"].items():
+                filename = hf_hub_download(REPO, f"{PREFIX}/iter_{iteration:07d}/{name}",
+                                           token=env["HF_TOKEN"], cache_dir=f"/tmp/hmoe-{WAVE}-hf-cache")
+                source = Path(filename)
+                with source.open("rb") as handle:
+                    actual = hashlib.file_digest(handle, "sha256").hexdigest()
+                if source.stat().st_size != size or actual != digest:
+                    raise RuntimeError(f"restore verification failed: {name}")
+                target = CHECKPOINT / f"iter_{iteration:07d}" / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+            tracker.write_text(str(iteration))
+            local = iteration
+            print(f"HF_RESTORED iteration={iteration}", flush=True)
+    prior_logs = LOG_ROOT / f"stage3-{ARM}-full-{WAVE}"
+    if not local and any(prior_logs.glob("train-*.log")):
+        raise RuntimeError("prior full run exists but no recoverable checkpoint; refusing fresh restart")
+    return remote
+
+
+def save_resume_pointer(iteration, files, api, previous=None):
+    retained = set((previous or {}).get("verified_retained", []))
+    if iteration in (13794, 17242):
+        retained.add(iteration)
+    pointer = {"iteration": iteration, "files": files, "verified_retained": sorted(retained)}
+    api.upload_file(repo_id=REPO, path_or_fileobj=json.dumps(pointer).encode(),
+                    path_in_repo=f"{PREFIX}/resume.json", repo_type="model")
+    return pointer
 
 
 def main():
@@ -90,6 +138,8 @@ def main():
         if disk.free < required * 2**30:
             raise RuntimeError(f"insufficient space at {path}: need {required} GiB")
     LOG_ROOT.mkdir(parents=True, exist_ok=True)
+    env["HF_HOME"] = f"/tmp/hmoe-{WAVE}-hf-cache"
+    os.environ["HF_HOME"] = env["HF_HOME"]
     api = HfApi(token=env["HF_TOKEN"])
     info = api.model_info(REPO)
     print(f"HF_REPO={info.id} private={info.private}", flush=True)
@@ -105,9 +155,10 @@ def main():
     api.upload_file(repo_id=REPO, path_or_fileobj=json.dumps(manifest, indent=2).encode(),
                     path_in_repo=f"{PREFIX}/launch.json", repo_type="model")
     (LOG_ROOT / f"{ARM}-launch.json").write_text(json.dumps(manifest, indent=2))
+    remote_resume = restore(api)
     launcher = ROOT / "scripts/run_stage3_moe_pretrain.sh"
     smoke_env = {**env, "STAGE3_MOE_KEEP_SMOKE_CKPT": "1"}
-    for steps in (51, 52):
+    for steps in (() if (CHECKPOINT / "latest_checkpointed_iteration.txt").is_file() else (51, 52)):
         smoke_env["STAGE3_MOE_SMOKE_ITERS"] = str(steps)
         code = subprocess.call([str(launcher), ARM, "smoke"], env=smoke_env, cwd=ROOT)
         print(f"SMOKE_EXIT={code} arm={ARM} steps={steps}", flush=True)
@@ -119,20 +170,27 @@ def main():
         shutil.rmtree(smoke_dir)
     print(f"FULL_START arm={ARM} target=17242", flush=True)
     process = subprocess.Popen([str(launcher), ARM, "full"], env=env, cwd=ROOT)
-    verified = set()
+    verified = set((remote_resume or {}).get("verified_retained", []))
     while True:
         tracker = CHECKPOINT / "latest_checkpointed_iteration.txt"
         latest = tracker.read_text().strip() if tracker.is_file() else ""
         iteration = int(latest) if latest.isdigit() else 0
         code = process.poll()
         targets = [13794, 17242]
+        if iteration:
+            targets.append(iteration)
         if code is not None and code != 0 and iteration:
             targets.append(iteration)
         for target in dict.fromkeys(targets):
             if target in verified or iteration < target or not (CHECKPOINT / f"iter_{target:07d}").is_dir():
                 continue
             try:
-                archive(target, api)
+                files = archive(target, api)
+                if target >= (remote_resume or {}).get("iteration", 0):
+                    previous = remote_resume
+                    remote_resume = save_resume_pointer(target, files, api, previous)
+                    if previous and previous["iteration"] not in (target, 13794, 17242):
+                        api.delete_folder(repo_id=REPO, path_in_repo=f"{PREFIX}/iter_{previous['iteration']:07d}", repo_type="model")
             except Exception as exc:
                 print(f"HF_RETRY iteration={target} error_type={type(exc).__name__}", flush=True)
                 time.sleep(60)
