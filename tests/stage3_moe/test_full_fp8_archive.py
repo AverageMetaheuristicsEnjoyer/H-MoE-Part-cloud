@@ -100,3 +100,34 @@ def test_resume_pointer_preserves_verified_predecay(recovery_module):
     second = m.save_resume_pointer(14157, {"x.pt": [10, "hash"]}, api, first)
     assert second["verified_retained"] == [13794]
     assert uploaded[-1]["iteration"] == 14157
+
+
+def test_live_hf_archive_restore_roundtrip(tmp_path, monkeypatch):
+    import os
+    import uuid
+    import shutil
+    if os.environ.get("STAGE3_FP8_LIVE_ARCHIVE_TEST") != "1":
+        pytest.skip("requires explicitly enabled live HF roundtrip")
+    from huggingface_hub import HfApi
+    monkeypatch.setattr(sys, "argv", ["cloud_moe_full_fp8.py", "muon_bf16_state_fp8"])
+    script = Path(__file__).resolve().parents[2] / "scripts/cloud_moe_full_fp8.py"
+    spec = importlib.util.spec_from_file_location("live_fp8_archive", script)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    m.CHECKPOINT = tmp_path / "checkpoint"
+    m.LOG_ROOT = tmp_path / "logs"
+    m.PREFIX = "fp8-recovery-selftest/" + uuid.uuid4().hex
+    target = m.CHECKPOINT / "iter_0000363/mp_rank_00/model_optim_rng.pt"
+    target.parent.mkdir(parents=True)
+    payload = os.urandom(4096)
+    target.write_bytes(payload)
+    api = HfApi(token=os.environ["HF_TOKEN"])
+    try:
+        files = m.archive(363, api)
+        m.save_resume_pointer(363, files, api)
+        shutil.rmtree(m.CHECKPOINT)
+        m.restore(api)
+        assert target.read_bytes() == payload
+        assert (m.CHECKPOINT / "latest_checkpointed_iteration.txt").read_text() == "363"
+    finally:
+        api.delete_folder(repo_id=m.REPO, path_in_repo=m.PREFIX, repo_type="model")
