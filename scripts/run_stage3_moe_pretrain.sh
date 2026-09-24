@@ -503,12 +503,25 @@ unset PYTHONNOUSERSITE
 # That path exists only in the torch28 image. On any other one find exits 1, and
 # under `set -eo pipefail` with stderr silenced the run used to die here without
 # printing anything at all; let it carry on and fail loudly further down instead.
-nvidia_lib_path=$(find /home/user/conda/lib/python3.12/site-packages/nvidia \
-  -mindepth 2 -maxdepth 2 -type d -name lib -print 2>/dev/null | paste -sd: - || true)
-export LD_LIBRARY_PATH=${nvidia_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
-export CUDNN_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cudnn
-export CURAND_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/curand
-export NVRTC_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cuda_nvrtc
+nvidia_lib_path=$(python - <<'PYEOF' 2>/dev/null || true
+import importlib.util, pathlib
+spec = importlib.util.find_spec("nvidia")
+roots = list(spec.submodule_search_locations) if spec and spec.submodule_search_locations else []
+libs = [str(p) for root in roots for p in sorted(pathlib.Path(root).glob("*/lib")) if p.is_dir()]
+print(":".join(libs))
+PYEOF
+)
+[[ -n $nvidia_lib_path ]] && export LD_LIBRARY_PATH=${nvidia_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+# TE's system-library search needs these roots for versioned pip libraries. Without
+# them it enters its no-toolkit fallback, which fails to locate pip's cuda_runtime.
+IFS=: read -r -a nvidia_lib_dirs <<< "$nvidia_lib_path"
+for library in "${nvidia_lib_dirs[@]}"; do
+  case "$library" in
+    */cudnn/lib) export CUDNN_HOME=${CUDNN_HOME:-${library%/lib}} ;;
+    */curand/lib) export CURAND_HOME=${CURAND_HOME:-${library%/lib}} ;;
+    */cuda_nvrtc/lib) export NVRTC_HOME=${NVRTC_HOME:-${library%/lib}} ;;
+  esac
+done
 # Without credentials wandb.init() would abort the run, so fall back to offline
 # logging: the run still records everything and can be `wandb sync`ed later.
 # A key in the environment (mlsub run --env WANDB_API_KEY=...) wins: that is how the

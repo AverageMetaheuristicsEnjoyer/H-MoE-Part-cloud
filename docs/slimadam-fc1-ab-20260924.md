@@ -2,7 +2,7 @@
 
 Question: does sharing the compressed second moment across SwiGLU up/gate branches contribute to the persistent SlimAdam routing imbalance?
 
-Two fresh runs, each 2254 optimizer steps (960,167,936 loss tokens), one allocated GPU per run, image `torch28`. One run keeps the original fused FC1 second moment; the other maintains independent compressed moments for the two FC1 halves. This covers 1106 FC1 weights: 1088 routed experts, 17 shared experts and one dense first layer. Both arms use the same new code revision. No AdamW/Frugal training is relaunched.
+Two fresh runs, each 2254 optimizer steps (960,167,936 loss tokens), one allocated GPU per run, image `te4`. One run keeps the original fused FC1 second moment; the other maintains independent compressed moments for the two FC1 halves. This covers 1106 FC1 weights: 1088 routed experts, 17 shared experts and one dense first layer. Both arms use the same new code revision. No AdamW/Frugal training is relaunched.
 
 Controls: seed 1234, real Stage 3 data, BF16 computation, FP32 master parameters and optimizer state, micro-batch 4, global batch 208, sequence length 2048. LR 1.63e-3, beta1 0.9, beta2 0.95, epsilon 1e-8, weight decay 0.1, clipping 1. Full-run WSD schedule: warmup 173, total schedule 17242, decay 3448; the experiment ends on the plateau. Sigmoid top-8 of 64 experts, score scale 2.5, bias update 1e-3, no balancing aux loss. Router/QKV second moments remain full.
 
@@ -23,25 +23,27 @@ Cloud submission, after this branch has been published with permission:
 ```bash
 mlsub run --repo https://github.com/AverageMetaheuristicsEnjoyer/H-MoE-Part-cloud \
   --branch codex/slimadam-swiglu-ab-20260924 --entry scripts/cloud_slimadam_ab.py \
-  --gpus cpu --image torch28 --no-pip --note slim-ab-preflight --args 'preflight baseline'
+  --gpus cpu --image te4 --no-pip --note slim-ab-preflight --args 'preflight baseline'
 
 # Submit baseline and split smokes separately, then verify SMOKE_RESULT=PASS for both.
 mlsub run --repo https://github.com/AverageMetaheuristicsEnjoyer/H-MoE-Part-cloud \
   --branch codex/slimadam-swiglu-ab-20260924 --entry scripts/cloud_slimadam_ab.py \
-  --gpus 1 --image torch28 --no-pip --note slim-ab-smoke-baseline --args 'smoke baseline'
+  --gpus 1 --image te4 --no-pip --note slim-ab-smoke-baseline --args 'smoke baseline'
 mlsub run --repo https://github.com/AverageMetaheuristicsEnjoyer/H-MoE-Part-cloud \
   --branch codex/slimadam-swiglu-ab-20260924 --entry scripts/cloud_slimadam_ab.py \
-  --gpus 1 --image torch28 --no-pip --note slim-ab-smoke-split --args 'smoke split'
+  --gpus 1 --image te4 --no-pip --note slim-ab-smoke-split --args 'smoke split'
 
 # Only after those smokes, submit the two 2254-step runs.
 mlsub run --repo https://github.com/AverageMetaheuristicsEnjoyer/H-MoE-Part-cloud \
   --branch codex/slimadam-swiglu-ab-20260924 --entry scripts/cloud_slimadam_ab.py \
-  --gpus 1 --image torch28 --no-pip --note slim-ab-train-baseline --args 'train baseline'
+  --gpus 1 --image te4 --no-pip --note slim-ab-train-baseline --args 'train baseline'
 mlsub run --repo https://github.com/AverageMetaheuristicsEnjoyer/H-MoE-Part-cloud \
   --branch codex/slimadam-swiglu-ab-20260924 --entry scripts/cloud_slimadam_ab.py \
-  --gpus 1 --image torch28 --no-pip --note slim-ab-train-split --args 'train split'
+  --gpus 1 --image te4 --no-pip --note slim-ab-train-split --args 'train split'
 ```
 
 Estimated training cost from historical 15–25 s/step: 9.4–15.7 GPU-hours per arm, about 19–31 GPU-hours total, plus smoke and evaluation/checkpoint overhead. This is not a current throughput measurement. Queueing can dominate wall time.
 
 Use `--args "pipeline baseline"` and `--args "pipeline split"` for a single allocation per variant that runs its smoke and then training. A missing smoke success artifact prevents training; a missing endpoint prevents a pipeline success marker.
+
+Recovery on September 24: the original torch28 attempts stopped before training during TransformerEngine import (`cudart shared object not found`). Both variants now use `te4` (`job-te4:torch28-cu129-py312`), preserving inherited CUDA library paths and resolving pip NVIDIA library roots from the active interpreter, as in the current working Stage 3 launcher. This changes the environment of both arms together; comparisons to historical torch28 runs are secondary. Disk byte and inode availability are checked before starting.

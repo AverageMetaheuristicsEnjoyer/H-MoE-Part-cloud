@@ -1,6 +1,7 @@
 """Run the paired SlimAdam FC1 compression experiment on allocated Cloud.ru workers."""
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -35,6 +36,8 @@ def run():
         return
     subprocess.run(['df', '-h', '/home/jovyan', '/workspace-SR006.nfs2',
                     '/workspace-SR006.nfs3'], check=False)
+    subprocess.run(['df', '-i', '/home/jovyan', '/workspace-SR006.nfs2',
+                    '/workspace-SR006.nfs3'], check=False)
     base.mkdir(parents=True, exist_ok=True)
     free = shutil.disk_usage(base).free
     print(f'DISK path={base} free_bytes={free}', flush=True)
@@ -50,17 +53,28 @@ def run():
     if args.mode == 'preflight':
         print('PREFLIGHT_RESULT=PASS', flush=True)
         return
-    if os.environ.get('MLSUB_IMAGE') != 'torch28':
-        raise RuntimeError('This experiment requires --image torch28')
+    if os.environ.get('MLSUB_IMAGE') != 'te4':
+        raise RuntimeError('This experiment requires --image te4')
     subprocess.run(['nvidia-smi', '--query-gpu=name,uuid,memory.total', '--format=csv'], check=True)
     env = os.environ.copy()
-    libraries = Path('/home/user/conda/lib/python3.12/site-packages/nvidia')
-    env['LD_LIBRARY_PATH'] = ':'.join(str(path) for path in sorted(libraries.glob('*/lib')))
+    spec = importlib.util.find_spec('nvidia')
+    roots = list(spec.submodule_search_locations) if spec and spec.submodule_search_locations else []
+    libraries = [path for location in roots for path in sorted(Path(location).glob('*/lib')) if path.is_dir()]
+    env['LD_LIBRARY_PATH'] = ':'.join([str(path) for path in libraries] + [env.get('LD_LIBRARY_PATH', '')])
+    for library in libraries:
+        variable = {'cudnn': 'CUDNN_HOME', 'curand': 'CURAND_HOME', 'cuda_nvrtc': 'NVRTC_HOME'}.get(library.parent.name)
+        if variable:
+            env.setdefault(variable, str(library.parent))
     env['PYTHONPATH'] = ':'.join(str(root / path) for path in ('third_party/Megatron-LM', 'third_party/emerging-optimizers', '.'))
+    run_dir.mkdir(parents=True, exist_ok=True)
     subprocess.run([sys.executable, '-c',
-                    'import torch, transformer_engine as te; '
+                    'import json, pathlib, sys, torch, transformer_engine as te; '
                     'assert torch.cuda.device_count() == 1; '
-                    'print(f"RUNTIME torch={torch.__version__} cuda={torch.version.cuda} te={te.__version__}")'],
+                    'report=dict(torch=torch.__version__, cuda=torch.version.cuda, '
+                    'te=te.__version__, te_path=te.__file__, python=sys.version); '
+                    'print("RUNTIME " + json.dumps(report)); '
+                    'pathlib.Path(sys.argv[1]).write_text(json.dumps(report, indent=2))',
+                    str(run_dir / 'runtime.json')],
                    env=env, check=True)
     subprocess.run([sys.executable, '-c',
                     'import runpy; '
@@ -87,6 +101,7 @@ def run():
     run_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
         'experiment': experiment, 'variant': args.variant, 'mode': args.mode,
+        'image': env['MLSUB_IMAGE'],
         'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
         'source_sha256': hashlib.sha256((root / 'stage3_moe/slim_adam.py').read_bytes()).hexdigest(),
         'checkpoint_dir': str(checkpoint_dir),
