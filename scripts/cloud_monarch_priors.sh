@@ -17,6 +17,22 @@ set -u
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
+
+# a copy of the output on a volume that outlives the job: mlsub logs hangs on a
+# running job, so `--args=peek` in a CPU job is the only way to watch one
+logs=
+for volume in /workspace-SR006.nfs3 /workspace-SR006.nfs2 /home/jovyan; do
+    if mkdir -p "$volume/monarch-moe/logs" 2>/dev/null; then
+        logs="$volume/monarch-moe/logs"
+        break
+    fi
+done
+if [ "${1:-}" = "peek" ]; then
+    newest=$(ls -t "$logs"/priors_*.log 2>/dev/null | head -1)
+    echo "=== ${newest:-no log}"
+    [ -n "$newest" ] && tail -"${2:-60}" "$newest"
+    exit 0
+fi
 checkpoint=${1:?usage: cloud_monarch_priors.sh HF_CHECKPOINT_DIR [SCRIPT]}
 script=${2:-monarch_priors}
 url="https://huggingface.co/AverageMetaheuristicsEnjoyer/hmoe-stage3-checkpoints/resolve/main/$checkpoint/mp_rank_00/model_optim_rng.pt"
@@ -41,6 +57,6 @@ export PYTHONUSERBASE="$scratch/userbase"
         PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root" \
             python3 "scripts/$script.py" "$file"
     echo "EXIT=$?"
-} 2>&1
+} 2>&1 | tee "$logs/priors_$(date +%F_%H%M%S).log"
 rm -f "$file"
 exit 0

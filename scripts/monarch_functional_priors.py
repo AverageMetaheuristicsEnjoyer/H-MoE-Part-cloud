@@ -30,6 +30,7 @@ blkdiag2 every L_ja, so the fits below work on sub-blocks directly.
 
 import argparse
 import sys
+import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -42,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import monarch_priors as priors  # noqa: E402
 
 HIDDEN, HEADS, GROUPS, HEAD_DIM, TOPK, SCALE, EPS = 1024, 8, 2, 128, 8, 2.5, 1e-5
+START = time.time()
 BIN_DTYPES = {1: numpy.uint8, 2: numpy.int8, 3: numpy.int16, 4: numpy.int32,
               5: numpy.int64, 6: numpy.float64, 7: numpy.float32, 8: numpy.uint16}
 
@@ -56,14 +58,34 @@ def row_groups(W, nb):
     return W.reshape(*W.shape[:-2], out_features // nb, nb, in_features).transpose(-3, -2)
 
 
-def solve_right(A, B):
-    """B A^-1 for symmetric A."""
-    return torch.linalg.solve(A, B.transpose(-1, -2)).transpose(-1, -2)
-
-
 def ridge(A):
-    scale = 1e-6 * A.diagonal(dim1=-2, dim2=-1).mean(-1)[..., None, None]
+    # keeps float32 Cholesky alive on inputs whose spectrum spans many decades
+    relative = 1e-5 if A.dtype == torch.float32 else 1e-10
+    scale = relative * A.diagonal(dim1=-2, dim2=-1).mean(-1)[..., None, None]
     return A + scale * torch.eye(A.shape[-1], device=A.device, dtype=A.dtype)
+
+
+def cholesky(A):
+    return torch.linalg.cholesky(ridge(A))
+
+
+def solve_left(chol, B):
+    """A^-1 B from A's Cholesky factor."""
+    return torch.cholesky_solve(B, chol)
+
+
+def solve_right(chol, B):
+    """B A^-1 from A's Cholesky factor (A symmetric)."""
+    return torch.cholesky_solve(B.transpose(-1, -2), chol).transpose(-1, -2)
+
+
+def top_left_singular(X, k):
+    """Top-k left singular vectors of X (..., s, c), from the smaller Gram matrix
+    (batched eigh on CUDA runs one matrix at a time, so its size is what costs)."""
+    if X.shape[-2] <= X.shape[-1]:
+        return torch.linalg.eigh(X @ X.transpose(-1, -2))[1][..., -k:]
+    values, V = torch.linalg.eigh(X.transpose(-1, -2) @ X)
+    return X @ V[..., -k:] / values[..., None, -k:].clamp_min(1e-30).sqrt()
 
 
 def pcg(op, rhs, x, precondition, iters=40):
@@ -85,7 +107,7 @@ def pcg(op, rhs, x, precondition, iters=40):
     return x
 
 
-def fit_tied(W, S, nb, side, max_sweeps=60, trace=False, tol=1e-6):
+def fit_tied(W, S, nb, side, max_sweeps=40, trace=False, tol=1e-5):
     """W (..., M, out, in), S (..., M, in, in): R or L shared over M. Returns kept (init, end)."""
     out_features, in_features = W.shape[-2:]
     k = min(out_features, in_features) // nb ** 2
@@ -93,43 +115,44 @@ def fit_tied(W, S, nb, side, max_sweeps=60, trace=False, tol=1e-6):
     Wj = row_groups(W, nb)                                    # (..., M, j, s, in)
     Sx = S.unsqueeze(-3)                                      # (..., M, 1, in, in)
     total = output_energy(W, S)
+    chunk = [slice(a * c, (a + 1) * c) for a in range(nb)]
+    Saa = [ridge(Sx[..., cols, cols]) for cols in chunk]
+    Saa_chol = [torch.linalg.cholesky(m) for m in Saa]
     L, R = {}, {}
-    for a in range(nb):                                       # weight-energy optimum
-        B = Wj[..., a * c:(a + 1) * c]                        # (..., M, j, s, c)
+    for a, cols in enumerate(chunk):                          # weight-energy optimum
+        B = Wj[..., cols]                                     # (..., M, j, s, c)
         if side == "R":
             V = torch.linalg.eigh((B.transpose(-1, -2) @ B).sum(-4, keepdim=True))[1][..., -k:]
             R[a], L[a] = V.transpose(-1, -2), B @ V
         else:
             U = torch.linalg.eigh((B @ B.transpose(-1, -2)).sum(-4, keepdim=True))[1][..., -k:]
             L[a], R[a] = U, U.transpose(-1, -2) @ B
-    Wh = torch.cat([(L[a] @ R[a]).expand_as(Wj[..., :c]) for a in range(nb)], dim=-1)
+    Wh = torch.cat([(L[a] @ R[a]).expand_as(Wj[..., cols]) for a, cols in enumerate(chunk)], dim=-1)
     kept = lambda: 1 - (output_energy((Wj - Wh).transpose(-3, -2).reshape(W.shape), S)
                         / total).item()
     history = [kept()]
     for _ in range(max_sweeps):
-        for a in range(nb):
-            cols = slice(a * c, (a + 1) * c)
+        for a, cols in enumerate(chunk):
             D = Wj - Wh
             D[..., cols] = Wj[..., cols]
             C = D @ Sx[..., :, cols]                          # E[residual x_a^T]
-            Saa = ridge(Sx[..., cols, cols])
             if side == "R":
                 # members' L given the shared R, then the shared R given the L's
-                L[a] = solve_right(ridge(R[a] @ Saa @ R[a].transpose(-1, -2)),
-                                   C @ R[a].transpose(-1, -2))
+                Rt = R[a].transpose(-1, -2)
+                L[a] = solve_right(cholesky(R[a] @ Saa[a] @ Rt), C @ Rt)
                 A = ridge(L[a].transpose(-1, -2) @ L[a])
                 rhs = (L[a].transpose(-1, -2) @ C).sum(-4, keepdim=True)
-                A_mean = A.mean(-4, keepdim=True)
-                S_mean = Saa.mean(-4, keepdim=True)
-                R[a] = pcg(lambda X: (A @ X @ Saa).sum(-4, keepdim=True), rhs, R[a],
-                           lambda Y: solve_right(S_mean, torch.linalg.solve(A_mean, Y)))
+                A_chol = torch.linalg.cholesky(A.mean(-4, keepdim=True))
+                S_chol = torch.linalg.cholesky(Saa[a].mean(-4, keepdim=True))
+                R[a] = pcg(lambda X: (A @ X @ Saa[a]).sum(-4, keepdim=True), rhs, R[a],
+                           lambda Y: solve_right(S_chol, solve_left(A_chol, Y)))
             else:
                 # members' R given the shared L, then the shared L given the R's
-                R[a] = solve_right(Saa, torch.linalg.solve(
-                    ridge(L[a].transpose(-1, -2) @ L[a]), L[a].transpose(-1, -2) @ C))
-                L[a] = solve_right(
-                    ridge((R[a] @ Saa @ R[a].transpose(-1, -2)).sum(-4, keepdim=True)),
-                    (C @ R[a].transpose(-1, -2)).sum(-4, keepdim=True))
+                Lt = L[a].transpose(-1, -2)
+                R[a] = solve_right(Saa_chol[a], solve_left(cholesky(Lt @ L[a]), Lt @ C))
+                Rt = R[a].transpose(-1, -2)
+                L[a] = solve_right(cholesky((R[a] @ Saa[a] @ Rt).sum(-4, keepdim=True)),
+                                   (C @ Rt).sum(-4, keepdim=True))
             Wh[..., cols] = L[a] @ R[a]
         history.append(kept())
         if history[-1] - history[-2] < tol:
@@ -148,31 +171,29 @@ def kept_by(W, S, Wh):
     return 1 - (output_energy(E, S) / output_energy(W, S)).item()
 
 
-def own_rrr(W, S, nb, max_sweeps=60, tol=1e-6):
+def own_rrr(W, S, nb, max_sweeps=40, tol=1e-5):
     """Best Monarch fit per matrix under S: block-coordinate reduced-rank regression,
     exact per chunk, swept until the kept energy stops moving (correlated chunks
     converge slowly)."""
     out_features, in_features = W.shape[-2:]
     k = min(out_features, in_features) // nb ** 2
     c = in_features // nb
-    lead = W.shape[:-2]
-    # row group j holds output rows o with o % nb == j
-    Wj = W.reshape(*lead, out_features // nb, nb, in_features).transpose(-3, -2)
+    Wj = row_groups(W, nb)
     Wh = torch.zeros_like(Wj)
     Sx = S.unsqueeze(-3)
+    chunk = [slice(a * c, (a + 1) * c) for a in range(nb)]
+    chol = [cholesky(Sx[..., cols, cols]) for cols in chunk]
     total = output_energy(W, S)
     previous = 0.0
     for _ in range(max_sweeps):
-        for a in range(nb):
-            cols = slice(a * c, (a + 1) * c)
+        for a, cols in enumerate(chunk):
             D = Wj - Wh
             D[..., cols] = Wj[..., cols]
-            C = D @ Sx[..., :, cols]                                     # cov(y, x_a)
-            Saa = Sx[..., cols, cols]
-            ridge = 1e-6 * Saa.diagonal(dim1=-2, dim2=-1).mean(-1)[..., None, None]
-            Saa = Saa + ridge * torch.eye(c, device=W.device, dtype=W.dtype)
-            B = torch.linalg.solve(Saa, C.transpose(-1, -2)).transpose(-1, -2)  # C Saa^-1
-            U = torch.linalg.eigh(C @ B.transpose(-1, -2))[1][..., -k:]
+            C = D @ Sx[..., :, cols]                          # cov(y, x_a)
+            # X X^T = C Saa^-1 C^T, the covariance of the regression's fitted values
+            X = torch.linalg.solve_triangular(chol[a], C.transpose(-1, -2), upper=False)
+            U = top_left_singular(X.transpose(-1, -2), k)
+            B = solve_right(chol[a], C)                       # C Saa^-1
             Wh[..., cols] = U @ (U.transpose(-1, -2) @ B)
         current = 1 - (output_energy((Wj - Wh).transpose(-3, -2).reshape(W.shape), S) / total).item()
         if current - previous < tol:
@@ -183,9 +204,8 @@ def own_rrr(W, S, nb, max_sweeps=60, tol=1e-6):
 
 def lowrank_kept(W, S, nb):
     r = min(W.shape[-2:]) // nb
-    evals, evecs = torch.linalg.eigh(S)
-    root = (evecs * evals.clamp_min(0).sqrt()[..., None, :]) @ evecs.transpose(-1, -2)
-    sv = torch.linalg.svdvals(W @ root)
+    # W chol(S) has the singular values of W S^1/2
+    sv = torch.linalg.svdvals(W @ cholesky(S))
     return ((sv[..., :r] ** 2).sum() / (sv ** 2).sum()).item()
 
 
@@ -287,13 +307,18 @@ def forward(model, layers, tokens, moments, cos, sin):
     return h @ p("output_layer.weight").T
 
 
-def read_tokens(prefix, count):
+def read_windows(prefix, windows, length, seed=0):
+    """`windows` spans of `length` tokens at random offsets across the split, like
+    the shuffled samples Megatron evaluates on (the start of the file alone is a
+    handful of correlated documents)."""
     with open(prefix + ".idx", "rb") as stream:
         header = stream.read(9)
         assert header == b"MMIDIDX\x00\x00", header
         stream.read(8)
         dtype = BIN_DTYPES[stream.read(1)[0]]
-    return numpy.memmap(prefix + ".bin", dtype=dtype, mode="r")[:count].astype(numpy.int64)
+    tokens = numpy.memmap(prefix + ".bin", dtype=dtype, mode="r")
+    offsets = numpy.random.default_rng(seed).integers(0, len(tokens) - length, windows)
+    return numpy.stack([tokens[o:o + length] for o in numpy.sort(offsets)]).astype(numpy.int64)
 
 
 # --------------------------------------------------------------------------
@@ -313,7 +338,7 @@ def report_own(name, W, S, nb, device):
     noise_own = kept_by(noise, S, own_rrr(noise, S, nb))
     print(f"FPROJ\t{name}\t{nb}\t{W.shape[0]}\t{params:.3f}\t{own:.4f}\t"
           f"{lowrank_kept(W, S, nb):.4f}\t{noise_own:.4f}\t{weight_own:.4f}\t"
-          f"{participation(S):.1f}", flush=True)
+          f"{participation(S):.1f}\tt={time.time() - START:.0f}s", flush=True)
 
 
 def match_chain(features):
@@ -352,6 +377,7 @@ def report_tying(label, W1, W2, S1, S2, blocks, nb, device, generator, max_sweep
             S = Sd[layer].to(device).float()
             energy = output_energy(W, S).item()
             own = kept_by(W, S, own_rrr(W, S, nb))
+            print(f"PROGRESS\t{label}\t{name} layer {layer}\tt={time.time() - START:.0f}s", flush=True)
             for side in ("R", "L"):
                 key = (name, side)
                 kept["own", key][1] += own * energy
@@ -393,7 +419,8 @@ def report_tying(label, W1, W2, S1, S2, blocks, nb, device, generator, max_sweep
                 start, end, energy = kept[mode, key]
                 cells.append(f"{mode}={end / energy:.4f} ({end / energy / base:.3f} of own, "
                              f"init {start / energy:.4f})")
-            print(f"FTIE\t{label}\t{name}.{side}\t" + "\t".join(cells), flush=True)
+            print(f"FTIE\t{label}\t{name}.{side}\t" + "\t".join(cells)
+                  + f"\tt={time.time() - START:.0f}s", flush=True)
     for mode, scores in matching.items():
         matched = sum(m for m, _ in scores) / len(scores)
         background = sum(b for _, b in scores) / len(scores)
@@ -451,7 +478,7 @@ def main():
     layers = 1 + max(int(k.split(".")[2]) for k in model if k.startswith("decoder.layers."))
     print(f"iteration {state.get('iteration')}  layers {layers}  tensors {len(model)}", flush=True)
 
-    tokens = read_tokens(args.data, args.batches * args.batch_size * (args.seq + 1))
+    tokens = read_windows(args.data, args.batches * args.batch_size, args.seq + 1)
     tokens = torch.from_numpy(tokens).view(args.batches, args.batch_size, args.seq + 1)
     cos, sin = rope_tables(args.seq, device)
     moments = Moments(device)
@@ -466,7 +493,7 @@ def main():
             loss_count += batch[:, 1:].numel()
     lm_loss = loss_sum / loss_count
     print(f"FORWARD lm_loss={lm_loss:.4f} reported_val={args.reported_val_loss:.4f} "
-          f"tokens={loss_count}", flush=True)
+          f"tokens={loss_count}\tt={time.time() - START:.0f}s", flush=True)
     if abs(lm_loss - args.reported_val_loss) > 0.15:
         print("FORWARD does not reproduce the checkpoint; stopping", flush=True)
         return 2
@@ -493,14 +520,15 @@ def main():
     print("FPROJ\tmatrix\tnb\tcount\tparams/dense\tmonarch\tlowrank_same_params\t"
           "monarch_on_gaussian\tmonarch_weight_energy\tinput_participation", flush=True)
     half = W1[moe_layers[0]].shape[1] // 2
-    routed1 = torch.cat([W1[l] for l in moe_layers])
-    routed_s1 = torch.cat([S1[l] for l in moe_layers])
+    sample = slice(0, experts, 8)                        # every 8th expert of every layer
+    routed1 = torch.cat([W1[l][sample] for l in moe_layers])
+    routed_s1 = torch.cat([S1[l][sample] for l in moe_layers])
     for nb in (2, 4):
         report_own("routed fc1 (gate+up)", routed1, routed_s1, nb, device)
         report_own("routed gate", routed1[:, :half], routed_s1, nb, device)
         report_own("routed up", routed1[:, half:], routed_s1, nb, device)
-        report_own("routed fc2 (down)", torch.cat([W2[l] for l in moe_layers]),
-                   torch.cat([S2[l] for l in moe_layers]), nb, device)
+        report_own("routed fc2 (down)", torch.cat([W2[l][sample] for l in moe_layers]),
+                   torch.cat([S2[l][sample] for l in moe_layers]), nb, device)
         for kind, weight, which in (("shared_fc1", "mlp.shared_experts.linear_fc1.weight", moe_layers),
                                     ("shared_fc2", "mlp.shared_experts.linear_fc2.weight", moe_layers),
                                     ("dense_fc1", "mlp.linear_fc1.weight", [0]),
