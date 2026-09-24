@@ -214,9 +214,13 @@ def run_variant(variant, args, device, dtype):
     def forward():
         return model(x, layout, dense_layout)
 
+    # torch._grouped_mm rejects a grad with zero strides, which is what
+    # out.sum().backward() hands it, so seed the backward with a real tensor.
+    with torch.no_grad():
+        grad_seed = torch.ones_like(model(x, layout, dense_layout))
+
     def forward_backward():
-        out = forward()
-        out.sum().backward()
+        forward().backward(grad_seed)
 
     forward_ms = timed(lambda: forward(), args.warmup, args.iters)
     total_ms = timed(forward_backward, args.warmup, args.iters)
