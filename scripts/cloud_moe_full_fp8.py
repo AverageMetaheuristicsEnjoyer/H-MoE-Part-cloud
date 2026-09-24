@@ -38,7 +38,7 @@ env.update(
     STAGE3_MOE_WANDB_ENTITY="andrey",
     STAGE3_MOE_LR="0.00163",
     STAGE3_MOE_MIN_LR="0.000163",
-    STAGE3_MOE_MICRO_BATCH="16",
+    STAGE3_MOE_MICRO_BATCH=os.environ.get("STAGE3_MOE_MICRO_BATCH", "16"),
     STAGE3_MOE_RUN_SUFFIX=WAVE,
     STAGE3_MOE_CKPT_ROOT=str(CHECKPOINT_ROOT),
     STAGE3_MOE_LOG_ROOT=str(LOG_ROOT),
@@ -147,7 +147,8 @@ def main():
     manifest = {
         "arm": ARM, "wave": WAVE, "git_commit": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
-        "image": env["MLSUB_IMAGE"], "lr": 0.00163, "micro_batch": 16,
+        "image": env["MLSUB_IMAGE"], "lr": 0.00163,
+        "micro_batch": int(env["STAGE3_MOE_MICRO_BATCH"]),
         "global_batch": 208, "iterations": 17242, "retained_iterations": [13794, 17242],
         "fp8_compute": env.get("STAGE3_MOE_FP8_COMPUTE_ARGS"),
         "fp8_state_dtypes": env.get("STAGE3_MOE_FP8_STATE_DTYPES"),

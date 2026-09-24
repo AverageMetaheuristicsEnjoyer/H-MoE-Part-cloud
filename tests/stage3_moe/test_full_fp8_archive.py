@@ -9,7 +9,8 @@ import pytest
 
 @pytest.mark.parametrize("optimizer", ["adamw", "muon", "frugal_coord"])
 @pytest.mark.parametrize("precision", ["fp8gemm_state_fp32", "bf16_state_fp8", "fp8gemm_state_fp8"])
-def test_compute_and_state_precision_compose(monkeypatch, optimizer, precision):
+@pytest.mark.parametrize("micro_batch", [None, "8"])
+def test_compute_and_state_precision_compose(monkeypatch, optimizer, precision, micro_batch):
     import json
     import subprocess
     from stage3_moe import ARMS
@@ -18,11 +19,15 @@ def test_compute_and_state_precision_compose(monkeypatch, optimizer, precision):
     root = Path(__file__).resolve().parents[2]
     monkeypatch.delenv("STAGE3_MOE_FP8_COMPUTE_ARGS", raising=False)
     monkeypatch.delenv("STAGE3_MOE_FP8_STATE_DTYPES", raising=False)
+    monkeypatch.delenv("STAGE3_MOE_MICRO_BATCH", raising=False)
+    if micro_batch:
+        monkeypatch.setenv("STAGE3_MOE_MICRO_BATCH", micro_batch)
     monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=object))
     monkeypatch.setattr(sys, "argv", ["cloud_moe_full_fp8.py", arm])
     spec = importlib.util.spec_from_file_location("full_fp8_config", root / "scripts/cloud_moe_full_fp8.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    assert module.env["STAGE3_MOE_MICRO_BATCH"] == (micro_batch or "16")
     gemm = precision.startswith("fp8gemm")
     states = precision.endswith("state_fp8")
     assert module.env.get("STAGE3_MOE_FP8_COMPUTE_ARGS") == (
