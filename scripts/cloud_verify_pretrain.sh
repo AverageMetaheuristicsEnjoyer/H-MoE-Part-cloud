@@ -125,8 +125,8 @@ print(
     f" final_range_max={bias_last['range_max']}"
     f" final_delta_abs_max={bias_last['delta_absolute_max']}"
     f" final_flip_fraction={bias_last['update_flip_fraction']}"
-    f" final_tv_mean={drift_mean[-1]} final_tv_max={drift_max[-1]}"
-    f" peak_tv_mean={max(drift_mean)} peak_tv_max={max(drift_max)}"
+    f" final_tv_mean={drift_mean[-1] if drift_mean else None} final_tv_max={drift_max[-1] if drift_max else None}"
+    f" peak_tv_mean={max(drift_mean, default=None)} peak_tv_max={max(drift_max, default=None)}"
 )
 PYR
   fi
