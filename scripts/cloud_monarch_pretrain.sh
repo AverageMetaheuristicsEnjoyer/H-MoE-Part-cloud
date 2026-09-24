@@ -202,7 +202,8 @@ case "$mode" in
   full)
     run_phase=1c
     train_iters=$target_iters
-    mode_save_interval=$save_interval
+    # must divide the retain interval; set it to that to save only on exit
+    mode_save_interval=${MONARCH_SAVE_INTERVAL:-$save_interval}
     min_free_gb=${MONARCH_MIN_FREE_GB:-30}
     scheduler_override=()
     eval_interval=250
@@ -269,8 +270,9 @@ if [[ $wandb_auth != none ]] && "$python_bin" -c 'import wandb, torch.utils.tens
     --wandb-save-dir "$log_root/$run_id"
   )
   wandb_status="online auth=$wandb_auth host=$WANDB_BASE_URL"
-elif [[ $mode == full ]]; then
-  echo "full mode requires W&B credentials and importable wandb/tensorboard" >&2
+elif [[ $mode == full && ${MONARCH_ALLOW_NO_WANDB:-0} != 1 ]]; then
+  echo "full mode requires W&B credentials and importable wandb/tensorboard" \
+    "(MONARCH_ALLOW_NO_WANDB=1 accepts the rank log alone)" >&2
   exit 2
 else
   export WANDB_MODE=offline

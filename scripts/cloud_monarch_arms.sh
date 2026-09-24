@@ -4,7 +4,8 @@
 # down projection, or low rank at the Monarch parameter count.
 #
 #   mlsub run --repo <public mirror> --branch monarch-moe/expert-gemm-bench --image torch28 --no-pip \
-#     --entry scripts/cloud_monarch_arms.sh --gpus 1 --args="lowrank full 2000"
+#     --entry scripts/cloud_monarch_arms.sh --gpus 1 --args="lowrank full 2000" \
+#     --env MONARCH_CKPT_ROOT=/home/jovyan/monarch-pretrain
 #
 #   EXPERTS  monarch | monarch_dense_down | lowrank
 #   MODE     bench (25 steps, no eval, no checkpoint) | smoke | full
@@ -45,6 +46,15 @@ export MONARCH_LOG_ROOT=${MONARCH_LOG_ROOT:-$logs}
 # the node207 Monarch runs used micro-batch 16 (global batch 208 either way)
 export MONARCH_MICRO_BATCH=${MONARCH_MICRO_BATCH:-16}
 [ -n "${3:-}" ] && export MONARCH_EXIT_INTERVAL=$3
+if [ "$mode" = full ]; then
+    # The volumes hold ~45 GB between them and a checkpoint is 8-9 GB, so save
+    # only on exit (the retain interval is the save interval), and put each arm
+    # where it fits with --env MONARCH_CKPT_ROOT=... . No W&B key lives on the
+    # cluster; the rank log carries every train and validation loss.
+    export MONARCH_SAVE_INTERVAL=${MONARCH_SAVE_INTERVAL:-13794}
+    export MONARCH_MIN_FREE_GB=${MONARCH_MIN_FREE_GB:-12}
+    export MONARCH_ALLOW_NO_WANDB=${MONARCH_ALLOW_NO_WANDB:-1}
+fi
 
 "$root/scripts/cloud_monarch_pretrain.sh" hmoe muon 2 ddp "$mode" >"$logs/arm-$experts-$mode.out" 2>&1
 code=$?
