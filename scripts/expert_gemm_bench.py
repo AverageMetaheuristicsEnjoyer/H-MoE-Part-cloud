@@ -15,9 +15,13 @@ Variants
     monarch         per-expert Monarch factors (what ships today)
     shared          the hidden-side factor is shared across experts, which
                     turns that stage from a grouped GEMM into a plain bmm
+    bmm_only        both factors shared: not a usable model, but it prices the
+                    butterfly with the grouped GEMM and every permutation gone,
+                    so it separates "the blocks are too small" from "the packing
+                    and the riffle cost more than the GEMM"
 
-Per-token FLOPs of `shared` equal those of `monarch`: sharing removes stored
-parameters, not arithmetic. Any time difference between them is GEMM shape.
+All three Monarch variants do the same per-token arithmetic: sharing removes
+stored parameters, not FLOPs. Time differences between them are layout alone.
 """
 
 from __future__ import annotations
@@ -95,12 +99,14 @@ def _empty(shape, groups, dtype, device):
 class MonarchBank(torch.nn.Module):
     """One projection of the expert bank, Monarch-factorised.
 
-    `share_hidden_side` shares whichever factor touches the model dimension
-    (as opposed to the expert dimension) across all experts.
+    `sharing` is "none" (a factor pair per expert), "hidden" (the factor
+    touching the model dimension is shared across experts) or "all" (both are,
+    which is not a usable model but bounds what the butterfly costs with the
+    grouped GEMM and its permutations removed entirely).
     """
 
     def __init__(self, in_features, out_features, blocks, experts, dtype, device,
-                 share_hidden_side=False):
+                 sharing="none"):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
@@ -109,8 +115,9 @@ class MonarchBank(torch.nn.Module):
         self.in_extended = shape1[-1] * blocks
         # factor 1 consumes the input, factor 2 produces the output: the one on
         # the model-dimension side is the one to share.
-        self.share1 = share_hidden_side and in_features > out_features
-        self.share2 = share_hidden_side and not self.share1
+        hidden_side_first = in_features > out_features
+        self.share1 = sharing == "all" or (sharing == "hidden" and hidden_side_first)
+        self.share2 = sharing == "all" or (sharing == "hidden" and not hidden_side_first)
         self.blkdiag1 = torch.nn.Parameter(
             _empty(shape1, 1 if self.share1 else experts, dtype, device))
         self.blkdiag2 = torch.nn.Parameter(
@@ -171,11 +178,11 @@ class ExpertMLP(torch.nn.Module):
             self.fc1 = DenseBank(hidden, 2 * expert_hidden, experts, dtype, device)
             self.fc2 = DenseBank(expert_hidden, hidden, experts, dtype, device)
         else:
-            shared = variant == "shared"
+            sharing = {"monarch": "none", "shared": "hidden", "bmm_only": "all"}[variant]
             self.fc1 = MonarchBank(hidden, 2 * expert_hidden, blocks, experts, dtype, device,
-                                   share_hidden_side=shared)
+                                   sharing=sharing)
             self.fc2 = MonarchBank(expert_hidden, hidden, blocks, experts, dtype, device,
-                                   share_hidden_side=shared)
+                                   sharing=sharing)
         self.variant = variant
 
     def forward(self, x, layout, dense_layout):
@@ -211,8 +218,10 @@ def run_variant(variant, args, device, dtype):
     dense_layout = _packed_layout(counts, 1)
     x = torch.randn(routed, args.hidden, dtype=dtype, device=device, requires_grad=True)
 
+    runnable = torch.compile(model) if args.compile else model
+
     def forward():
-        return model(x, layout, dense_layout)
+        return runnable(x, layout, dense_layout)
 
     # torch._grouped_mm rejects a grad with zero strides, which is what
     # out.sum().backward() hands it, so seed the backward with a real tensor.
@@ -226,14 +235,16 @@ def run_variant(variant, args, device, dtype):
     total_ms = timed(forward_backward, args.warmup, args.iters)
 
     params = sum(p.numel() for p in model.parameters())
-    per_token_flops = 2 * params / (1 if variant == "shared" else experts)
-    if variant == "shared":
-        # sharing changes storage, not arithmetic: per-token cost is the
-        # unshared Monarch cost, so recount it from the factor shapes.
-        per_token_flops = 0
-        for bank in (model.fc1, model.fc2):
-            for shape in monarch_shapes(bank.in_features, bank.out_features, blocks):
-                per_token_flops += 2 * shape[0] * shape[1] * shape[2]
+    if variant == "dense":
+        per_token_flops = 2 * params / experts
+    else:
+        # sharing changes storage, not arithmetic, so the per-token cost comes
+        # from the factor shapes rather than from the stored parameter count.
+        per_token_flops = sum(
+            2 * shape[0] * shape[1] * shape[2]
+            for bank in (model.fc1, model.fc2)
+            for shape in monarch_shapes(bank.in_features, bank.out_features, blocks)
+        )
     flops = per_token_flops * routed
     return {
         "variant": variant,
@@ -257,7 +268,8 @@ def main():
     parser.add_argument("--blocks", type=int, default=2)
     parser.add_argument("--tokens-per-expert", type=int, default=1024)
     parser.add_argument("--sweep", type=str, default="")
-    parser.add_argument("--variants", type=str, default="dense,monarch,shared")
+    parser.add_argument("--variants", type=str, default="dense,bmm_only,shared,monarch")
+    parser.add_argument("--compile", action="store_true")
     parser.add_argument("--iters", type=int, default=30)
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--json-out", type=str, default="")
@@ -267,7 +279,8 @@ def main():
     dtype = torch.bfloat16
     print(f"torch {torch.__version__}  gpu {torch.cuda.get_device_name(0)}", flush=True)
     print(f"hidden {args.hidden}  expert_hidden {args.expert_hidden}  "
-          f"experts {args.experts}  blocks {args.blocks}", flush=True)
+          f"experts {args.experts}  blocks {args.blocks}  compile {args.compile}",
+          flush=True)
 
     sweep = [int(v) for v in args.sweep.split(",")] if args.sweep else [args.tokens_per_expert]
     columns = ("variant", "blocks", "tokens_per_expert", "routed_tokens", "params",
