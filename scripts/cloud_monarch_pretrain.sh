@@ -151,6 +151,12 @@ if [[ $model == dense ]]; then
 fi
 
 suffix=${MONARCH_RUN_SUFFIX:+-$MONARCH_RUN_SUFFIX}
+share=${MONARCH_SHARE:-none}
+case "$share" in
+  none) share_tag= ;;
+  hidden) share_tag=-share-hidden ;;
+  *) echo "MONARCH_SHARE must be none or hidden" >&2; exit 2 ;;
+esac
 case "$mode" in
   smoke)
     run_phase=smoke
@@ -195,7 +201,7 @@ case "$mode" in
   *) echo "unknown mode: $mode" >&2; exit 2 ;;
 esac
 
-run_id="monarch-${model}-${arm}-n${blocks}-${parallelism}${WORLD_SIZE}-${run_phase}${suffix}"
+run_id="monarch-${model}-${arm}-n${blocks}${share_tag}-${parallelism}${WORLD_SIZE}-${run_phase}${suffix}"
 ckpt_dir="$storage_root/$run_id"
 log_root=${MONARCH_LOG_ROOT:-/home/jovyan/hmoe-cloud/monarch-pretrain}
 rank_log="$log_root/$run_id/rank-${RANK}-$(date -u +%Y%m%dT%H%M%SZ).log"
@@ -292,7 +298,7 @@ gpu_index=$LOCAL_RANK
 [[ $runtime == node207 ]] && gpu_index=$CUDA_VISIBLE_DEVICES
 gpu_uuid=$(nvidia-smi -i "$gpu_index" --query-gpu=uuid --format=csv,noheader)
 echo "MONARCH_TRAIN_PROCESS runtime=$runtime model=$model arm=$arm blocks=$blocks rank=$RANK world_size=$WORLD_SIZE local_rank=$LOCAL_RANK local_world_size=$local_world_size pid=$$ gpu_uuid=$gpu_uuid parallelism=$parallelism tp=$tensor_parallel pp=$pipeline_parallel ep=$expert_parallel dp=$data_parallel nested_torchrun=false"
-echo "MONARCH_TRAIN_CONFIG run_id=$run_id mode=$mode micro_batch=$micro_batch global_batch=$global_batch target_iters=$target_iters train_iters=$train_iters warmup=$warmup_iters decay=$decay_iters lr=$peak_lr min_lr=$min_lr wd=0.1 wandb=$wandb_status"
+echo "MONARCH_TRAIN_CONFIG run_id=$run_id share=$share mode=$mode micro_batch=$micro_batch global_batch=$global_batch target_iters=$target_iters train_iters=$train_iters warmup=$warmup_iters decay=$decay_iters lr=$peak_lr min_lr=$min_lr wd=0.1 wandb=$wandb_status"
 echo "MONARCH_DATA train=${train_data[*]} valid=$base_data/development test=$base_data/final cache=$data_cache"
 echo "MONARCH_STORAGE checkpoint=${ckpt_dir:-none} log=$rank_log"
 echo "MONARCH_CODE commit=$(git -C "$root" rev-parse HEAD)"
@@ -303,6 +309,7 @@ done
 set +e
 "$python_bin" "$root/stage3_moe/pretrain_monarch.py" \
   --monarch-blocks "$blocks" \
+  --monarch-share "$share" \
   "${model_args[@]}" \
   --tensor-model-parallel-size "$tensor_parallel" \
   --pipeline-model-parallel-size "$pipeline_parallel" \

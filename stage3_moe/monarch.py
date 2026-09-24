@@ -57,7 +57,11 @@ def _packed_layout(counts, blocks):
 
 
 class MonarchFactors(torch.nn.Module):
-    def __init__(self, in_features, out_features, blocks, groups, dtype, device, expert=False):
+    def __init__(
+        self, in_features, out_features, blocks, groups, dtype, device, expert=False,
+        share1=False, share2=False,
+    ):
+        """share1/share2 tie that factor across all groups (one copy, groups=1)."""
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
@@ -73,6 +77,10 @@ class MonarchFactors(torch.nn.Module):
         else:
             shape1 = (groups, blocks, out_block, in_block)
             shape2 = (groups, blocks, out_block, out_block)
+        if share1:
+            shape1 = (1, *shape1[1:])
+        if share2:
+            shape2 = (1, *shape2[1:])
         self.blkdiag1 = torch.nn.Parameter(torch.empty(shape1, dtype=dtype, device=device))
         self.blkdiag2 = torch.nn.Parameter(torch.empty(shape2, dtype=dtype, device=device))
         rng = nullcontext()
@@ -114,34 +122,33 @@ class MonarchFactors(torch.nn.Module):
             ..., : self.out_features
         ]
 
+    def _packed_stage(self, rows, weight, layout, batch, blocks):
+        """rows: (batch * blocks, k), token-major, tokens grouped by expert."""
+        if weight.shape[0] == 1 and self.groups > 1:
+            # one factor for every expert: a plain bmm, no packing needed
+            k = rows.shape[-1]
+            planes = rows.reshape(batch, blocks, k).transpose(0, 1)
+            out = torch.bmm(planes, weight[0].transpose(-1, -2))
+            return out.transpose(0, 1).reshape(batch * blocks, -1)
+        active_experts, offsets, packed_index, inverse_index = layout
+        rows = _Permutation.apply(rows, inverse_index, packed_index)
+        if active_experts.numel() != weight.shape[0]:
+            weight = weight.index_select(0, active_experts)
+        out = torch._grouped_mm(rows, weight.flatten(0, 1).transpose(-1, -2), offsets)
+        return _Permutation.apply(out, packed_index, inverse_index)
+
     def forward_packed(self, x, layout):
         x = x.to(self.blkdiag1.dtype)
         if x.shape[-1] < self.in_extended:
             x = F.pad(x, (0, self.in_extended - x.shape[-1]))
-        active_experts, offsets, packed_index, inverse_index = layout
         batch = x.shape[0]
         blocks, q, p = self.blkdiag1.shape[1:]
         out_blocks, s, r = self.blkdiag2.shape[1:]
 
-        x1 = x.reshape(batch, blocks, p).reshape(-1, p)
-        x1 = _Permutation.apply(x1, inverse_index, packed_index)
-        w1 = self.blkdiag1
-        if active_experts.numel() != self.groups:
-            w1 = w1.index_select(0, active_experts)
-        w1 = w1.flatten(0, 1)
-        y1 = torch._grouped_mm(x1, w1.transpose(-1, -2), offsets)
-        y1 = _Permutation.apply(y1, packed_index, inverse_index).reshape(batch, blocks, q)
-
+        y1 = self._packed_stage(x.reshape(-1, p), self.blkdiag1, layout, batch, blocks)
         y1 = y1.reshape(batch, r, out_blocks).transpose(1, 2).reshape(-1, r)
-        y1 = _Permutation.apply(y1, inverse_index, packed_index)
-        w2 = self.blkdiag2
-        if active_experts.numel() != self.groups:
-            w2 = w2.index_select(0, active_experts)
-        w2 = w2.flatten(0, 1)
-        y2 = torch._grouped_mm(y1, w2.transpose(-1, -2), offsets)
-        y2 = _Permutation.apply(y2, packed_index, inverse_index).reshape(
-            batch, out_blocks, s
-        )
+        y2 = self._packed_stage(y1, self.blkdiag2, layout, batch, out_blocks)
+        y2 = y2.reshape(batch, out_blocks, s)
         return y2.transpose(1, 2).reshape(batch, s * out_blocks)[..., : self.out_features]
 
 
@@ -208,6 +215,11 @@ class MonarchGroupedMLP(torch.nn.Module):
         hidden = config.hidden_size
         expert_hidden = config.moe_ffn_hidden_size
         expert_parallel = config.expert_model_parallel_size > 1
+        # "hidden": every expert of the layer shares the factor that touches the
+        # model dimension (fc1's input side, fc2's output side)
+        share_hidden = os.environ.get("STAGE3_MONARCH_SHARE", "none") == "hidden"
+        if share_hidden and expert_parallel:
+            raise ValueError("a factor shared across experts needs expert parallel size 1")
         self.config = config
         self.num_local_experts = num_local_experts
         self.fc1 = MonarchFactors(
@@ -218,6 +230,7 @@ class MonarchGroupedMLP(torch.nn.Module):
             config.params_dtype,
             device,
             expert=expert_parallel,
+            share1=share_hidden,
         )
         self.fc2 = MonarchFactors(
             expert_hidden,
@@ -227,6 +240,7 @@ class MonarchGroupedMLP(torch.nn.Module):
             config.params_dtype,
             device,
             expert=expert_parallel,
+            share2=share_hidden,
         )
 
     def forward(self, hidden_states, tokens_per_expert, permuted_probs):
@@ -253,7 +267,7 @@ class _TorchQKRMSNorm(torch.nn.RMSNorm):
         )
 
 
-def install_monarch_model(blocks):
+def install_monarch_model(blocks, share="none"):
     import gpt_builders
     import megatron.training.training as training
     from megatron.core.extensions.transformer_engine_spec_provider import TESpecProvider
@@ -262,6 +276,7 @@ def install_monarch_model(blocks):
     from megatron.core.transformer.moe.shared_experts import SharedExpertMLP
 
     os.environ["STAGE3_MONARCH_BLOCKS"] = str(blocks)
+    os.environ["STAGE3_MONARCH_SHARE"] = share
     original_block_spec = gpt_builders.get_gpt_decoder_block_spec
     original_dense_spec = gpt_builders.get_gpt_layer_with_transformer_engine_spec
     original_setup = training.setup_model_and_optimizer

@@ -84,24 +84,32 @@ TOLERANCE = 1e-2 if CUDA else 1e-5
 def test_bench_copy_is_bitwise_production():
     torch.manual_seed(0)
     for in_features, out_features, blocks, counts in _cases():
-        production = MonarchFactors(in_features, out_features, blocks, EXPERTS, DTYPE, DEVICE)
-        copy = bench.MonarchBank(in_features, out_features, blocks, EXPERTS, DTYPE, DEVICE)
-        assert copy.blkdiag1.shape == production.blkdiag1.shape
-        assert copy.blkdiag2.shape == production.blkdiag2.shape
-        with torch.no_grad():
-            copy.blkdiag1.copy_(production.blkdiag1)
-            copy.blkdiag2.copy_(production.blkdiag2)
-        layout = _packed_layout(counts, blocks)
-        x = torch.randn(int(counts.sum()), in_features, device=DEVICE, dtype=DTYPE)
-        grad = torch.randn(x.shape[0], out_features, device=DEVICE, dtype=DTYPE)
+        for sharing in ("none", "hidden", "all"):
+            copy = bench.MonarchBank(
+                in_features, out_features, blocks, EXPERTS, DTYPE, DEVICE, sharing=sharing
+            )
+            production = MonarchFactors(
+                in_features, out_features, blocks, EXPERTS, DTYPE, DEVICE,
+                share1=copy.share1, share2=copy.share2,
+            )
+            assert copy.blkdiag1.shape == production.blkdiag1.shape
+            assert copy.blkdiag2.shape == production.blkdiag2.shape
+            with torch.no_grad():
+                copy.blkdiag1.copy_(production.blkdiag1)
+                copy.blkdiag2.copy_(production.blkdiag2)
+            layout = _packed_layout(counts, blocks)
+            x = torch.randn(int(counts.sum()), in_features, device=DEVICE, dtype=DTYPE)
+            grad = torch.randn(x.shape[0], out_features, device=DEVICE, dtype=DTYPE)
 
-        expected = _run(
-            lambda v: production.forward_packed(v, layout),
-            (production.blkdiag1, production.blkdiag2), x, grad,
-        )
-        actual = _run(lambda v: copy(v, layout), (copy.blkdiag1, copy.blkdiag2), x, grad)
-        for name, a, e in zip(("y", "dx", "dw1", "dw2"), actual, expected):
-            assert torch.equal(a, e), (name, in_features, out_features, blocks, counts.tolist())
+            expected = _run(
+                lambda v: production.forward_packed(v, layout),
+                (production.blkdiag1, production.blkdiag2), x, grad,
+            )
+            actual = _run(lambda v: copy(v, layout), (copy.blkdiag1, copy.blkdiag2), x, grad)
+            for name, a, e in zip(("y", "dx", "dw1", "dw2"), actual, expected):
+                assert torch.equal(a, e), (
+                    name, sharing, in_features, out_features, blocks, counts.tolist()
+                )
 
 
 def test_packed_path_matches_per_expert_butterfly():
@@ -169,10 +177,13 @@ def test_bench_expert_mlp_matches_production_module():
         expert_model_parallel_size=1,
         params_dtype=DTYPE,
     )
-    for blocks in (2, 4):
+    for blocks, share, variant in (
+        (2, "none", "monarch"), (4, "none", "monarch"), (2, "hidden", "shared"),
+    ):
         os.environ["STAGE3_MONARCH_BLOCKS"] = str(blocks)
+        os.environ["STAGE3_MONARCH_SHARE"] = share
         production = MonarchGroupedMLP(EXPERTS, config)
-        copy = bench.ExpertMLP("monarch", 1024, 256, EXPERTS, blocks, DTYPE, DEVICE)
+        copy = bench.ExpertMLP(variant, 1024, 256, EXPERTS, blocks, DTYPE, DEVICE)
         with torch.no_grad():
             for name in ("fc1", "fc2"):
                 getattr(copy, name).blkdiag1.copy_(getattr(production, name).blkdiag1)
@@ -184,7 +195,7 @@ def test_bench_expert_mlp_matches_production_module():
             expected, _ = production(x, counts, probs)
             layout = _packed_layout(counts.to(DEVICE), blocks)
             actual = copy(x, layout, None)
-            assert torch.equal(actual, expected), (blocks, kind)
+            assert torch.equal(actual, expected), (blocks, share, kind)
 
 
 def test_dense_bank_matches_per_expert_matmul():
