@@ -38,5 +38,14 @@ for root in "${roots[@]}"; do
 done
 echo "=== project output sizes on jovyan ==="
 du -h --max-depth=2 /home/jovyan/hmoe-cloud 2>/dev/null | sort -h | tail -25
+for base in /workspace-SR006.nfs2/hmoe-cloud /home/jovyan/hmoe-cloud; do
+  for d in "$base"/slimadam-fc1-ab-20260924-v1/logs/*; do
+    [ -d "$d" ] || continue
+    echo "=== SlimAdam $d ==="
+    [ ! -f "$d/runtime.json" ] || cat "$d/runtime.json"
+    newest=$(ls -1t "$d"/train-*.log 2>/dev/null | head -1)
+    [ -z "$newest" ] || tail -15 "$newest"
+  done
+done
 echo "INVENTORY=DONE"
 exit 0
