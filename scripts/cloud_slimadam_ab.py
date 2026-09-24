@@ -18,6 +18,9 @@ experiment = 'slimadam-fc1-ab-20260924-v1'
 default_root = '/workspace-SR006.nfs2/hmoe-cloud' if args.variant == 'baseline' else '/home/jovyan/hmoe-cloud'
 base = Path(os.environ.get('SLIM_AB_ROOT', default_root)) / experiment
 checkpoint_root = base / 'checkpoints'
+archived = os.environ.get('SLIM_AB_ARCHIVE_HF') == '1' and args.mode in ('preflight', 'train')
+if archived:
+    checkpoint_root = Path('/tmp') / experiment / args.variant / 'checkpoints'
 log_root = base / 'logs'
 suffix = f'{experiment}-{args.mode}-{args.variant}'
 arm = 'slimadam_bf16_state_fp32'
@@ -48,8 +51,16 @@ def run():
             if not path.is_file():
                 raise RuntimeError(f'Missing dataset: {path}')
     # Separate volumes: two measured 9.8 GiB checkpoints plus >2 GiB headroom per arm.
-    if free < 22 * 1024**3:
-        raise RuntimeError('Need 22 GiB free for this arm\'s checkpoint saves')
+    required_gib = 1 if archived else 22
+    if free < required_gib * 1024**3:
+        raise RuntimeError(f'Need {required_gib} GiB free on the persistent volume')
+    if archived:
+        local_free = shutil.disk_usage('/tmp').free
+        print(f'LOCAL_DISK free_bytes={local_free}', flush=True)
+        if local_free < 40 * 1024**3:
+            raise RuntimeError('Need 40 GiB on the local disk for checkpoints and restore')
+        if args.mode == 'train' and not os.environ.get('HF_TOKEN'):
+            raise RuntimeError('HF_TOKEN is required for verified checkpoint archival')
     if args.mode == 'preflight':
         print('PREFLIGHT_RESULT=PASS', flush=True)
         return
@@ -102,6 +113,7 @@ def run():
     manifest = {
         'experiment': experiment, 'variant': args.variant, 'mode': args.mode,
         'image': env['MLSUB_IMAGE'],
+        'checkpoint_archive': f'AverageMetaheuristicsEnjoyer/hmoe-stage3-checkpoints/{experiment}/{args.variant}' if archived else None,
         'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
         'source_sha256': hashlib.sha256((root / 'stage3_moe/slim_adam.py').read_bytes()).hexdigest(),
         'checkpoint_dir': str(checkpoint_dir),
@@ -124,8 +136,13 @@ def run():
         if tracker.exists() and int(tracker.read_text()) >= target:
             continue
         env['STAGE3_MOE_SLIM_AB_STEPS'] = str(target)
-        subprocess.run(['bash', 'scripts/run_stage3_moe_pretrain.sh', arm, 'slim-ab'],
-                       cwd=root, env=env, check=True)
+        command = ['bash', 'scripts/run_stage3_moe_pretrain.sh', arm, 'slim-ab']
+        if archived:
+            sys.path.insert(0, str(root))
+            from stage3_moe.slim_checkpoint_archive import train
+            train(command, env, root, checkpoint_dir, run_dir, f'{experiment}/{args.variant}')
+        else:
+            subprocess.run(command, cwd=root, env=env, check=True)
         if not tracker.exists() or int(tracker.read_text()) != target:
             raise RuntimeError(f'Checkpoint tracker did not reach {target}')
         compression = json.loads((run_dir / 'slim_compression_manifest.json').read_text())
