@@ -53,6 +53,11 @@ esac
 probe_warmup=20
 probe_measure=100
 optimizer_args=()
+stage3_extra_args=()
+if [[ ${STAGE3_MOE_SLIM_SPLIT_FC1:-0} == 1 ]]; then
+  [[ $optimizer == slimadam ]] || { echo "FC1 split requires SlimAdam" >&2; exit 2; }
+  stage3_extra_args=(--stage3-slim-split-fc1)
+fi
 [[ $optimizer == muon ]] && optimizer_args=("${STAGE3_MOE_MUON_ARGS[@]}")
 learning_rate=${STAGE3_MOE_LR:-1.63e-3}
 min_learning_rate=${STAGE3_MOE_MIN_LR:-1.63e-4}
@@ -156,6 +161,19 @@ case "$mode" in
     fi
     probe_warmup=0
     probe_measure=2
+    ;;
+  slim-ab)
+    [[ $optimizer == slimadam ]] || { echo "slim-ab requires SlimAdam" >&2; exit 2; }
+    train_iters=${STAGE3_MOE_SLIM_AB_STEPS:-2254}
+    case "$train_iters" in 12|14|2254) ;; *) echo "unsupported slim-ab budget" >&2; exit 2 ;; esac
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    gate_dir="$ckpt_root/slim-ab/$arm${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
+    mkdir -p "$gate_dir"
+    save_args=(--save "$gate_dir" --save-interval 587 --save-retain-interval 2254)
+    load_args=(--load "$gate_dir" --override-opt_param-scheduler)
+    probe_warmup=0
+    probe_measure=10
     ;;
   stability)
     case "$arm" in
@@ -581,6 +599,7 @@ set +e
 python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   stage3_moe/pretrain_gpt.py \
   --stage3-arm "$arm" \
+  "${stage3_extra_args[@]}" \
   --stage3-result-path "$log_root/$run_id/results.jsonl" \
   --stage3-warmup-steps "$probe_warmup" \
   --stage3-measure-steps "$probe_measure" \

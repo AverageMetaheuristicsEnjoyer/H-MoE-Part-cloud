@@ -12,6 +12,7 @@ from megatron.core.optimizer.optimizer_config import ParamKey, ParamWithNamePred
 
 
 SLIM_COMPRESS_DIMS = "slim_compress_dims"
+SLIM_SPLIT_FC1 = "slim_split_swiglu_fc1"
 
 
 def slim_compression_dims(param: torch.Tensor, name: str):
@@ -56,6 +57,7 @@ class SlimAdamW(torch.optim.Optimizer):
                 "eps": eps,
                 "weight_decay": weight_decay,
                 SLIM_COMPRESS_DIMS: None,
+                SLIM_SPLIT_FC1: False,
             },
         )
 
@@ -79,6 +81,8 @@ class SlimAdamW(torch.optim.Optimizer):
             if dims is not None:
                 for dim in dims:
                     shape[dim] = 1
+            if group[SLIM_SPLIT_FC1]:
+                shape = [2, 1, param.shape[1]]
             state["exp_avg_sq"] = torch.zeros(
                 shape, dtype=param.dtype, device=param.device
             )
@@ -109,8 +113,14 @@ class SlimAdamW(torch.optim.Optimizer):
                 exp_avg = state["exp_avg"]
                 exp_avg_sq = state["exp_avg_sq"]
                 exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
+                if group[SLIM_SPLIT_FC1]:
+                    grad_squared = grad.reshape(2, -1, grad.shape[1]).square().mean(
+                        dim=1, keepdim=True
+                    )
+                else:
+                    grad_squared = self._compressed_square(grad, dims)
                 exp_avg_sq.mul_(beta2).add_(
-                    self._compressed_square(grad, dims), alpha=1 - beta2
+                    grad_squared, alpha=1 - beta2
                 )
 
                 if group["weight_decay"]:
@@ -120,8 +130,13 @@ class SlimAdamW(torch.optim.Optimizer):
                 bias_correction2 = 1 - beta2 ** state["step"]
                 denom = exp_avg_sq.sqrt().div_(math.sqrt(bias_correction2))
                 denom.add_(group["eps"])
-                param.addcdiv_(
-                    exp_avg,
+                update_param = param
+                update_avg = exp_avg
+                if group[SLIM_SPLIT_FC1]:
+                    update_param = param.view(2, -1, param.shape[1])
+                    update_avg = exp_avg.view_as(update_param)
+                update_param.addcdiv_(
+                    update_avg,
                     denom,
                     value=-group["lr"] / bias_correction1,
                 )
@@ -137,7 +152,7 @@ def _slimadam_config_to_kwargs(config, model_chunks, pg_collection):
     }
 
 
-def install_slimadam_contract() -> None:
+def install_slimadam_contract(*, split_fc1=False) -> None:
     _EMERGING_OPTIMIZERS["slimadam"] = EmergingOptimizerEntry(
         optimizer_cls=SlimAdamW,
         config_to_kwargs=_slimadam_config_to_kwargs,
@@ -148,5 +163,9 @@ def install_slimadam_contract() -> None:
             ParamKey(with_name_predicate=_uses_slim_dims((1,))): {
                 SLIM_COMPRESS_DIMS: (1,)
             },
+            ParamKey(with_name_predicate=ParamWithNamePredicate(
+                name="stage3_slim_fc1",
+                fn=lambda param, name: param.ndim == 2 and ".linear_fc1.weight" in name,
+            )): {SLIM_SPLIT_FC1: split_fc1},
         },
     )
