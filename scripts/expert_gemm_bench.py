@@ -261,7 +261,11 @@ def run_point(tokens, skew_cv, args, device, dtype):
     variants = args.variants.split(",")
     models = {v: ExpertMLP(v, args.hidden, args.expert_hidden, experts, blocks, dtype, device)
               for v in variants}
-    runnables = {v: torch.compile(m) if args.compile else m for v, m in models.items()}
+    # dynamic=False: production shapes are fixed (dropless top-k routes the same
+    # number of tokens every micro-batch), but a sweep changes them, and
+    # automatic dynamic shapes would then compile slower symbolic graphs
+    runnables = {v: torch.compile(m, dynamic=False) if args.compile else m
+                 for v, m in models.items()}
 
     def forward(variant):
         chosen = layout
