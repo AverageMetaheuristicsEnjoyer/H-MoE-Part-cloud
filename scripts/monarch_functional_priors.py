@@ -58,15 +58,24 @@ def row_groups(W, nb):
     return W.reshape(*W.shape[:-2], out_features // nb, nb, in_features).transpose(-3, -2)
 
 
-def ridge(A):
+def ridge(A, relative=None):
     # keeps float32 Cholesky alive on inputs whose spectrum spans many decades
-    relative = 1e-5 if A.dtype == torch.float32 else 1e-10
+    if relative is None:
+        relative = 1e-5 if A.dtype == torch.float32 else 1e-10
     scale = relative * A.diagonal(dim1=-2, dim2=-1).mean(-1)[..., None, None]
     return A + scale * torch.eye(A.shape[-1], device=A.device, dtype=A.dtype)
 
 
 def cholesky(A):
-    return torch.linalg.cholesky(ridge(A))
+    """Cholesky of ridge(A), raising the ridge tenfold until every matrix factors
+    (attention outputs have near-singular second moments)."""
+    relative = 1e-5 if A.dtype == torch.float32 else 1e-10
+    while True:
+        chol, info = torch.linalg.cholesky_ex(ridge(A, relative))
+        if not info.any():
+            return chol
+        relative *= 10
+        assert relative < 1, "input moments far from positive definite"
 
 
 def solve_left(chol, B):
@@ -117,7 +126,7 @@ def fit_tied(W, S, nb, side, max_sweeps=40, trace=False, tol=1e-5):
     total = output_energy(W, S)
     chunk = [slice(a * c, (a + 1) * c) for a in range(nb)]
     Saa = [ridge(Sx[..., cols, cols]) for cols in chunk]
-    Saa_chol = [torch.linalg.cholesky(m) for m in Saa]
+    Saa_chol = [cholesky(Sx[..., cols, cols]) for cols in chunk]
     L, R = {}, {}
     for a, cols in enumerate(chunk):                          # weight-energy optimum
         B = Wj[..., cols]                                     # (..., M, j, s, c)
@@ -142,8 +151,8 @@ def fit_tied(W, S, nb, side, max_sweeps=40, trace=False, tol=1e-5):
                 L[a] = solve_right(cholesky(R[a] @ Saa[a] @ Rt), C @ Rt)
                 A = ridge(L[a].transpose(-1, -2) @ L[a])
                 rhs = (L[a].transpose(-1, -2) @ C).sum(-4, keepdim=True)
-                A_chol = torch.linalg.cholesky(A.mean(-4, keepdim=True))
-                S_chol = torch.linalg.cholesky(Saa[a].mean(-4, keepdim=True))
+                A_chol = cholesky(A.mean(-4, keepdim=True))
+                S_chol = cholesky(Saa[a].mean(-4, keepdim=True))
                 R[a] = pcg(lambda X: (A @ X @ Saa[a]).sum(-4, keepdim=True), rhs, R[a],
                            lambda Y: solve_right(S_chol, solve_left(A_chol, Y)))
             else:
@@ -517,6 +526,15 @@ def main():
     moments.sums = {k: v for k, v in moments.sums.items() if k[0] not in ("routed_fc1", "routed_fc2")}
     torch.cuda.empty_cache()
 
+    blocks = [moe_layers[i:i + 4] for i in range(0, len(moe_layers) - 3, 4)]
+    print(f"path blocks {blocks}", flush=True)
+    report_tying("checkpoint", W1, W2, S1, S2, blocks, 2, device, torch.Generator().manual_seed(0),
+                 args.max_sweeps)
+    generator = torch.Generator().manual_seed(1)
+    noise1 = {l: torch.randn(W1[l].shape, generator=generator) for l in blocks[0]}
+    noise2 = {l: torch.randn(W2[l].shape, generator=generator) for l in blocks[0]}
+    report_tying("gaussian", noise1, noise2, S1, S2, blocks[:1], 2, device,
+                 torch.Generator().manual_seed(0), args.max_sweeps)
     print("FPROJ\tmatrix\tnb\tcount\tparams/dense\tmonarch\tlowrank_same_params\t"
           "monarch_on_gaussian\tmonarch_weight_energy\tinput_participation", flush=True)
     half = W1[moe_layers[0]].shape[1] // 2
@@ -540,15 +558,6 @@ def main():
             report_own(kind, W, S, nb, device)
     del routed1, routed_s1
 
-    blocks = [moe_layers[i:i + 4] for i in range(0, len(moe_layers) - 3, 4)]
-    print(f"path blocks {blocks}", flush=True)
-    report_tying("checkpoint", W1, W2, S1, S2, blocks, 2, device, torch.Generator().manual_seed(0),
-                 args.max_sweeps)
-    generator = torch.Generator().manual_seed(1)
-    noise1 = {l: torch.randn(W1[l].shape, generator=generator) for l in blocks[0]}
-    noise2 = {l: torch.randn(W2[l].shape, generator=generator) for l in blocks[0]}
-    report_tying("gaussian", noise1, noise2, S1, S2, blocks[:1], 2, device,
-                 torch.Generator().manual_seed(0), args.max_sweeps)
     return 0
 
 
