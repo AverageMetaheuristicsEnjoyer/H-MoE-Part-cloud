@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import statistics
 import sys
 
 import torch
@@ -163,8 +164,11 @@ class DenseBank(torch.nn.Module):
         self.weight = torch.nn.Parameter(weight)
 
     def forward(self, x, layout):
-        _, offsets, _, _ = layout
-        return torch._grouped_mm(x, self.weight.transpose(-1, -2), offsets)
+        active_experts, offsets, _, _ = layout
+        weight = self.weight
+        if active_experts.numel() != weight.shape[0]:
+            weight = weight.index_select(0, active_experts)
+        return torch._grouped_mm(x, weight.transpose(-1, -2), offsets)
 
 
 # --------------------------------------------------------------------------
@@ -208,56 +212,106 @@ def timed(fn, warmup, iters):
     return start.elapsed_time(end) / iters
 
 
-def run_variant(variant, args, device, dtype):
-    experts, blocks = args.experts, args.blocks
-    routed = experts * args.tokens_per_expert
-    counts = torch.full((experts,), args.tokens_per_expert, dtype=torch.long, device=device)
+def make_counts(experts, tokens_per_expert, skew_cv, seed=0):
+    """Per-expert token counts with roughly the requested coefficient of variation.
 
-    model = ExpertMLP(variant, args.hidden, args.expert_hidden, experts, blocks, dtype, device)
+    Lognormal expert popularity, rounded so the total stays experts *
+    tokens_per_expert: dropless top-k routes a fixed number of tokens per
+    micro-batch, only their split across experts moves.
+    """
+    total = experts * tokens_per_expert
+    if skew_cv == 0:
+        return torch.full((experts,), tokens_per_expert, dtype=torch.long)
+    sigma = math.sqrt(math.log1p(skew_cv ** 2))
+    generator = torch.Generator().manual_seed(seed)
+    weights = torch.exp(sigma * torch.randn(experts, generator=generator, dtype=torch.float64))
+    share = weights / weights.sum() * total
+    counts = share.floor().long()
+    counts[torch.argsort(share - counts, descending=True)[: total - int(counts.sum())]] += 1
+    return counts
+
+
+def per_token_flops(model, variant, experts, blocks):
+    if variant == "dense":
+        return 2 * sum(p.numel() for p in model.parameters()) // experts
+    # sharing changes storage, not arithmetic, so the per-token cost comes
+    # from the factor shapes rather than from the stored parameter count.
+    return sum(
+        2 * shape[0] * shape[1] * shape[2]
+        for bank in (model.fc1, model.fc2)
+        for shape in monarch_shapes(bank.in_features, bank.out_features, blocks)
+    )
+
+
+def run_point(tokens, skew_cv, args, device, dtype):
+    experts, blocks = args.experts, args.blocks
+    counts_cpu = make_counts(experts, tokens, skew_cv)
+    counts = counts_cpu.to(device)
+    routed = int(counts_cpu.sum())
+    realized_cv = (counts_cpu.double().std(unbiased=False) / counts_cpu.double().mean()).item()
+    max_over_mean = (counts_cpu.max().double() / counts_cpu.double().mean()).item()
+
     layout = _packed_layout(counts, blocks)
     dense_layout = _packed_layout(counts, 1)
     x = torch.randn(routed, args.hidden, dtype=dtype, device=device, requires_grad=True)
-
-    runnable = torch.compile(model) if args.compile else model
-
-    def forward():
-        return runnable(x, layout, dense_layout)
-
     # torch._grouped_mm rejects a grad with zero strides, which is what
     # out.sum().backward() hands it, so seed the backward with a real tensor.
-    with torch.no_grad():
-        grad_seed = torch.ones_like(model(x, layout, dense_layout))
+    grad_seed = torch.ones(routed, args.hidden, dtype=dtype, device=device)
 
-    def forward_backward():
-        forward().backward(grad_seed)
+    variants = args.variants.split(",")
+    models = {v: ExpertMLP(v, args.hidden, args.expert_hidden, experts, blocks, dtype, device)
+              for v in variants}
+    runnables = {v: torch.compile(m) if args.compile else m for v, m in models.items()}
 
-    forward_ms = timed(lambda: forward(), args.warmup, args.iters)
-    total_ms = timed(forward_backward, args.warmup, args.iters)
+    def forward(variant):
+        chosen = layout
+        if args.layout_in_loop and variant != "dense":
+            # production rebuilds the layout in every MoE layer from the
+            # dispatcher's CPU tokens_per_expert (MonarchGroupedMLP.forward);
+            # TE's dense grouped GEMM takes the CPU splits as they are.
+            chosen = _packed_layout(counts_cpu.to(device=device, dtype=torch.long), blocks)
+        return runnables[variant](x, chosen, dense_layout)
 
-    params = sum(p.numel() for p in model.parameters())
-    if variant == "dense":
-        per_token_flops = 2 * params / experts
-    else:
-        # sharing changes storage, not arithmetic, so the per-token cost comes
-        # from the factor shapes rather than from the stored parameter count.
-        per_token_flops = sum(
-            2 * shape[0] * shape[1] * shape[2]
-            for bank in (model.fc1, model.fc2)
-            for shape in monarch_shapes(bank.in_features, bank.out_features, blocks)
-        )
-    flops = per_token_flops * routed
-    return {
-        "variant": variant,
-        "blocks": blocks if variant != "dense" else 0,
-        "tokens_per_expert": args.tokens_per_expert,
-        "routed_tokens": routed,
-        "params": params,
-        "forward_ms": forward_ms,
-        "fwd_bwd_ms": total_ms,
-        "forward_tflops": flops / forward_ms * 1e-9,
-        "fwd_bwd_tflops": 3 * flops / total_ms * 1e-9,
-        "peak_gb": torch.cuda.max_memory_allocated() / 1e9,
-    }
+    def forward_backward(variant):
+        out = forward(variant)
+        if args.grad_mode == "accumulate":
+            out.backward(grad_seed)
+        else:
+            # fresh gradients: no read-modify-write of .grad, whose cost scales
+            # with the stored parameter count rather than with the GEMMs
+            torch.autograd.grad(out, [x, *models[variant].parameters()], grad_seed)
+
+    for variant in variants:  # compile and warm everything before any timing
+        timed(lambda: forward(variant), args.warmup, 1)
+        timed(lambda: forward_backward(variant), args.warmup, 1)
+
+    samples = {v: ([], []) for v in variants}
+    for _ in range(args.repeats):  # interleaved, so drift hits every variant alike
+        for variant in variants:
+            samples[variant][0].append(timed(lambda: forward(variant), 2, args.iters))
+            samples[variant][1].append(timed(lambda: forward_backward(variant), 2, args.iters))
+
+    records = []
+    for variant in variants:
+        forward_ms, total_ms = (statistics.median(s) for s in samples[variant])
+        flops = per_token_flops(models[variant], variant, experts, blocks) * routed
+        records.append({
+            "variant": variant,
+            "blocks": blocks if variant != "dense" else 0,
+            "tokens_per_expert": tokens,
+            "skew_cv": realized_cv,
+            "max_over_mean": max_over_mean,
+            "routed_tokens": routed,
+            "params": sum(p.numel() for p in models[variant].parameters()),
+            "forward_ms": forward_ms,
+            "fwd_bwd_ms": total_ms,
+            "fwd_bwd_min": min(samples[variant][1]),
+            "fwd_bwd_max": max(samples[variant][1]),
+            "forward_tflops": flops / forward_ms * 1e-9,
+            "fwd_bwd_tflops": 3 * flops / total_ms * 1e-9,
+            "fwd_bwd_samples": samples[variant][1],
+        })
+    return records
 
 
 def main():
@@ -268,36 +322,46 @@ def main():
     parser.add_argument("--blocks", type=int, default=2)
     parser.add_argument("--tokens-per-expert", type=int, default=1024)
     parser.add_argument("--sweep", type=str, default="")
+    parser.add_argument("--skews", type=str, default="0",
+                        help="target coefficients of variation of tokens per expert")
     parser.add_argument("--variants", type=str, default="dense,bmm_only,shared,monarch")
     parser.add_argument("--compile", action="store_true")
+    parser.add_argument("--layout-in-loop", action="store_true")
+    parser.add_argument("--grad-mode", choices=("fresh", "accumulate"), default="fresh")
     parser.add_argument("--iters", type=int, default=30)
     parser.add_argument("--warmup", type=int, default=10)
+    parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--json-out", type=str, default="")
     args = parser.parse_args()
 
     device = torch.device("cuda")
     dtype = torch.bfloat16
-    print(f"torch {torch.__version__}  gpu {torch.cuda.get_device_name(0)}", flush=True)
-    print(f"hidden {args.hidden}  expert_hidden {args.expert_hidden}  "
-          f"experts {args.experts}  blocks {args.blocks}  compile {args.compile}",
-          flush=True)
+    # every variant at every sweep point is a fresh module; past the default
+    # limit of 8 Dynamo silently falls back to eager and the timings lie
+    torch._dynamo.config.recompile_limit = 64
+    properties = torch.cuda.get_device_properties(0)
+    print(f"torch {torch.__version__}  gpu {properties.name}  uuid {properties.uuid}", flush=True)
+    print(f"hidden {args.hidden}  expert_hidden {args.expert_hidden}  experts {args.experts}  "
+          f"blocks {args.blocks}  compile {args.compile}  layout_in_loop {args.layout_in_loop}  "
+          f"grad_mode {args.grad_mode}  iters {args.iters}  warmup {args.warmup}  "
+          f"repeats {args.repeats}", flush=True)
 
     sweep = [int(v) for v in args.sweep.split(",")] if args.sweep else [args.tokens_per_expert]
-    columns = ("variant", "blocks", "tokens_per_expert", "routed_tokens", "params",
-               "forward_ms", "fwd_bwd_ms", "forward_tflops", "fwd_bwd_tflops", "peak_gb")
+    skews = [float(v) for v in args.skews.split(",")]
+    columns = ("variant", "blocks", "tokens_per_expert", "skew_cv", "max_over_mean",
+               "routed_tokens", "params", "forward_ms", "fwd_bwd_ms", "fwd_bwd_min",
+               "fwd_bwd_max", "forward_tflops", "fwd_bwd_tflops")
     print("PT\t" + "\t".join(columns), flush=True)
 
     records = []
     for tokens in sweep:
-        args.tokens_per_expert = tokens
-        for variant in args.variants.split(","):
+        for skew_cv in skews:
             torch.cuda.empty_cache()
-            torch.cuda.reset_peak_memory_stats()
-            record = run_variant(variant, args, device, dtype)
-            records.append(record)
-            print("PT\t" + "\t".join(
-                f"{record[c]:.3f}" if isinstance(record[c], float) else str(record[c])
-                for c in columns), flush=True)
+            for record in run_point(tokens, skew_cv, args, device, dtype):
+                records.append(record)
+                print("PT\t" + "\t".join(
+                    f"{record[c]:.3f}" if isinstance(record[c], float) else str(record[c])
+                    for c in columns), flush=True)
 
     if args.json_out:
         with open(args.json_out, "w") as handle:

@@ -3,9 +3,12 @@
 #
 #   mlsub run --repo <public mirror> --branch monarch-moe/expert-gemm-bench --image torch28 --no-pip \
 #     --entry scripts/cloud_expert_gemm_bench.sh --gpus 1 \
-#     --args "--sweep 128,256,512,1024,2048 --blocks 2"
+#     --args="--sweep 1024,4096 --skews 0,0.3 --compile"
 #
-#   mlsub run ... --gpus cpu --args "--selftest"    cheap rehearsal, no GPU
+#   mlsub run ... --gpus cpu --args=--selftest    cheap rehearsal, no GPU
+#
+# --args needs the equals sign: with a space the shell hands argparse a bare
+# "--sweep" and mlsub fails with "expected one argument".
 #
 # A Failed mlsub job shows no logs at all, so everything is teed to a volume
 # that survives the job and this script always exits zero.
@@ -51,23 +54,22 @@ fi
 stamp=$(date +%F_%H%M%S)
 log="$workspace/logs/bench_$stamp.log"
 
+# Every run first checks that the benchmark's butterfly equals
+# stage3_moe/monarch.py (outputs and gradients); timings only count if it does.
 if [ "${1:-}" = "--selftest" ]; then
-    # CPU rehearsal: the clone, the interpreter and the import graph only.
+    # CPU rehearsal: the clone, the imports and the equivalence test on a
+    # looped stand-in for torch._grouped_mm.
     {
         echo "=== selftest $stamp ==="
         df -h "$workspace" | tail -1
-        python3 - <<'PY'
-import ast, torch
-print("torch", torch.__version__)
-print("grouped_mm", hasattr(torch, "_grouped_mm"))
-print("cuda", torch.cuda.is_available())
-ast.parse(open("scripts/expert_gemm_bench.py").read())
-print("bench parses")
-PY
+        python3 tests/stage3_moe/test_expert_gemm_bench.py
     } >"$log" 2>&1
 else
-    python3 scripts/expert_gemm_bench.py \
-        --json-out "$workspace/results/bench_$stamp.json" "$@" >"$log" 2>&1
+    {
+        python3 tests/stage3_moe/test_expert_gemm_bench.py &&
+            python3 scripts/expert_gemm_bench.py \
+                --json-out "$workspace/results/bench_$stamp.json" "$@"
+    } >"$log" 2>&1
 fi
 
 code=$?
