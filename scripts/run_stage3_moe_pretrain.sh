@@ -57,6 +57,9 @@ case "$arm" in
   muon_bf16_state_fp8)   optimizer=muon; state_precision=fp8;  compute=() ;;
   adamw_fp8gemm_state_fp32) optimizer=adam; state_precision=fp32; compute=("${fp8_compute[@]}") ;;
   muon_fp8gemm_state_fp32)  optimizer=muon; state_precision=fp32; compute=("${fp8_compute[@]}") ;;
+  adamw_fp8gemm_state_fp8) optimizer=adam; state_precision=fp8; compute=("${fp8_compute[@]}") ;;
+  muon_fp8gemm_state_fp8) optimizer=muon; state_precision=fp8; compute=("${fp8_compute[@]}") ;;
+  frugal_coord_fp8gemm_state_fp8) optimizer=frugal; state_precision=fp8; compute=("${fp8_compute[@]}") ;;
   frugal_coord_bf16_state_fp32) optimizer=frugal; state_precision=fp32; compute=() ;;
   # FP8 GEMM is a model-level setting, so it composes with any optimizer. Routing telemetry
   # matters more here than on the other arms: Frugal's experts look collapsed for the first

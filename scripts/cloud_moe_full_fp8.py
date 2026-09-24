@@ -18,7 +18,7 @@ ARM = sys.argv[1]
 ARMS = {
     f"{optimizer}_{precision}"
     for optimizer in ("adamw", "muon", "frugal_coord")
-    for precision in ("fp8gemm_state_fp32", "bf16_state_fp8")
+    for precision in ("fp8gemm_state_fp32", "bf16_state_fp8", "fp8gemm_state_fp8")
 }
 if ARM not in ARMS:
     raise ValueError(f"unsupported corrected arm: {ARM}")
@@ -49,7 +49,7 @@ env.update(
 )
 if "_fp8gemm_" in ARM:
     env["STAGE3_MOE_FP8_COMPUTE_ARGS"] = "--fp8-format e4m3 --fp8-recipe blockwise"
-else:
+if ARM.endswith("_state_fp8"):
     env["STAGE3_MOE_FP8_STATE_DTYPES"] = "e4m3:e4m3"
 
 

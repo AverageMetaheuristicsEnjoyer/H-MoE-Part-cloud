@@ -7,6 +7,44 @@ from types import SimpleNamespace
 import pytest
 
 
+@pytest.mark.parametrize("optimizer", ["adamw", "muon", "frugal_coord"])
+@pytest.mark.parametrize("precision", ["fp8gemm_state_fp32", "bf16_state_fp8", "fp8gemm_state_fp8"])
+def test_compute_and_state_precision_compose(monkeypatch, optimizer, precision):
+    import json
+    import subprocess
+    from stage3_moe import ARMS
+
+    arm = f"{optimizer}_{precision}"
+    root = Path(__file__).resolve().parents[2]
+    monkeypatch.delenv("STAGE3_MOE_FP8_COMPUTE_ARGS", raising=False)
+    monkeypatch.delenv("STAGE3_MOE_FP8_STATE_DTYPES", raising=False)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=object))
+    monkeypatch.setattr(sys, "argv", ["cloud_moe_full_fp8.py", arm])
+    spec = importlib.util.spec_from_file_location("full_fp8_config", root / "scripts/cloud_moe_full_fp8.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    gemm = precision.startswith("fp8gemm")
+    states = precision.endswith("state_fp8")
+    assert module.env.get("STAGE3_MOE_FP8_COMPUTE_ARGS") == (
+        "--fp8-format e4m3 --fp8-recipe blockwise" if gemm else None
+    )
+    assert module.env.get("STAGE3_MOE_FP8_STATE_DTYPES") == ("e4m3:e4m3" if states else None)
+    launcher = (root / "scripts/run_stage3_moe_pretrain.sh").read_text()
+    selection = launcher[launcher.index("fp8_compute=("):launcher.index("probe_warmup=20")]
+    output = subprocess.check_output(
+        ["bash", "-c", 'arm=$1\n' + selection + '\nprintf "%s\\n" "$optimizer" "$state_precision" "${compute[*]}"', "test", arm],
+        env=module.env, text=True,
+    ).splitlines()
+    assert output == [
+        {"adamw": "adam", "muon": "muon", "frugal_coord": "frugal"}[optimizer],
+        "fp8" if states else "fp32",
+        "--fp8-format e4m3 --fp8-recipe blockwise" if gemm else "",
+    ]
+    assert arm in ARMS
+    schema = json.loads((root / "stage3_moe/result.schema.json").read_text())
+    assert f'"{arm}"' in json.dumps(schema)
+
+
 @pytest.mark.parametrize("corruption", [None, "size", "sha256", "missing"])
 def test_checkpoint_archive_requires_matching_remote_hash_and_size(tmp_path, monkeypatch, corruption):
     monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=object))
