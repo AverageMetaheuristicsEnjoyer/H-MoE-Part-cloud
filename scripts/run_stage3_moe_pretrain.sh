@@ -170,7 +170,7 @@ case "$mode" in
     decay_iters=$full_decay_iters
     gate_dir="$ckpt_root/slim-ab/$arm${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
     mkdir -p "$gate_dir"
-    save_args=(--save "$gate_dir" --save-interval 587 --save-retain-interval 2254)
+    save_args=(--save "$gate_dir" --save-interval 322 --save-retain-interval 2254)
     load_args=(--load "$gate_dir" --override-opt_param-scheduler)
     probe_warmup=0
     probe_measure=10
