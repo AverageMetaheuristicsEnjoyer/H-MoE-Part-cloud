@@ -24,6 +24,8 @@ checkpoint_dir = checkpoint_root / 'slim-ab' / f'{arm}-{suffix}'
 
 
 def run():
+    subprocess.run(['df', '-h', '/home/jovyan', '/workspace-SR006.nfs2',
+                    '/workspace-SR006.nfs3'], check=False)
     base.mkdir(parents=True, exist_ok=True)
     free = shutil.disk_usage(base).free
     print(f'DISK path={base} free_bytes={free}', flush=True)
