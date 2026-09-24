@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 parser = argparse.ArgumentParser()
-parser.add_argument('mode', choices=['preflight', 'smoke', 'train', 'pipeline'])
+parser.add_argument('mode', choices=['preflight', 'smoke', 'train', 'pipeline', 'archive-check'])
 parser.add_argument('variant', choices=['baseline', 'split'])
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
@@ -29,6 +29,29 @@ checkpoint_dir = checkpoint_root / 'slim-ab' / f'{arm}-{suffix}'
 
 
 def run():
+    if args.mode == 'archive-check':
+        import tempfile
+        import uuid
+        from huggingface_hub import HfApi
+        sys.path.insert(0, str(root))
+        from stage3_moe.slim_checkpoint_archive import REPO, archive, restore
+        api = HfApi(token=os.environ['HF_TOKEN'])
+        prefix = f'{experiment}/archive-selftest/{uuid.uuid4().hex}'
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / 'checkpoint'
+            path = checkpoint / 'iter_0000322/mp_rank_00/model_optim_rng.pt'
+            path.parent.mkdir(parents=True)
+            payload = os.urandom(4096)
+            path.write_bytes(payload)
+            try:
+                archive(checkpoint, 322, prefix, api)
+                shutil.rmtree(checkpoint)
+                restore(checkpoint, Path(temporary) / 'logs', prefix, api)
+                assert path.read_bytes() == payload
+                print('ARCHIVE_ROUNDTRIP=PASS', flush=True)
+            finally:
+                api.delete_folder(repo_id=REPO, repo_type='model', path_in_repo=prefix)
+        return
     if args.mode == 'pipeline':
         for stage, artifact in [('smoke', 'smoke-pass.json'), ('train', 'endpoint.json')]:
             subprocess.run([sys.executable, __file__, stage, args.variant], check=True)
