@@ -56,6 +56,26 @@ def _packed_layout(counts, blocks):
     return active_experts, block_counts.cumsum(0).to(torch.int32), packed_index, inverse_index
 
 
+def _init_factors(parameters, expert):
+    """Uniform init with bound 1/sqrt(fan_in) per factor, tagged for the batched Muon step."""
+    rng = nullcontext()
+    if expert:
+        from megatron.core.tensor_parallel.random import (
+            get_cuda_rng_tracker,
+            get_expert_parallel_rng_tracker_name,
+        )
+
+        rng = get_cuda_rng_tracker().fork(get_expert_parallel_rng_tracker_name())
+    with rng, torch.no_grad():
+        for parameter in parameters:
+            # monarch_factor: a stack of matrices that Muon orthogonalises one by one
+            parameter.monarch_factor = True
+            parameter.allreduce = not expert
+            fan_in = parameter.shape[-1]
+            bound = math.sqrt(3.0) / math.sqrt(fan_in) * math.sqrt(2.0 / 6.0)
+            parameter.uniform_(-bound, bound)
+
+
 class MonarchFactors(torch.nn.Module):
     def __init__(
         self, in_features, out_features, blocks, groups, dtype, device, expert=False,
@@ -83,21 +103,7 @@ class MonarchFactors(torch.nn.Module):
             shape2 = (1, *shape2[1:])
         self.blkdiag1 = torch.nn.Parameter(torch.empty(shape1, dtype=dtype, device=device))
         self.blkdiag2 = torch.nn.Parameter(torch.empty(shape2, dtype=dtype, device=device))
-        rng = nullcontext()
-        if expert:
-            from megatron.core.tensor_parallel.random import (
-                get_cuda_rng_tracker,
-                get_expert_parallel_rng_tracker_name,
-            )
-
-            rng = get_cuda_rng_tracker().fork(get_expert_parallel_rng_tracker_name())
-        with rng, torch.no_grad():
-            for parameter in (self.blkdiag1, self.blkdiag2):
-                parameter.monarch_factor = True
-                parameter.allreduce = not expert
-                fan_in = parameter.shape[-1]
-                bound = math.sqrt(3.0) / math.sqrt(fan_in) * math.sqrt(2.0 / 6.0)
-                parameter.uniform_(-bound, bound)
+        _init_factors((self.blkdiag1, self.blkdiag2), expert)
 
     def forward(self, x, group=0):
         x = x.to(self.blkdiag1.dtype)
@@ -150,6 +156,53 @@ class MonarchFactors(torch.nn.Module):
         y2 = self._packed_stage(y1, self.blkdiag2, layout, batch, out_blocks)
         y2 = y2.reshape(batch, out_blocks, s)
         return y2.transpose(1, 2).reshape(batch, s * out_blocks)[..., : self.out_features]
+
+
+def _active(weight, active_experts):
+    if active_experts.numel() != weight.shape[0]:
+        return weight.index_select(0, active_experts)
+    return weight
+
+
+class DenseExperts(torch.nn.Module):
+    """A dense matrix per expert: one grouped GEMM over the expert-sorted tokens."""
+
+    blocks = 1
+
+    def __init__(self, in_features, out_features, groups, dtype, device, expert=False):
+        super().__init__()
+        self.weight = torch.nn.Parameter(
+            torch.empty(groups, out_features, in_features, dtype=dtype, device=device)
+        )
+        _init_factors((self.weight,), expert)
+
+    def forward_packed(self, x, layout):
+        active_experts, offsets = layout[:2]
+        weight = _active(self.weight, active_experts)
+        return torch._grouped_mm(x.to(weight.dtype), weight.transpose(-1, -2), offsets)
+
+
+class LowRankExperts(torch.nn.Module):
+    """up @ down per expert, rank chosen by the caller: two grouped GEMMs."""
+
+    blocks = 1
+
+    def __init__(self, in_features, out_features, rank, groups, dtype, device, expert=False):
+        super().__init__()
+        self.down = torch.nn.Parameter(
+            torch.empty(groups, rank, in_features, dtype=dtype, device=device)
+        )
+        self.up = torch.nn.Parameter(
+            torch.empty(groups, out_features, rank, dtype=dtype, device=device)
+        )
+        _init_factors((self.down, self.up), expert)
+
+    def forward_packed(self, x, layout):
+        active_experts, offsets = layout[:2]
+        down = _active(self.down, active_experts)
+        up = _active(self.up, active_experts)
+        hidden = torch._grouped_mm(x.to(down.dtype), down.transpose(-1, -2), offsets)
+        return torch._grouped_mm(hidden, up.transpose(-1, -2), offsets)
 
 
 class _MonarchParallelLinear(torch.nn.Module):
@@ -220,36 +273,41 @@ class MonarchGroupedMLP(torch.nn.Module):
         share_hidden = os.environ.get("STAGE3_MONARCH_SHARE", "none") == "hidden"
         if share_hidden and expert_parallel:
             raise ValueError("a factor shared across experts needs expert parallel size 1")
+        # the routed-expert bank: Monarch factors, Monarch with a dense down
+        # projection (fc2), or low rank at the Monarch parameter count
+        kind = os.environ.get("STAGE3_MONARCH_EXPERTS", "monarch")
+        if share_hidden and kind != "monarch":
+            raise ValueError("--monarch-share needs --monarch-experts monarch")
         self.config = config
         self.num_local_experts = num_local_experts
-        self.fc1 = MonarchFactors(
-            hidden,
-            2 * expert_hidden,
-            blocks,
-            num_local_experts,
-            config.params_dtype,
-            device,
-            expert=expert_parallel,
-            share1=share_hidden,
-        )
-        self.fc2 = MonarchFactors(
-            expert_hidden,
-            hidden,
-            blocks,
-            num_local_experts,
-            config.params_dtype,
-            device,
-            expert=expert_parallel,
-            share2=share_hidden,
-        )
+        args = (num_local_experts, config.params_dtype, device)
+        if kind == "lowrank":
+            # rank min(in, out) / blocks gives r * (in + out) = the Monarch count
+            self.fc1 = LowRankExperts(hidden, 2 * expert_hidden,
+                                      min(hidden, 2 * expert_hidden) // blocks, *args,
+                                      expert=expert_parallel)
+            self.fc2 = LowRankExperts(expert_hidden, hidden,
+                                      min(expert_hidden, hidden) // blocks, *args,
+                                      expert=expert_parallel)
+            return
+        self.fc1 = MonarchFactors(hidden, 2 * expert_hidden, blocks, *args,
+                                  expert=expert_parallel, share1=share_hidden)
+        if kind == "monarch_dense_down":
+            self.fc2 = DenseExperts(expert_hidden, hidden, *args, expert=expert_parallel)
+        else:
+            self.fc2 = MonarchFactors(expert_hidden, hidden, blocks, *args,
+                                      expert=expert_parallel, share2=share_hidden)
 
     def forward(self, hidden_states, tokens_per_expert, permuted_probs):
         counts = tokens_per_expert.to(device=hidden_states.device, dtype=torch.long)
-        layout = _packed_layout(counts, self.fc1.blocks)
-        intermediate = self.fc1.forward_packed(hidden_states, layout)
+        layouts = {}
+        for bank in (self.fc1, self.fc2):
+            if bank.blocks not in layouts:
+                layouts[bank.blocks] = _packed_layout(counts, bank.blocks)
+        intermediate = self.fc1.forward_packed(hidden_states, layouts[self.fc1.blocks])
         gate, value = intermediate.chunk(2, dim=-1)
         output = self.fc2.forward_packed(
-            F.silu(gate) * value * permuted_probs.reshape(-1, 1), layout
+            F.silu(gate) * value * permuted_probs.reshape(-1, 1), layouts[self.fc2.blocks]
         )
         return output, None
 
@@ -267,7 +325,7 @@ class _TorchQKRMSNorm(torch.nn.RMSNorm):
         )
 
 
-def install_monarch_model(blocks, share="none"):
+def install_monarch_model(blocks, share="none", experts="monarch"):
     import gpt_builders
     import megatron.training.training as training
     from megatron.core.extensions.transformer_engine_spec_provider import TESpecProvider
@@ -277,6 +335,7 @@ def install_monarch_model(blocks, share="none"):
 
     os.environ["STAGE3_MONARCH_BLOCKS"] = str(blocks)
     os.environ["STAGE3_MONARCH_SHARE"] = share
+    os.environ["STAGE3_MONARCH_EXPERTS"] = experts
     original_block_spec = gpt_builders.get_gpt_decoder_block_spec
     original_dense_spec = gpt_builders.get_gpt_layer_with_transformer_engine_spec
     original_setup = training.setup_model_and_optimizer

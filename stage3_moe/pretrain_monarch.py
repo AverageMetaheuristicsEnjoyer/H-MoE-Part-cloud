@@ -15,12 +15,15 @@ def main():
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument("--monarch-blocks", type=int, choices=(2, 4), required=True)
     parser.add_argument("--monarch-share", choices=("none", "hidden"), default="none")
+    parser.add_argument(
+        "--monarch-experts", choices=("monarch", "monarch_dense_down", "lowrank"), default="monarch"
+    )
     args, remaining = parser.parse_known_args(sys.argv[1:])
     sys.argv = [sys.argv[0], *remaining]
 
     from stage3_moe.monarch import install_monarch_model
 
-    install_monarch_model(args.monarch_blocks, args.monarch_share)
+    install_monarch_model(args.monarch_blocks, args.monarch_share, args.monarch_experts)
     if "--optimizer" in remaining and remaining[remaining.index("--optimizer") + 1] == "muon":
         from stage3_moe.muon import install_muon_contract
         from stage3_moe.monarch import install_monarch_muon_contract
@@ -30,6 +33,7 @@ def main():
 
     print(
         f"HMOE_MONARCH blocks={args.monarch_blocks} share={args.monarch_share} "
+        f"experts={args.monarch_experts} "
         f"rank={os.environ.get('RANK', '0')} local_rank={os.environ.get('LOCAL_RANK', '0')} "
         f"pid={os.getpid()}",
         flush=True,
