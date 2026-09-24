@@ -14,7 +14,7 @@ Before either calibration, its smoke runs 12 steps, saves, restarts the process 
 
 Evaluation: retain batch and rolling-100 per-layer routing curves, expert bias and validation loss. At 2254, require all layers' rolling-100 minimum/mean >=0.10, CV <0.20, dropped=0. The final `endpoint.json` separates routing failure from execution failure: a clean run with poor routing is still a completed experiment. Compare curves and loss, not just one gate bit. This one-seed experiment is a mechanism screen, not a general quality or speed claim. Do not use generic `pair_results.py` for a cross-host speed/memory verdict.
 
-Logs/checkpoints default under `/home/jovyan/hmoe-cloud/slimadam-fc1-ab-20260924-v1`. The runner requires 48 GiB free for overlapping paired checkpoint saves; `SLIM_AB_ROOT` can select another audited persistent volume without changing the experiment. Data cache is per variant. GPU identity, Torch/CUDA/TE versions, source commit and optimizer source hash are recorded. W&B is offline; persisted logs are authoritative.
+Logs/checkpoints use `/workspace-SR006.nfs2/hmoe-cloud/slimadam-fc1-ab-20260924-v1` for baseline and `/home/jovyan/hmoe-cloud/slimadam-fc1-ab-20260924-v1` for split. The September 24 CPU audit found approximately 27/23 GiB free respectively. Each arm requires 22 GiB free: two historical 9.8 GiB checkpoints plus over 2 GiB headroom. `SLIM_AB_ROOT` can select another audited persistent volume without changing the experiment; do not put both arms on one volume with only 22 GiB free. Data cache is per variant. GPU identity, Torch/CUDA/TE versions, source commit and optimizer source hash are recorded. W&B is offline; persisted logs are authoritative.
 
 Local validation: optimizer equivalence to independently optimized matrix halves, exact save/load continuation, FC1-only mapping, and an intercepted launcher test establishing that paired arguments differ only in the FC1 flag and artifact paths. Vendored-tree pins were refreshed to match the already-vendored dependencies; their source was not edited.
 
@@ -43,3 +43,5 @@ mlsub run --repo https://github.com/AverageMetaheuristicsEnjoyer/H-MoE-Part-clou
 ```
 
 Estimated training cost from historical 15–25 s/step: 9.4–15.7 GPU-hours per arm, about 19–31 GPU-hours total, plus smoke and evaluation/checkpoint overhead. This is not a current throughput measurement. Queueing can dominate wall time.
+
+Use `--args "pipeline baseline"` and `--args "pipeline split"` for a single allocation per variant that runs its smoke and then training. A missing smoke success artifact prevents training; a missing endpoint prevents a pipeline success marker.

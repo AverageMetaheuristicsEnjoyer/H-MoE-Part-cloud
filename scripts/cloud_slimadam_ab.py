@@ -9,12 +9,13 @@ import subprocess
 import sys
 
 parser = argparse.ArgumentParser()
-parser.add_argument('mode', choices=['preflight', 'smoke', 'train'])
+parser.add_argument('mode', choices=['preflight', 'smoke', 'train', 'pipeline'])
 parser.add_argument('variant', choices=['baseline', 'split'])
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 experiment = 'slimadam-fc1-ab-20260924-v1'
-base = Path(os.environ.get('SLIM_AB_ROOT', '/home/jovyan/hmoe-cloud')) / experiment
+default_root = '/workspace-SR006.nfs2/hmoe-cloud' if args.variant == 'baseline' else '/home/jovyan/hmoe-cloud'
+base = Path(os.environ.get('SLIM_AB_ROOT', default_root)) / experiment
 checkpoint_root = base / 'checkpoints'
 log_root = base / 'logs'
 suffix = f'{experiment}-{args.mode}-{args.variant}'
@@ -24,6 +25,14 @@ checkpoint_dir = checkpoint_root / 'slim-ab' / f'{arm}-{suffix}'
 
 
 def run():
+    if args.mode == 'pipeline':
+        for stage, artifact in [('smoke', 'smoke-pass.json'), ('train', 'endpoint.json')]:
+            subprocess.run([sys.executable, __file__, stage, args.variant], check=True)
+            evidence = log_root / f'stage3-{arm}-slim-ab-{experiment}-{stage}-{args.variant}' / artifact
+            if not evidence.exists():
+                raise RuntimeError(f'{stage} did not produce success evidence')
+        print('PIPELINE_RESULT=COMPLETE', flush=True)
+        return
     subprocess.run(['df', '-h', '/home/jovyan', '/workspace-SR006.nfs2',
                     '/workspace-SR006.nfs3'], check=False)
     base.mkdir(parents=True, exist_ok=True)
@@ -35,9 +44,9 @@ def run():
             path = data / f'{split}.{extension}'
             if not path.is_file():
                 raise RuntimeError(f'Missing dataset: {path}')
-    # Both arms need space for an old and new ~10 GiB checkpoint at once.
-    if free < 48 * 1024**3:
-        raise RuntimeError('Need 48 GiB free for the paired checkpoint saves')
+    # Separate volumes: two measured 9.8 GiB checkpoints plus >2 GiB headroom per arm.
+    if free < 22 * 1024**3:
+        raise RuntimeError('Need 22 GiB free for this arm\'s checkpoint saves')
     if args.mode == 'preflight':
         print('PREFLIGHT_RESULT=PASS', flush=True)
         return
