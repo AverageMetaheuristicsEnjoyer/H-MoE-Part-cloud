@@ -5,14 +5,20 @@
 #     --entry scripts/cloud_monarch_priors.sh --gpus 1 \
 #     --args=1c-mb4/muon_bf16_state_fp32/iter_0017242
 #
-# --gpus 1 is for the host RAM (the CPU flavour has 8 GiB), not the GPU. The
+# A second argument picks the script: monarch_priors (weight energy, the
+# default) or monarch_functional_priors (output error on real inputs, which
+# also reads the development split from /home/jovyan/data).
+#
+# --gpus 1 is for the host RAM (the CPU flavour has 8 GiB) and, for the
+# functional version, the forward pass. The
 # checkpoint is downloaded to the first place with room, read through mmap and
 # deleted again. Always exits zero; the real status is the EXIT line.
 set -u
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
-checkpoint=${1:?usage: cloud_monarch_priors.sh HF_CHECKPOINT_DIR}
+checkpoint=${1:?usage: cloud_monarch_priors.sh HF_CHECKPOINT_DIR [SCRIPT]}
+script=${2:-monarch_priors}
 url="https://huggingface.co/AverageMetaheuristicsEnjoyer/hmoe-stage3-checkpoints/resolve/main/$checkpoint/mp_rank_00/model_optim_rng.pt"
 
 scratch=
@@ -33,7 +39,7 @@ export PYTHONUSERBASE="$scratch/userbase"
     python3 -c "import scipy" 2>/dev/null || python3 -m pip install --user -q scipy
     curl -sSfL --retry 3 -o "$file" "$url" && ls -l "$file" &&
         PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root" \
-            python3 scripts/monarch_priors.py "$file"
+            python3 "scripts/$script.py" "$file"
     echo "EXIT=$?"
 } 2>&1
 rm -f "$file"
