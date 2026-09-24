@@ -174,6 +174,7 @@ case "$mode" in
     load_args=(--load "$gate_dir" --override-opt_param-scheduler)
     probe_warmup=0
     probe_measure=10
+    [[ $train_iters == 2254 ]] || probe_measure=2
     ;;
   stability)
     case "$arm" in
