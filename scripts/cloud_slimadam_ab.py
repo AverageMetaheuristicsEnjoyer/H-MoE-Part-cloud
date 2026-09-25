@@ -20,8 +20,12 @@ seed_experiment = experiment
 if full:
     if args.variant != 'split':
         raise RuntimeError('The approved full continuation is the split variant')
-    experiment = 'slimadam-split-full-20260925-v1'
+    experiment = os.environ.get('SLIM_FULL_EXPERIMENT', 'slimadam-split-full-20260925-v1')
 final_step = 17242 if full else 2254
+# Data parallelism and micro-batch only change the summation order: gb=208 and the
+# sampler keep the per-step data stream identical, and the router bias update all-reduces.
+gpus = int(os.environ.get('SLIM_AB_GPUS', '1'))
+micro_batch = int(os.environ.get('SLIM_AB_MICRO_BATCH', '4'))
 default_root = '/workspace-SR006.nfs2/hmoe-cloud' if args.variant == 'baseline' else '/home/jovyan/hmoe-cloud'
 base = Path(os.environ.get('SLIM_AB_ROOT', default_root)) / experiment
 checkpoint_root = base / 'checkpoints'
@@ -115,12 +119,12 @@ def run():
     run_dir.mkdir(parents=True, exist_ok=True)
     subprocess.run([sys.executable, '-c',
                     'import json, pathlib, sys, torch, transformer_engine as te; '
-                    'assert torch.cuda.device_count() == 1; '
+                    'assert torch.cuda.device_count() == int(sys.argv[2]); '
                     'report=dict(torch=torch.__version__, cuda=torch.version.cuda, '
                     'te=te.__version__, te_path=te.__file__, python=sys.version); '
                     'print("RUNTIME " + json.dumps(report)); '
                     'pathlib.Path(sys.argv[1]).write_text(json.dumps(report, indent=2))',
-                    str(run_dir / 'runtime.json')],
+                    str(run_dir / 'runtime.json'), str(gpus)],
                    env=env, check=True)
     subprocess.run([sys.executable, '-c',
                     'import runpy; '
@@ -133,7 +137,7 @@ def run():
         STAGE3_MOE_CKPT_ROOT=str(checkpoint_root),
         STAGE3_MOE_LOG_ROOT=str(log_root),
         STAGE3_MOE_DATA_CACHE_PATH=str(base / 'data-cache' / args.variant),
-        STAGE3_MOE_MICRO_BATCH='4', STAGE3_MOE_EP='1',
+        STAGE3_MOE_MICRO_BATCH=str(micro_batch), STAGE3_MOE_EP='1',
         STAGE3_MOE_LR='1.63e-3', STAGE3_MOE_MIN_LR='1.63e-4',
         STAGE3_MOE_ADAM_BETA2='0.95', STAGE3_MOE_WGRAD_FUSION='0',
         STAGE3_MOE_PROPAGATE_EXIT='1',
@@ -155,7 +159,8 @@ def run():
         'target_iteration': final_step,
         'seed_archive': f'{seed_experiment}/split' if full else None,
         'controls': {'seed': 1234, 'lr': 0.00163, 'warmup': 173, 'schedule_iters': 17242,
-                     'wsd_decay_iters': 3448, 'micro_batch': 4, 'global_batch': 208,
+                     'wsd_decay_iters': 3448, 'micro_batch': micro_batch, 'global_batch': 208,
+                     'data_parallel': gpus,
                      'bias_rate': 0.001, 'score_function': 'sigmoid', 'beta2': 0.95},
     }
     (run_dir / 'experiment.json').write_text(json.dumps(manifest, indent=2) + '\n')
