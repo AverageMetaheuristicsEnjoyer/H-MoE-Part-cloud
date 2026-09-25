@@ -40,6 +40,40 @@ ADAM_STATE_SPECS = (
     StateSpec("exp_avg", True, torch.float8_e4m3fn, "dre"),
     StateSpec("exp_avg_sq", False, torch.float8_e5m2, "dre"),
 )
+
+FP8_DTYPE_BY_NAME = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2}
+
+
+def adam_state_specs():
+    """Adam's state formats, overridable through ``STAGE3_MOE_FP8_STATE_DTYPES``.
+
+    The default above is what every arm so far has run. It is also a divergence from the
+    dense code base, which quantizes **both** moments to E4M3 (`--fp8-second-order-bit
+    E4M3`), and the measured costs differ by a factor of twenty: FP8 state costs AdamW
+    +0.70 % of validation loss here against +0.035 % there. E5M2 carries two mantissa bits
+    against E4M3's three, and the second moment enters the update as 1/sqrt(v), so the
+    error lands directly on the size of every step -- which also fits the axis being
+    AdamW-only, since Muon has no second moment and pays nothing (-0.06 %).
+
+    The value is colon separated, one name per spec in order, e.g. ``e4m3:e4m3``; mlsub
+    rejects an environment value containing a comma.
+    """
+    requested = os.environ.get("STAGE3_MOE_FP8_STATE_DTYPES", "").strip()
+    if not requested:
+        return ADAM_STATE_SPECS
+    names = [name.strip().lower() for name in requested.split(":")]
+    if len(names) != len(ADAM_STATE_SPECS):
+        raise ValueError(
+            f"STAGE3_MOE_FP8_STATE_DTYPES needs {len(ADAM_STATE_SPECS)} names "
+            f"({', '.join(spec.name for spec in ADAM_STATE_SPECS)}), got {requested!r}"
+        )
+    unknown = [name for name in names if name not in FP8_DTYPE_BY_NAME]
+    if unknown:
+        raise ValueError(f"unknown FP8 state dtype(s): {unknown}")
+    return tuple(
+        StateSpec(spec.name, spec.signed, FP8_DTYPE_BY_NAME[name], spec.recipe)
+        for spec, name in zip(ADAM_STATE_SPECS, names)
+    )
 MUON_STATE_SPECS = (
     StateSpec("momentum_buffer", True, torch.float8_e4m3fn, "maxabs"),
 )
@@ -469,7 +503,47 @@ class FP8StateOptimizerMixin(FP8StateDictMixin):
 
 def make_fp8_adamw(base_class):
     class FP8StateAdamW(FP8StateOptimizerMixin, base_class):
-        state_specs = ADAM_STATE_SPECS
+        state_specs = adam_state_specs()
 
     FP8StateAdamW.__name__ = "FP8StateAdamW"
     return FP8StateAdamW
+
+
+def make_fp8_frugal(base_class):
+    """Frugal CoordAdamW with FP8 moments.
+
+    Frugal keeps Adam's two moments, only narrowed to the active columns, so the Adam specs
+    apply unchanged -- STAGE3_MOE_FP8_STATE_DTYPES included, which is why this resolves them
+    at install time rather than at import.
+
+    The coordinate refresh needs no special handling even though it calls ``state.clear()``
+    and puts fresh FP32 moments back every ``update_gap`` steps: the mixin re-runs
+    ``init_fp8_state`` after every wrapped step and sizes the holders from whatever tensor is
+    there, so the quantised buffers are rebuilt on the same step they were dropped. The case
+    it does not cover is a parameter that never receives a gradient -- the refresh
+    re-initialises its moments but the quantise pass only walks parameters with a grad, so
+    they stay FP32. That corrupts nothing: result_writer's precision contract asserts the
+    state dtypes, so such a run fails loudly instead of quietly costing memory.
+    """
+
+    class FP8StateFrugalCoordAdamW(FP8StateOptimizerMixin, base_class):
+        state_specs = adam_state_specs()
+
+    FP8StateFrugalCoordAdamW.__name__ = "FP8StateFrugalCoordAdamW"
+    return FP8StateFrugalCoordAdamW
+
+
+def make_fp8_slimadam(base_class):
+    """SlimAdam with FP8 moments.
+
+    The second moment is SlimAdam's compressed tensor ([1, n], [n, 1] or [2, 1, n] for the
+    split FC1), but the mixin sizes its holders from whatever tensor it finds, so the Adam
+    specs apply unchanged. A checkpoint with FP32 moments loads as is and is quantised after
+    the first step.
+    """
+
+    class FP8StateSlimAdamW(FP8StateOptimizerMixin, base_class):
+        state_specs = adam_state_specs()
+
+    FP8StateSlimAdamW.__name__ = "FP8StateSlimAdamW"
+    return FP8StateSlimAdamW

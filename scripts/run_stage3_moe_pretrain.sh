@@ -39,6 +39,13 @@ test_data_prefix=${STAGE3_MOE_TEST_DATA_PREFIX:-$data_root/final}
 ckpt_root=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs3/hmoe-checkpoints/stage3}
 log_root=${STAGE3_MOE_LOG_ROOT:-/home/jovyan/hmoe-cloud/pretrain}
 
+# STAGE3_MOE_FP8_COMPUTE_ARGS replaces the FP8-GEMM recipe (see stage3/frugal-fp8); unset,
+# every existing arm keeps the hybrid/delayed flags it always ran with.
+fp8_compute=(--fp8-format hybrid --fp8-recipe delayed)
+if [[ -n ${STAGE3_MOE_FP8_COMPUTE_ARGS:-} ]]; then
+  read -ra fp8_compute <<<"$STAGE3_MOE_FP8_COMPUTE_ARGS"
+fi
+
 case "$arm" in
   adamw_bf16_state_fp32) optimizer=adam; state_precision=fp32; compute=() ;;
   adamw_bf16_state_fp8)  optimizer=adam; state_precision=fp8;  compute=() ;;
@@ -48,6 +55,9 @@ case "$arm" in
   muon_fp8gemm_state_fp32)  optimizer=muon; state_precision=fp32; compute=(--fp8-format hybrid --fp8-recipe delayed) ;;
   frugal_coord_bf16_state_fp32) optimizer=frugal; state_precision=fp32; compute=() ;;
   slimadam_bf16_state_fp32) optimizer=slimadam; state_precision=fp32; compute=() ;;
+  slimadam_bf16_state_fp8) optimizer=slimadam; state_precision=fp8; compute=() ;;
+  slimadam_fp8gemm_state_fp32) optimizer=slimadam; state_precision=fp32; compute=("${fp8_compute[@]}") ;;
+  slimadam_fp8gemm_state_fp8) optimizer=slimadam; state_precision=fp8; compute=("${fp8_compute[@]}") ;;
   *) echo "unknown arm: $arm" >&2; exit 2 ;;
 esac
 probe_warmup=20

@@ -34,7 +34,12 @@ if archived:
     checkpoint_root = Path('/tmp') / experiment / args.variant / 'checkpoints'
 log_root = base / 'logs'
 suffix = f'{experiment}-{args.mode}-{args.variant}'
-arm = 'slimadam_bf16_state_fp32'
+seed_arm = 'slimadam_bf16_state_fp32'
+arm = os.environ.get('SLIM_AB_ARM', seed_arm)
+if arm not in (seed_arm, 'slimadam_bf16_state_fp8', 'slimadam_fp8gemm_state_fp32', 'slimadam_fp8gemm_state_fp8'):
+    raise RuntimeError(f'Unknown SlimAdam arm: {arm}')
+if arm != seed_arm and not full:
+    raise RuntimeError('FP8 SlimAdam arms run only as full continuations of the split seed')
 launch_mode = 'full' if full else 'slim-ab'
 run_dir = log_root / f'stage3-{arm}-{launch_mode}-{suffix}'
 checkpoint_dir = checkpoint_root / 'slim-ab' / f'{arm}-{suffix}'
@@ -148,9 +153,17 @@ def run():
         STAGE3_MOE_WANDB_PROJECT='hmoe-slimadam-fc1-ab', WANDB_MODE='offline',
         TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD='1',
     )
+    # The same FP8 settings as the fp8-combined-20260924 wave on stage3/frugal-fp8.
+    if '_fp8gemm_' in arm:
+        env.update(STAGE3_MOE_FP8_COMPUTE_ARGS='--fp8-format e4m3 --fp8-recipe blockwise',
+                   NVTE_FP8_BLOCK_SCALING_FP32_SCALES='1')
+    if arm.endswith('_state_fp8'):
+        env.update(STAGE3_MOE_FP8_STATE_DTYPES='e4m3:e4m3', STAGE3_MOE_FP8_DEQUANT_CHUNK='0')
     run_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
-        'experiment': experiment, 'variant': args.variant, 'mode': args.mode,
+        'experiment': experiment, 'variant': args.variant, 'mode': args.mode, 'arm': arm,
+        'fp8_compute': env.get('STAGE3_MOE_FP8_COMPUTE_ARGS'),
+        'fp8_state_dtypes': env.get('STAGE3_MOE_FP8_STATE_DTYPES'),
         'image': env['MLSUB_IMAGE'],
         'checkpoint_archive': f'AverageMetaheuristicsEnjoyer/hmoe-stage3-checkpoints/{experiment}/{args.variant}' if archived else None,
         'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
@@ -170,7 +183,7 @@ def run():
         return
     if args.mode in ('train', 'full'):
         smoke_root = Path(default_root) / seed_experiment / 'logs' if full else log_root
-        smoke = smoke_root / f'stage3-{arm}-slim-ab-{seed_experiment}-smoke-{args.variant}' / 'smoke-pass.json'
+        smoke = smoke_root / f'stage3-{seed_arm}-slim-ab-{seed_experiment}-smoke-{args.variant}' / 'smoke-pass.json'
         if not smoke.exists():
             raise RuntimeError('The variant must pass the save/resume smoke first')
         if json.loads(smoke.read_text())['source_sha256'] != manifest['source_sha256']:

@@ -36,7 +36,10 @@ def _raw_optimizers(optimizer):
 
 def assert_fp8_adam_bootstrap(optimizer):
     adam_optimizers = [raw for raw in _raw_optimizers(optimizer) if _role(raw) != "muon_matrix"]
-    if not adam_optimizers or any(type(raw).__name__ != "FP8StateAdamW" for raw in adam_optimizers):
+    expected = {"slimadam_all": "FP8StateSlimAdamW"}
+    if not adam_optimizers or any(
+        type(raw).__name__ != expected.get(_role(raw), "FP8StateAdamW") for raw in adam_optimizers
+    ):
         classes = [type(raw).__name__ for raw in adam_optimizers]
         raise AssertionError(f"FP8 Adam bootstrap failed; raw classes={classes}")
 
@@ -155,11 +158,12 @@ def optimizer_state_ledger(optimizer, arm):
                     data_bytes += bytes_
 
     state_fp8 = arm.endswith("_state_fp8")
-    expected_adam = (
-        (torch.float8_e4m3fn, torch.float8_e5m2)
-        if state_fp8
-        else (torch.float32, torch.float32)
-    )
+    if state_fp8:
+        from stage3_moe.optimizer_states import adam_state_specs
+
+        expected_adam = tuple(spec.dtype for spec in adam_state_specs())
+    else:
+        expected_adam = (torch.float32, torch.float32)
     saw_adam = False
     saw_muon = False
     saw_frugal = False
@@ -174,10 +178,8 @@ def optimizer_state_ledger(optimizer, arm):
                 ) != expected_adam:
                     raise AssertionError(f"{role} Adam state precision contract failed")
             if role in {"frugal_matrix", "slimadam_all"} and "exp_avg" in state:
-                if (
-                    state["exp_avg"].dtype != torch.float32
-                    or state["exp_avg_sq"].dtype != torch.float32
-                ):
+                expected_matrix = expected_adam if role == "slimadam_all" else (torch.float32, torch.float32)
+                if (state["exp_avg"].dtype, state["exp_avg_sq"].dtype) != expected_matrix:
                     raise AssertionError(f"{role} state precision contract failed")
                 if role == "frugal_matrix":
                     from stage3_moe.frugal import FRUGAL_DENSITY

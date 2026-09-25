@@ -92,10 +92,12 @@ def validate_axis(arm, state_precision, argv, warmup_steps, measure_steps):
     compute_fp8 = "_fp8gemm_" in arm
     has_fp8 = "--fp8-format" in argv or "--fp8-recipe" in argv
     if compute_fp8:
-        if option_value(argv, "--fp8-format") != "hybrid":
-            raise ValueError("FP8 GEMM arms require --fp8-format hybrid")
-        if option_value(argv, "--fp8-recipe") != "delayed":
-            raise ValueError("FP8 GEMM arms require --fp8-recipe delayed")
+        if option_value(argv, "--fp8-format") not in ("hybrid", "e4m3"):
+            raise ValueError("FP8 GEMM arms require --fp8-format hybrid or e4m3")
+        if option_value(argv, "--fp8-recipe") not in ("delayed", "tensorwise", "blockwise"):
+            raise ValueError(
+                "FP8 GEMM arms require --fp8-recipe delayed, tensorwise or blockwise"
+            )
     elif has_fp8:
         raise ValueError("BF16-GEMM arms must not pass FP8 compute flags")
     if "--use-distributed-optimizer" in argv:
@@ -161,6 +163,18 @@ def main():
         from stage3_moe.slim_adam import install_slimadam_contract
 
         install_slimadam_contract(split_fc1=stage3_args.stage3_slim_split_fc1)
+        if state_fp8:
+            # Wrapped here, not in slim_adam.py: the launcher pins that file's hash to the
+            # save/resume smoke every SlimAdam run is gated on.
+            import dataclasses
+
+            from megatron.core.optimizer.emerging_optimizers import _EMERGING_OPTIMIZERS
+            from stage3_moe.optimizer_states import make_fp8_slimadam
+
+            entry = _EMERGING_OPTIMIZERS["slimadam"]
+            _EMERGING_OPTIMIZERS["slimadam"] = dataclasses.replace(
+                entry, optimizer_cls=make_fp8_slimadam(entry.optimizer_cls)
+            )
         print(f"SLIM_SPLIT_FC1={int(stage3_args.stage3_slim_split_fc1)}", flush=True)
 
     from stage3_moe.memory_audit import install as install_memory_audit
