@@ -13,6 +13,10 @@ sync_root=${WANDB_SYNC_ROOT:-/home/jovyan/hmoe-cloud}
 want=${1:-}
 echo "WANDB_BASE_URL=${WANDB_BASE_URL:-https://api.wandb.ai}"
 echo "SYNC_ROOT=$sync_root FILTER=$want"
+# Runs recorded under another project can be moved into the main one at sync time.
+sync_args=()
+[[ -n ${WANDB_SYNC_PROJECT:-} ]] && sync_args=(--project "$WANDB_SYNC_PROJECT")
+echo "PROJECT_OVERRIDE=${WANDB_SYNC_PROJECT:-none}"
 
 unset PYTHONNOUSERSITE
 export WANDB_MODE=online
@@ -34,7 +38,7 @@ for d in "${runs[@]}"; do
     continue
   fi
   echo "--- SYNC $d"
-  if wandb sync --no-include-synced --mark-synced "$d" 2>&1 | tail -5; then
+  if wandb sync --no-include-synced --mark-synced "${sync_args[@]}" "$d" 2>&1 | tail -5; then
     ok=$((ok + 1))
   else
     failed=$((failed + 1))
