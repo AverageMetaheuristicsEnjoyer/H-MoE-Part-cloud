@@ -73,6 +73,14 @@ LOG="$LOGS/$(date -u +%F_%H%M%S)-$$.log"
   echo "data: $data_root ($(stat -c %s "$data_root/train.bin") bytes)"
 
   export STAGE3_MOE_DATA_ROOT="$data_root"
+  # The FP8 settings of the corrected 1C wave (blockwise E4M3 GEMM, E4M3 states). They
+  # are set here because mlsub rejects environment values that contain a space; the
+  # launcher applies each one only to the arms it concerns.
+  export STAGE3_MOE_FP8_COMPUTE_ARGS=${STAGE3_MOE_FP8_COMPUTE_ARGS:-"--fp8-format e4m3 --fp8-recipe blockwise"}
+  export NVTE_FP8_BLOCK_SCALING_FP32_SCALES=${NVTE_FP8_BLOCK_SCALING_FP32_SCALES:-1}
+  export STAGE3_MOE_FP8_STATE_DTYPES=${STAGE3_MOE_FP8_STATE_DTYPES:-e4m3:e4m3}
+  export STAGE3_MOE_DATA_CACHE_PATH=${STAGE3_MOE_DATA_CACHE_PATH:-/tmp/hmoe-membench-data-cache}
+  echo "fp8 compute: $STAGE3_MOE_FP8_COMPUTE_ARGS; fp8 states: $STAGE3_MOE_FP8_STATE_DTYPES; slim split fc1: ${STAGE3_MOE_SLIM_SPLIT_FC1:-0}"
   python3 stage3_moe/membench_sweep.py \
     --results-root "$RESULTS" \
     --log-root "$RUNS" \
