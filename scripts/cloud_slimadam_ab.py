@@ -10,25 +10,37 @@ import subprocess
 import sys
 
 parser = argparse.ArgumentParser()
-parser.add_argument('mode', choices=['preflight', 'smoke', 'train', 'pipeline', 'archive-check'])
+parser.add_argument('mode', choices=['preflight', 'smoke', 'train', 'pipeline', 'archive-check', 'full'])
 parser.add_argument('variant', choices=['baseline', 'split'])
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 experiment = 'slimadam-fc1-ab-20260924-v1'
+full = args.mode == 'full'
+seed_experiment = experiment
+if full:
+    if args.variant != 'split':
+        raise RuntimeError('The approved full continuation is the split variant')
+    experiment = 'slimadam-split-full-20260925-v1'
+final_step = 17242 if full else 2254
 default_root = '/workspace-SR006.nfs2/hmoe-cloud' if args.variant == 'baseline' else '/home/jovyan/hmoe-cloud'
 base = Path(os.environ.get('SLIM_AB_ROOT', default_root)) / experiment
 checkpoint_root = base / 'checkpoints'
-archived = os.environ.get('SLIM_AB_ARCHIVE_HF') == '1' and args.mode in ('preflight', 'train')
+archived = os.environ.get('SLIM_AB_ARCHIVE_HF') == '1' and args.mode in ('preflight', 'train', 'full')
 if archived:
     checkpoint_root = Path('/tmp') / experiment / args.variant / 'checkpoints'
 log_root = base / 'logs'
 suffix = f'{experiment}-{args.mode}-{args.variant}'
 arm = 'slimadam_bf16_state_fp32'
-run_dir = log_root / f'stage3-{arm}-slim-ab-{suffix}'
+launch_mode = 'full' if full else 'slim-ab'
+run_dir = log_root / f'stage3-{arm}-{launch_mode}-{suffix}'
 checkpoint_dir = checkpoint_root / 'slim-ab' / f'{arm}-{suffix}'
+if full:
+    checkpoint_dir = checkpoint_dir / arm
 
 
 def run():
+    if full and not archived:
+        raise RuntimeError('Full continuation requires SLIM_AB_ARCHIVE_HF=1')
     if args.mode == 'archive-check':
         import tempfile
         import uuid
@@ -80,9 +92,9 @@ def run():
     if archived:
         local_free = shutil.disk_usage('/tmp').free
         print(f'LOCAL_DISK free_bytes={local_free}', flush=True)
-        if local_free < 40 * 1024**3:
-            raise RuntimeError('Need 40 GiB on the local disk for checkpoints and restore')
-        if args.mode == 'train' and not os.environ.get('HF_TOKEN'):
+        if local_free < (60 if full else 40) * 1024**3:
+            raise RuntimeError('Insufficient local disk for checkpoints and restore')
+        if args.mode in ('train', 'full') and not os.environ.get('HF_TOKEN'):
             raise RuntimeError('HF_TOKEN is required for verified checkpoint archival')
     if args.mode == 'preflight':
         print('PREFLIGHT_RESULT=PASS', flush=True)
@@ -140,30 +152,37 @@ def run():
         'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
         'source_sha256': hashlib.sha256((root / 'stage3_moe/slim_adam.py').read_bytes()).hexdigest(),
         'checkpoint_dir': str(checkpoint_dir),
+        'target_iteration': final_step,
+        'seed_archive': f'{seed_experiment}/split' if full else None,
         'controls': {'seed': 1234, 'lr': 0.00163, 'warmup': 173, 'schedule_iters': 17242,
                      'wsd_decay_iters': 3448, 'micro_batch': 4, 'global_batch': 208,
                      'bias_rate': 0.001, 'score_function': 'sigmoid', 'beta2': 0.95},
     }
     (run_dir / 'experiment.json').write_text(json.dumps(manifest, indent=2) + '\n')
     tracker = checkpoint_dir / 'latest_checkpointed_iteration.txt'
-    if tracker.exists() and int(tracker.read_text()) >= (14 if args.mode == 'smoke' else 2254):
+    if tracker.exists() and int(tracker.read_text()) >= (14 if args.mode == 'smoke' else final_step):
         print('ALREADY_COMPLETE', flush=True)
         return
-    if args.mode == 'train':
-        smoke = log_root / f'stage3-{arm}-slim-ab-{experiment}-smoke-{args.variant}' / 'smoke-pass.json'
+    if args.mode in ('train', 'full'):
+        smoke_root = Path(default_root) / seed_experiment / 'logs' if full else log_root
+        smoke = smoke_root / f'stage3-{arm}-slim-ab-{seed_experiment}-smoke-{args.variant}' / 'smoke-pass.json'
         if not smoke.exists():
             raise RuntimeError('The variant must pass the save/resume smoke first')
         if json.loads(smoke.read_text())['source_sha256'] != manifest['source_sha256']:
             raise RuntimeError('Smoke evidence belongs to a different optimizer source')
-    for target in ([12, 14] if args.mode == 'smoke' else [2254]):
+    for target in ([12, 14] if args.mode == 'smoke' else [final_step]):
         if tracker.exists() and int(tracker.read_text()) >= target:
             continue
         env['STAGE3_MOE_SLIM_AB_STEPS'] = str(target)
-        command = ['bash', 'scripts/run_stage3_moe_pretrain.sh', arm, 'slim-ab']
+        launch_mode = 'full' if full else 'slim-ab'
+        if full:
+            env['STAGE3_MOE_FULL_DIR'] = 'slim-ab/' + arm + '-' + suffix
+        command = ['bash', 'scripts/run_stage3_moe_pretrain.sh', arm, launch_mode]
         if archived:
             sys.path.insert(0, str(root))
             from stage3_moe.slim_checkpoint_archive import train
-            train(command, env, root, checkpoint_dir, run_dir, f'{experiment}/{args.variant}')
+            train(command, env, root, checkpoint_dir, run_dir, f'{experiment}/{args.variant}', target=final_step,
+                  seed_prefix=f'{seed_experiment}/split' if full else None)
         else:
             subprocess.run(command, cwd=root, env=env, check=True)
         if not tracker.exists() or int(tracker.read_text()) != target:
@@ -186,7 +205,7 @@ def run():
     else:
         rows = [json.loads(line) for line in (run_dir / 'routing_telemetry.jsonl').read_text().splitlines()]
         endpoint = rows[-1]
-        if endpoint['iteration'] != 2254 or endpoint['rolling_100']['window_steps'] != 100:
+        if endpoint['iteration'] != final_step or endpoint['rolling_100']['window_steps'] != 100:
             raise RuntimeError('Final routing window is incomplete')
         routing = endpoint['rolling_100']
         passed = (routing['minimum_to_mean_min'] >= 0.10

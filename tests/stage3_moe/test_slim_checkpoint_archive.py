@@ -63,3 +63,35 @@ def test_missing_archive_does_not_silently_restart_existing_training(tmp_path, m
     (logs / 'train-old.log').write_text('iteration 300')
     with pytest.raises(RuntimeError, match='refusing fresh restart'):
         restore(tmp_path / 'checkpoint', logs, 'test', SimpleNamespace(file_exists=lambda *a, **kw: False))
+
+
+def test_full_training_restores_seed_and_requires_full_archive(tmp_path, monkeypatch):
+    from stage3_moe import slim_checkpoint_archive as module
+    checkpoint = tmp_path / 'checkpoint'
+    checkpoint.mkdir()
+    tracker = checkpoint / 'latest_checkpointed_iteration.txt'
+    calls = []
+    monkeypatch.setitem(sys.modules, 'huggingface_hub', SimpleNamespace(HfApi=lambda **kw: object()))
+
+    def load(checkpoint, run_dir, prefix, api):
+        calls.append(('restore', prefix))
+        if prefix == 'short/split':
+            tracker.write_text('2254')
+            return {'iteration': 2254}
+
+    def launch(*args, **kwargs):
+        assert tracker.read_text() == '2254'
+        tracker.write_text('17242')
+        return SimpleNamespace(poll=lambda: 0)
+
+    def save(checkpoint, step, prefix, api):
+        calls.append(('archive', step, prefix))
+        return {'iteration': step}
+
+    monkeypatch.setattr(module, 'restore', load)
+    monkeypatch.setattr(module, 'archive', save)
+    monkeypatch.setattr(module.subprocess, 'Popen', launch)
+    module.train([], {'HF_TOKEN': 'test'}, tmp_path, checkpoint, tmp_path / 'logs',
+                 'full/split', target=17242, seed_prefix='short/split')
+    assert calls == [('restore', 'full/split'), ('restore', 'short/split'),
+                     ('archive', 17242, 'full/split')]

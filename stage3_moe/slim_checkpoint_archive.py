@@ -69,10 +69,14 @@ def restore(checkpoint, run_dir, prefix, api):
     return pointer
 
 
-def train(command, env, cwd, checkpoint, run_dir, prefix):
+def train(command, env, cwd, checkpoint, run_dir, prefix, target=2254, seed_prefix=None):
     from huggingface_hub import HfApi
     api = HfApi(token=env['HF_TOKEN'])
     previous = restore(checkpoint, run_dir, prefix, api)
+    if previous is None and seed_prefix is not None:
+        previous = restore(checkpoint, run_dir, seed_prefix, api)
+        if previous is None or previous['iteration'] != 2254:
+            raise RuntimeError('Full continuation requires the verified 2254-step seed')
     verified = previous['iteration'] if previous else 0
     process = subprocess.Popen(command, env=env, cwd=cwd)
     tracker = checkpoint / 'latest_checkpointed_iteration.txt'
@@ -80,22 +84,26 @@ def train(command, env, cwd, checkpoint, run_dir, prefix):
         code = process.poll()
         value = tracker.read_text().strip() if tracker.exists() else ''
         latest = int(value) if value.isdigit() else 0
+        if target == 17242 and verified < 13794 <= latest and (checkpoint / 'iter_0013794').is_dir():
+            latest = 13794
         if latest > verified:
             try:
                 previous = archive(checkpoint, latest, prefix, api)
                 old = verified
                 verified = latest
-                if old and old != 2254:
+                if old and old not in (2254, 13794, target):
                     api.delete_folder(repo_id=REPO, repo_type='model',
                                       path_in_repo=f'{prefix}/iter_{old:07d}')
             except Exception as error:
                 print(f'HF_RETRY iteration={latest} error_type={type(error).__name__}', flush=True)
                 time.sleep(30)
                 continue
+        if latest == 13794 and int(tracker.read_text()) > latest:
+            continue
         if code is not None:
             if code != 0:
                 raise RuntimeError(f'Training exited {code}; archived iteration={verified}')
-            if latest != 2254 or verified != 2254:
-                raise RuntimeError('Training ended without a verified 2254-step checkpoint')
+            if latest != target or verified != target:
+                raise RuntimeError(f'Training ended without a verified {target}-step checkpoint')
             return
         time.sleep(30)
