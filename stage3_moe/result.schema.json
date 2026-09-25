@@ -26,8 +26,8 @@
       ],
       "properties": {
         "optimizer": { "enum": ["adamw", "muon", "frugal", "slimadam"] },
-        "gemm_mode": { "enum": ["bf16", "fp8_delayed_hybrid"] },
-        "optimizer_state_mode": { "enum": ["fp32", "fp8_hybrid"] },
+        "gemm_mode": { "enum": ["bf16", "fp8_delayed_hybrid", "fp8_delayed_e4m3", "fp8_tensorwise_hybrid", "fp8_tensorwise_e4m3", "fp8_blockwise_e4m3"] },
+        "optimizer_state_mode": { "enum": ["fp32", "fp8_hybrid", "fp8_e4m3"] },
         "match_key_sha256": { "$ref": "#/$defs/sha256" }
       }
     },
@@ -375,7 +375,10 @@
             "adamw_fp8gemm_state_fp32",
             "muon_fp8gemm_state_fp32",
             "frugal_coord_bf16_state_fp32",
-            "slimadam_bf16_state_fp32"
+            "slimadam_bf16_state_fp32",
+            "slimadam_bf16_state_fp8",
+            "slimadam_fp8gemm_state_fp32",
+            "slimadam_fp8gemm_state_fp8"
           ]
         },
         "status": { "enum": ["completed", "failed", "not_run"] },

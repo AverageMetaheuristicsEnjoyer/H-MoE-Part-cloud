@@ -443,10 +443,23 @@ def _comparison(arm, argv):
     computed_match_key = hashlib.sha256(
         "\0".join(_normalized_match_argv(argv, arm)).encode()
     ).hexdigest()
+    gemm_mode = "bf16"
+    if "_fp8gemm_" in arm:
+        recipe = argv[argv.index("--fp8-recipe") + 1]
+        fp8_format = argv[argv.index("--fp8-format") + 1]
+        gemm_mode = f"fp8_{recipe}_{fp8_format}"
+    state_mode = "fp32"
+    if arm.endswith("_state_fp8"):
+        from stage3_moe.optimizer_states import adam_state_specs
+
+        state_mode = (
+            "fp8_e4m3" if all(s.dtype == torch.float8_e4m3fn for s in adam_state_specs())
+            else "fp8_hybrid"
+        )
     return {
         "optimizer": arm.split("_", 1)[0],
-        "gemm_mode": "fp8_delayed_hybrid" if "_fp8gemm_" in arm else "bf16",
-        "optimizer_state_mode": "fp8_hybrid" if arm.endswith("_state_fp8") else "fp32",
+        "gemm_mode": gemm_mode,
+        "optimizer_state_mode": state_mode,
         "match_key_sha256": os.environ.get(
             "STAGE3_MOE_MATCH_KEY_SHA256", computed_match_key
         ),
