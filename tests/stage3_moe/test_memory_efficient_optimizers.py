@@ -21,6 +21,7 @@ from stage3_moe.frugal import (
 from stage3_moe.pretrain_gpt import take_stage3_args, validate_axis
 from stage3_moe.slim_adam import (
     SLIM_COMPRESS_DIMS,
+    SLIM_SPLIT_FC1,
     SlimAdamW,
     install_slimadam_contract,
     slim_compression_dims,
@@ -229,3 +230,62 @@ def test_memory_efficient_optimizers_reject_torch_dist_checkpointing():
             assert str(error) == f"{optimizer_name} requires --ckpt-format torch"
         else:
             raise AssertionError("torch_dist checkpointing was accepted")
+
+
+def test_slimadam_split_fc1_matches_two_separate_matrices_and_resumes():
+    torch.manual_seed(1234)
+    initial = torch.randn(16, 7)
+    fused = torch.nn.Parameter(initial.clone())
+    halves = [torch.nn.Parameter(value.clone()) for value in initial.chunk(2)]
+    kwargs = dict(lr=1.63e-3, betas=(0.9, 0.95), eps=1e-8, weight_decay=0.1)
+    opt = SlimAdamW([{"params": [fused], SLIM_COMPRESS_DIMS: (0,), SLIM_SPLIT_FC1: True}], **kwargs)
+    reference = SlimAdamW([{"params": halves, SLIM_COMPRESS_DIMS: (0,)}], **kwargs)
+    for step in range(40):
+        grad = torch.randn_like(fused)
+        grad[8:].mul_(0.01)
+        if 10 <= step < 15:
+            grad.zero_()
+        fused.grad = grad.clone()
+        for parameter, value in zip(halves, grad.chunk(2)):
+            parameter.grad = value.clone()
+        opt.step()
+        reference.step()
+        torch.testing.assert_close(fused, torch.cat(halves), rtol=0, atol=0)
+        assert opt.state[fused]["exp_avg_sq"].shape == (2, 1, 7)
+        if step == 19:
+            resumed_param = torch.nn.Parameter(fused.detach().clone())
+            resumed = SlimAdamW([{"params": [resumed_param], SLIM_COMPRESS_DIMS: (0,), SLIM_SPLIT_FC1: True}], **kwargs)
+            resumed.load_state_dict(copy.deepcopy(opt.state_dict()))
+        elif step > 19:
+            resumed_param.grad = grad.clone()
+            resumed.step()
+            assert torch.equal(fused, resumed_param)
+            assert torch.equal(opt.state[fused]["exp_avg_sq"], resumed.state[resumed_param]["exp_avg_sq"])
+
+
+def test_slimadam_split_override_only_matches_fc1():
+    from megatron.core.optimizer.emerging_optimizers import _EMERGING_OPTIMIZERS
+
+    previous = _EMERGING_OPTIMIZERS.get("slimadam")
+    try:
+        install_slimadam_contract(split_fc1=True)
+        overrides = _EMERGING_OPTIMIZERS["slimadam"].default_param_overrides
+        parameter = torch.nn.Parameter(torch.empty(16, 7))
+        for name, expected in (
+            ("decoder.layers.1.mlp.experts.linear_fc1.weight0", True),
+            ("decoder.layers.1.mlp.shared_experts.linear_fc1.weight", True),
+            ("decoder.layers.0.mlp.linear_fc1.weight", True),
+            ("decoder.layers.1.mlp.experts.linear_fc2.weight0", False),
+            ("decoder.layers.1.mlp.router.weight", False),
+            ("decoder.layers.1.self_attention.linear_qkv.weight", False),
+        ):
+            selected = {}
+            for key, value in overrides.items():
+                if key.matches(parameter, name):
+                    selected.update(value)
+            assert selected.get(SLIM_SPLIT_FC1, False) is expected
+    finally:
+        if previous is None:
+            _EMERGING_OPTIMIZERS.pop("slimadam", None)
+        else:
+            _EMERGING_OPTIMIZERS["slimadam"] = previous

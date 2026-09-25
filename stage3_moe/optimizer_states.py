@@ -531,3 +531,19 @@ def make_fp8_frugal(base_class):
 
     FP8StateFrugalCoordAdamW.__name__ = "FP8StateFrugalCoordAdamW"
     return FP8StateFrugalCoordAdamW
+
+
+def make_fp8_slimadam(base_class):
+    """SlimAdam with FP8 moments.
+
+    The second moment is SlimAdam's compressed tensor ([1, n], [n, 1] or [2, 1, n] for the
+    split FC1), but the mixin sizes its holders from whatever tensor it finds, so the Adam
+    specs apply unchanged. A checkpoint with FP32 moments loads as is and is quantised after
+    the first step.
+    """
+
+    class FP8StateSlimAdamW(FP8StateOptimizerMixin, base_class):
+        state_specs = adam_state_specs()
+
+    FP8StateSlimAdamW.__name__ = "FP8StateSlimAdamW"
+    return FP8StateSlimAdamW

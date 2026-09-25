@@ -12,6 +12,9 @@ ARMS = (
     "frugal_coord_fp8gemm_state_fp32",
     "frugal_coord_bf16_state_fp8",
     "slimadam_bf16_state_fp32",
+    "slimadam_bf16_state_fp8",
+    "slimadam_fp8gemm_state_fp32",
+    "slimadam_fp8gemm_state_fp8",
 )
 
 TOTAL_PARAMETERS = 1_028_926_976

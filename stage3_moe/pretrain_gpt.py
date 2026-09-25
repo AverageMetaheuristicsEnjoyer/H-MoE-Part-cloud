@@ -87,6 +87,7 @@ def take_stage3_args(argv):
     parser.add_argument("--stage3-eval-batch-size", type=int, default=8)
     parser.add_argument("--stage3-eval-limit", type=int, default=None)
     parser.add_argument("--stage3-routing-audit-path", type=Path, default=None)
+    parser.add_argument("--stage3-slim-split-fc1", action="store_true")
     args, remaining = parser.parse_known_args(argv[1:])
     if args.stage3_warmup_steps < 0 or args.stage3_measure_steps < 1:
         raise ValueError("stage3 warmup must be non-negative and measured steps positive")
@@ -224,7 +225,20 @@ def main():
     if is_slimadam:
         from stage3_moe.slim_adam import install_slimadam_contract
 
-        install_slimadam_contract()
+        install_slimadam_contract(split_fc1=stage3_args.stage3_slim_split_fc1)
+        if state_fp8:
+            # Wrapped here, not in slim_adam.py: the launcher pins that file's hash to the
+            # save/resume smoke every SlimAdam run is gated on.
+            import dataclasses
+
+            from megatron.core.optimizer.emerging_optimizers import _EMERGING_OPTIMIZERS
+            from stage3_moe.optimizer_states import make_fp8_slimadam
+
+            entry = _EMERGING_OPTIMIZERS["slimadam"]
+            _EMERGING_OPTIMIZERS["slimadam"] = dataclasses.replace(
+                entry, optimizer_cls=make_fp8_slimadam(entry.optimizer_cls)
+            )
+        print(f"SLIM_SPLIT_FC1={int(stage3_args.stage3_slim_split_fc1)}", flush=True)
 
     from stage3_moe.memory_audit import install as install_memory_audit
     from stage3_moe.result_writer import install_probe

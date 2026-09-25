@@ -39,7 +39,10 @@ def assert_fp8_adam_bootstrap(optimizer):
         raw for raw in _raw_optimizers(optimizer)
         if _role(raw) not in {"muon_matrix", "frugal_matrix"}
     ]
-    if not adam_optimizers or any(type(raw).__name__ != "FP8StateAdamW" for raw in adam_optimizers):
+    expected = {"slimadam_all": "FP8StateSlimAdamW"}
+    if not adam_optimizers or any(
+        type(raw).__name__ != expected.get(_role(raw), "FP8StateAdamW") for raw in adam_optimizers
+    ):
         classes = [type(raw).__name__ for raw in adam_optimizers]
         raise AssertionError(f"FP8 Adam bootstrap failed; raw classes={classes}")
 
@@ -183,7 +186,10 @@ def optimizer_state_ledger(optimizer, arm):
                 ) != expected_adam:
                     raise AssertionError(f"{role} Adam state precision contract failed")
             if role in {"frugal_matrix", "slimadam_all"} and "exp_avg" in state:
-                expected_matrix = expected_adam if role == "frugal_matrix" else (torch.float32, torch.float32)
+                expected_matrix = (
+                    expected_adam if role in {"frugal_matrix", "slimadam_all"}
+                    else (torch.float32, torch.float32)
+                )
                 if (
                     state["exp_avg"].dtype, state["exp_avg_sq"].dtype
                 ) != expected_matrix:
@@ -206,15 +212,18 @@ def optimizer_state_ledger(optimizer, arm):
                     saw_slimadam = True
                     if state["exp_avg"].shape != parameter.shape:
                         raise AssertionError("SlimAdam first moment shape contract failed")
-                    dims = next(
-                        group["slim_compress_dims"]
+                    slim_group = next(
+                        group
                         for group in raw.param_groups
                         if any(candidate is parameter for candidate in group["params"])
                     )
+                    dims = slim_group["slim_compress_dims"]
                     expected_shape = list(parameter.shape)
                     if dims is not None:
                         for dim in dims:
                             expected_shape[dim] = 1
+                    if slim_group.get("slim_split_swiglu_fc1", False):
+                        expected_shape = [2, 1, parameter.shape[1]]
                     if tuple(state["exp_avg_sq"].shape) != tuple(expected_shape):
                         raise AssertionError(
                             "SlimAdam second moment shape contract failed"
@@ -931,6 +940,22 @@ def install_probe(*, arm, result_path, warmup_steps, measured_steps, program_sta
                 probe.parameter_names[id(parameter)] = stable_name
                 if hasattr(parameter, "main_param"):
                     probe.parameter_names[id(parameter.main_param)] = stable_name
+        if probe.arm.startswith("slimadam_"):
+            manifest = []
+            for raw in _raw_optimizers(optimizer):
+                for group in raw.param_groups:
+                    for parameter in group["params"]:
+                        manifest.append({
+                            "name": probe.parameter_names[id(parameter)],
+                            "shape": list(parameter.shape),
+                            "compress_dims": group["slim_compress_dims"],
+                            "split_fc1": group.get("slim_split_swiglu_fc1", False),
+                        })
+            if torch.distributed.get_rank() == 0:
+                result_path.parent.mkdir(parents=True, exist_ok=True)
+                (result_path.parent / "slim_compression_manifest.json").write_text(
+                    json.dumps(manifest, indent=2) + "\n"
+                )
         return model, optimizer, scheduler
 
     training.setup_model_and_optimizer = named_setup
