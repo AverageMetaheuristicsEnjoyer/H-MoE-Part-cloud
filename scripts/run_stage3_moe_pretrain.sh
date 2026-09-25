@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 3 MoE matched pretraining, WSD trunk-and-branch.
 #
-#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|lr-sweep|smoke|resume-gate|stability|lr-screen|routing-calibration|routing-calibration-2254|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|corrected-time-match|time-match-stretched-decay|schedule-tail|schedule-tail-smoke|eval-lm-fixed|eval-routing-fixed|eval-downstream
+#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|lr-sweep|smoke|resume-gate|stability|lr-screen|routing-calibration|routing-calibration-2254|bench|membench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|corrected-time-match|time-match-stretched-decay|schedule-tail|schedule-tail-smoke|eval-lm-fixed|eval-routing-fixed|eval-downstream
 #
 # smoke exercises save and resume; bench measures throughput and peak memory with no
 # checkpoint traffic; resume-bench does the same from the trunk branch point, so the
@@ -18,7 +18,10 @@ set -euo pipefail
 arm=${1:?usage: run_stage3_moe_pretrain.sh ARM MODE}
 mode=${2:?usage: run_stage3_moe_pretrain.sh ARM MODE}
 root=$(cd "$(dirname "$0")/.." && pwd)
-source "$root/configs/stage3-moe-1p029b.sh"
+model=${STAGE3_MOE_MODEL:-1p029b}
+config_file="$root/configs/stage3-moe-$model.sh"
+[[ -f $config_file ]] || { echo "unknown STAGE3_MOE_MODEL: $model" >&2; exit 2; }
+source "$config_file"
 
 # --- budget, in steps of 208 x 2048 = 425,984 loss tokens ---
 full_iters=17242          # 7,344,816,128 tokens = 1C for this MoE
@@ -30,7 +33,7 @@ short_iters=2818          # 1,200,422,912 tokens
 short_decay_iters=564     # final 20% of the short budget
 short_branch=$((short_iters - short_decay_iters))   # 2254
 
-global_batch=208
+global_batch=${STAGE3_MOE_GLOBAL_BATCH:-208}
 micro_batch=${STAGE3_MOE_MICRO_BATCH:-4}            # 4 x DP2 x accum26 = 208
 data_root=${STAGE3_MOE_DATA_ROOT:-/home/jovyan/data/fineweb-edu-gpt2-megatron/data}
 train_data_prefix=${STAGE3_MOE_TRAIN_DATA_PREFIX:-$data_root/train}
@@ -270,6 +273,21 @@ case "$mode" in
     load_args=()
     probe_warmup=5
     probe_measure=10
+    ;;
+  membench)
+    # One point of the memory/time sweep: one arm, one micro-batch, one model shape.
+    # docs/membench.md fixes the protocol -- the global batch is held at 16 sequences
+    # and traded against the micro-batch, so every point of the table processes the
+    # same tokens per optimizer step and the step times are directly comparable.
+    # No checkpoint traffic at all: an NFS write inside the measured window would
+    # dominate it, and nothing here is ever resumed.
+    train_iters=$((${STAGE3_MOE_MEMBENCH_WARMUP:-5} + ${STAGE3_MOE_MEMBENCH_MEASURE:-12}))
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    save_args=()
+    load_args=()
+    probe_warmup=${STAGE3_MOE_MEMBENCH_WARMUP:-5}
+    probe_measure=${STAGE3_MOE_MEMBENCH_MEASURE:-12}
     ;;
   resume-bench)
     # Steady-state timing. `bench` measures 25 cold iterations of an untrained model,
@@ -651,9 +669,10 @@ fi
 gpu_count=$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)
 # The result writer reads these; on real data the manifest hash is mandatory.
 export STAGE3_MOE_RUN_ID="$run_id"
+export STAGE3_MOE_MODEL="$model"
 export STAGE3_MOE_SITE=cloudru
 export STAGE3_MOE_IMAGE="${MLSUB_IMAGE:-torch28}"
-export STAGE3_MOE_CONFIG_SHA256=$(sha256sum "$root/configs/stage3-moe-1p029b.sh" | awk '{print $1}')
+export STAGE3_MOE_CONFIG_SHA256=$(sha256sum "$config_file" | awk '{print $1}')
 export STAGE3_MOE_DATA_MANIFEST_SHA256=$(
   if [[ -n ${STAGE3_MOE_DATA_MANIFEST_PATH:-} ]]; then
     sha256sum "$STAGE3_MOE_DATA_MANIFEST_PATH" | awk '{print $1}'
@@ -676,6 +695,14 @@ echo "FP8_DEQUANT_CHUNK=${STAGE3_MOE_FP8_DEQUANT_CHUNK:-0} (0 = every state in F
 echo "SCHEDULE target_iters=$target_iters decay_iters=$decay_iters warmup=$warmup_iters train_iters=$train_iters"
 echo "OPTIMIZER_HPARAMS lr=$learning_rate min_lr=$min_learning_rate beta1=0.9 beta2=$adam_beta2 weight_decay=0.1"
 echo "CKPT save=${save_args[*]} load=${load_args[*]}"
+
+# MCore materializes its document/sample/shuffle indexes beside the corpus unless
+# told otherwise, and /home/jovyan -- where the corpus lives -- has no free space,
+# so the build dies with ENOSPC before the first step. One shared cache directory on
+# a writable volume also keeps a sweep from rebuilding the index at every point.
+data_cache=${STAGE3_MOE_DATA_CACHE:-$log_root/data-cache}
+mkdir -p "$data_cache"
+echo "DATA_CACHE=$data_cache"
 
 train_log="$log_root/$run_id/train-$(date -u +%Y%m%dT%H%M%SZ).log"
 echo "TRAIN_LOG=$train_log"
@@ -720,6 +747,7 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   --test-data-path "$test_data_prefix" \
   "${data_cache_args[@]}" \
   --dataloader-type single \
+  --data-cache-path "$data_cache" \
   --num-workers 2 \
   --no-create-attention-mask-in-dataloader \
   --seed 1234 \

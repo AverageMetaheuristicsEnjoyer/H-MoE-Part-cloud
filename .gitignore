@@ -14,3 +14,6 @@ __pycache__/
 *.py[cod]
 checkpoints/
 wandb/
+reports/*.aux
+reports/*.log
+reports/*.out
