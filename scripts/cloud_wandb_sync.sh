@@ -22,6 +22,8 @@ unset PYTHONNOUSERSITE
 export WANDB_MODE=online
 python -c 'import wandb' 2>/dev/null || pip install --user -q wandb
 python -c 'import wandb; print("wandb=", wandb.__version__)'
+# wandb >= 0.30 removed --mark-synced and marks runs itself.
+wandb sync --help | grep -q -- --mark-synced && sync_args+=(--mark-synced)
 
 mapfile -t runs < <(find "$sync_root" -maxdepth 5 -type d -name 'offline-run-*' 2>/dev/null | sort)
 echo "OFFLINE_RUNS=${#runs[@]}"
@@ -38,7 +40,10 @@ for d in "${runs[@]}"; do
     continue
   fi
   echo "--- SYNC $d"
-  if wandb sync --no-include-synced --mark-synced "${sync_args[@]}" "$d" 2>&1 | tail -5; then
+  wandb sync --no-include-synced "${sync_args[@]}" "$d" >/tmp/wandb-sync.log 2>&1
+  status=$?
+  tail -5 /tmp/wandb-sync.log
+  if [[ $status -eq 0 ]]; then
     ok=$((ok + 1))
   else
     failed=$((failed + 1))
