@@ -579,11 +579,6 @@ case "$mode" in
   *) echo "unknown mode: $mode" >&2; exit 2 ;;
 esac
 
-data_cache_args=()
-if [[ -n ${STAGE3_MOE_DATA_CACHE_PATH:-} ]]; then
-  data_cache_args=(--data-cache-path "$STAGE3_MOE_DATA_CACHE_PATH")
-fi
-
 run_id="stage3-$arm-$mode${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
 mkdir -p "$log_root/$run_id" "$trunk_dir"
 export PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root"
@@ -700,7 +695,7 @@ echo "CKPT save=${save_args[*]} load=${load_args[*]}"
 # told otherwise, and /home/jovyan -- where the corpus lives -- has no free space,
 # so the build dies with ENOSPC before the first step. One shared cache directory on
 # a writable volume also keeps a sweep from rebuilding the index at every point.
-data_cache=${STAGE3_MOE_DATA_CACHE:-$log_root/data-cache}
+data_cache=${STAGE3_MOE_DATA_CACHE_PATH:-${STAGE3_MOE_DATA_CACHE:-$log_root/data-cache}}
 mkdir -p "$data_cache"
 echo "DATA_CACHE=$data_cache"
 
@@ -745,7 +740,6 @@ python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
   --train-data-path "$train_data_prefix" \
   --valid-data-path "$valid_data_prefix" \
   --test-data-path "$test_data_prefix" \
-  "${data_cache_args[@]}" \
   --dataloader-type single \
   --data-cache-path "$data_cache" \
   --num-workers 2 \
