@@ -57,8 +57,9 @@ if [ "${1:-}" = "curve" ]; then
             awk -v max="$max" '{for (i = 1; i <= NF; i++) if ($i == "iteration") it = $(i + 1); if (it + 0 <= max) print}' |
             sort -u | cut -c1-140
         grep -h "elapsed time per iteration" "$run"train-*.log 2>/dev/null |
-            sed -E 's/.*iteration +([0-9]+)\/.*lm loss: ([0-9.E+-]+).*/TRAIN \1 \2/' |
+            sed -E 's/.*iteration +([0-9]+)\/.*elapsed time per iteration \(ms\): ([0-9.]+).*lm loss: ([0-9.E+-]+).*/TRAIN \1 \3 ms=\2/' |
             awk -v max="$max" '$2 % 250 == 0 && $2 <= max' | sort -u -k2,2n
+        grep -h "micro_batch_size \|^ *seed \|eval_iters " "$run"train-*.log 2>/dev/null | sort -u | head -3
     done
     exit 0
 fi
