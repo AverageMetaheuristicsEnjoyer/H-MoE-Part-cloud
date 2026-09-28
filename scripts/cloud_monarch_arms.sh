@@ -44,7 +44,26 @@ if [ "${1:-}" = "peek" ]; then
     exit 0
 fi
 
-experts=${1:?usage: cloud_monarch_arms.sh EXPERTS MODE [EXIT] | peek}
+if [ "${1:-}" = "curve" ]; then
+    # read-only: validation and every-250 train losses up to MAX from the logs of
+    # other runs, e.g. the ordinary-MoE baselines: curve SUBSTR [MAX]
+    want=${2:?usage: cloud_monarch_arms.sh curve SUBSTR [MAX]}
+    max=${3:-2500}
+    for run in /home/jovyan/hmoe-cloud/pretrain/*"$want"*/ /workspace-SR006.nfs2/hmoe-cloud/pretrain/*"$want"*/; do
+        [ -d "$run" ] || continue
+        echo "=== $run"
+        grep -h "micro_batch_size \.\|global_batch_size \.\|seed \.\|train_data_path \." "$run"train-*.log 2>/dev/null | sort -u | head -4
+        grep -h "validation loss at iteration" "$run"train-*.log 2>/dev/null |
+            awk -v max="$max" '{for (i = 1; i <= NF; i++) if ($i == "iteration") it = $(i + 1); if (it + 0 <= max) print}' |
+            sort -u | cut -c1-140
+        grep -h "elapsed time per iteration" "$run"train-*.log 2>/dev/null |
+            sed -E 's/.*iteration +([0-9]+)\/.*lm loss: ([0-9.E+-]+).*/TRAIN \1 \2/' |
+            awk -v max="$max" '$2 % 250 == 0 && $2 <= max' | sort -u -k2,2n
+    done
+    exit 0
+fi
+
+experts=${1:?usage: cloud_monarch_arms.sh EXPERTS MODE [EXIT] | peek | curve SUBSTR [MAX]}
 mode=${2:?usage: cloud_monarch_arms.sh EXPERTS MODE [EXIT] | peek}
 export MONARCH_EXPERTS=$experts
 export MONARCH_LOG_ROOT=${MONARCH_LOG_ROOT:-$logs}
