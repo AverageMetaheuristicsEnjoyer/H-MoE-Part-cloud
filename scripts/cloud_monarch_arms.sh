@@ -39,7 +39,7 @@ if [ "${1:-}" = "peek" ]; then
             sed -E 's/.*iteration +([0-9]+)\/.*lm loss: ([0-9.E+-]+).*/TRAIN \1 \2/' |
             awk '$2 % 250 == 0'
         grep "elapsed time per iteration" "$newest" | tail -1 | cut -c1-200
-        grep -h "TRAIN_EXIT\|Traceback\|Error" "$newest" | tail -3
+        grep -h "TRAIN_EXIT\|Traceback\|Error\|successfully saved checkpoint\|exiting program" "$newest" | tail -4
     done
     exit 0
 fi
