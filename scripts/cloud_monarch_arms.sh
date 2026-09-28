@@ -32,7 +32,12 @@ if [ "${1:-}" = "peek" ]; then
         newest=$(ls -t "$run"rank-0-*.log 2>/dev/null | head -1)
         [ -n "$newest" ] || continue
         echo "=== $(basename "$run")"
-        grep -h "validation loss at iteration\|lm loss validation" "$run"rank-0-*.log | tail -8
+        grep -h "validation loss at iteration\|lm loss validation\|loss at iteration .* on test set" \
+            "$run"rank-0-*.log | tail -12
+        # train loss every 250 iterations (Megatron averages it over the log interval)
+        grep -h "elapsed time per iteration" "$run"rank-0-*.log |
+            sed -E 's/.*iteration +([0-9]+)\/.*lm loss: ([0-9.E+-]+).*/TRAIN \1 \2/' |
+            awk '$2 % 250 == 0'
         grep "elapsed time per iteration" "$newest" | tail -1 | cut -c1-200
         grep -h "TRAIN_EXIT\|Traceback\|Error" "$newest" | tail -3
     done
