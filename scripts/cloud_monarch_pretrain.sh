@@ -162,8 +162,18 @@ case "$experts" in
   monarch) experts_tag= ;;
   monarch_dense_down) experts_tag=-dense-down ;;
   lowrank) experts_tag=-lowrank ;;
-  *) echo "MONARCH_EXPERTS must be monarch, monarch_dense_down or lowrank" >&2; exit 2 ;;
+  plain) experts_tag=-plain ;;
+  *) echo "MONARCH_EXPERTS must be monarch, monarch_dense_down, lowrank or plain" >&2; exit 2 ;;
 esac
+# routed-expert width override, e.g. 176 for an ordinary MoE at the Monarch n2 parameter count
+if [[ -n ${MONARCH_EXPERT_WIDTH:-} ]]; then
+  [[ $model == hmoe ]] || { echo "MONARCH_EXPERT_WIDTH applies to hmoe only" >&2; exit 2; }
+  model_args+=(--moe-ffn-hidden-size "$MONARCH_EXPERT_WIDTH")
+  experts_tag+=-w$MONARCH_EXPERT_WIDTH
+fi
+structure=n${blocks}${share_tag}
+[[ $experts == plain ]] && structure=plain
+[[ $experts == plain && $share != none ]] && { echo "MONARCH_SHARE needs Monarch experts" >&2; exit 2; }
 # stop early on the unchanged schedule: the run is a prefix of the full one and
 # can be resumed to the end by resubmitting without this
 exit_args=()
@@ -213,7 +223,7 @@ case "$mode" in
   *) echo "unknown mode: $mode" >&2; exit 2 ;;
 esac
 
-run_id="monarch-${model}-${arm}-n${blocks}${share_tag}${experts_tag}-${parallelism}${WORLD_SIZE}-${run_phase}${suffix}"
+run_id="monarch-${model}-${arm}-${structure}${experts_tag}-${parallelism}${WORLD_SIZE}-${run_phase}${suffix}"
 ckpt_dir="$storage_root/$run_id"
 log_root=${MONARCH_LOG_ROOT:-/home/jovyan/hmoe-cloud/monarch-pretrain}
 rank_log="$log_root/$run_id/rank-${RANK}-$(date -u +%Y%m%dT%H%M%SZ).log"

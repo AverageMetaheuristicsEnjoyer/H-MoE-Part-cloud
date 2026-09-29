@@ -15,21 +15,30 @@ def main():
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument("--monarch-blocks", type=int, choices=(2, 4), required=True)
     parser.add_argument("--monarch-share", choices=("none", "hidden"), default="none")
+    # plain: no Monarch anywhere, the ordinary MoE on this launcher (iso-param control)
     parser.add_argument(
-        "--monarch-experts", choices=("monarch", "monarch_dense_down", "lowrank"), default="monarch"
+        "--monarch-experts",
+        choices=("monarch", "monarch_dense_down", "lowrank", "plain"),
+        default="monarch",
     )
     args, remaining = parser.parse_known_args(sys.argv[1:])
     sys.argv = [sys.argv[0], *remaining]
+    plain = args.monarch_experts == "plain"
+    if plain and args.monarch_share != "none":
+        raise SystemExit("--monarch-share needs Monarch factors, not --monarch-experts plain")
 
-    from stage3_moe.monarch import install_monarch_model
+    if not plain:
+        from stage3_moe.monarch import install_monarch_model
 
-    install_monarch_model(args.monarch_blocks, args.monarch_share, args.monarch_experts)
+        install_monarch_model(args.monarch_blocks, args.monarch_share, args.monarch_experts)
     if "--optimizer" in remaining and remaining[remaining.index("--optimizer") + 1] == "muon":
         from stage3_moe.muon import install_muon_contract
-        from stage3_moe.monarch import install_monarch_muon_contract
 
         install_muon_contract(fp8_states=False)
-        install_monarch_muon_contract()
+        if not plain:
+            from stage3_moe.monarch import install_monarch_muon_contract
+
+            install_monarch_muon_contract()
 
     print(
         f"HMOE_MONARCH blocks={args.monarch_blocks} share={args.monarch_share} "

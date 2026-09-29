@@ -7,7 +7,8 @@
 #     --entry scripts/cloud_monarch_arms.sh --gpus 1 --args="lowrank full 2000" \
 #     --env MONARCH_CKPT_ROOT=/home/jovyan/monarch-pretrain
 #
-#   EXPERTS  monarch | monarch_dense_down | lowrank
+#   EXPERTS  monarch | monarch_dense_down | lowrank | plain (no Monarch anywhere;
+#            with --env MONARCH_EXPERT_WIDTH=176 the ordinary MoE at the Monarch n2 count)
 #   MODE     bench (25 steps, no eval, no checkpoint) | smoke | full
 #   EXIT     full only: stop after this iteration on the unchanged 1C schedule;
 #            resubmitting the same job resumes from the last checkpoint
