@@ -33,6 +33,7 @@ if [ "${1:-}" = "peek" ]; then
         newest=$(ls -t "$run"rank-0-*.log 2>/dev/null | head -1)
         [ -n "$newest" ] || continue
         echo "=== $(basename "$run")"
+        grep -h -m1 "number of parameters on" "$newest"
         grep -h "validation loss at iteration\|lm loss validation\|loss at iteration .* on test set" \
             "$run"rank-0-*.log | tail -12
         # train loss every 250 iterations (Megatron averages it over the log interval)
