@@ -162,7 +162,7 @@ case "$experts" in
   monarch) experts_tag= ;;
   monarch_dense_down) experts_tag=-dense-down ;;
   lowrank) experts_tag=-lowrank ;;
-  plain) experts_tag=-plain ;;
+  plain) experts_tag= ;;   # the run id says "plain" in place of the block count
   *) echo "MONARCH_EXPERTS must be monarch, monarch_dense_down, lowrank or plain" >&2; exit 2 ;;
 esac
 # routed-expert width override, e.g. 176 for an ordinary MoE at the Monarch n2 parameter count
