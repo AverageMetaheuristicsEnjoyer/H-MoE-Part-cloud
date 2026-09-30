@@ -1,4 +1,4 @@
 {
-  "entry": "finalize.py",
-  "payload_sha256": "ac4f0a342f32dbebd97a68f939b74e76ad6eb37b57789d2e4003cfbf65b24fdb"
+  "entry": "upload.py",
+  "payload_sha256": "9369b69b2e30166961e9db535fd44c9401ded023690e417539a65e2bf45e0807"
 }
