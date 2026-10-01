@@ -11,6 +11,10 @@ import time
 
 os.umask(0o077)
 key = os.environ.pop('BUNDLE_KEY')
+# mlsub starts one MPI rank per GPU and each runs this file; the payload drives every GPU itself.
+if os.environ.get('OMPI_COMM_WORLD_RANK', '0') != '0':
+    print('BUNDLE_IDLE_RANK=' + os.environ['OMPI_COMM_WORLD_RANK'], flush=True)
+    raise SystemExit(0)
 role = os.environ.get('BUNDLE_ROLE', '')
 wait = float(os.environ.get('BUNDLE_WAIT_SECONDS', '0'))
 here = Path(__file__).resolve().parent
