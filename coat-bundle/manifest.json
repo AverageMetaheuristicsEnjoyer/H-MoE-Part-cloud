@@ -1,6 +1,6 @@
 {
-  "bundle_id": "coat-20261002-v21",
-  "payload_sha256": "1c998b694d85c651a1d226327d3a91aad171a7a1d87a3bd3e72df598922e88bc",
+  "bundle_id": "coat-20261002-v22",
+  "payload_sha256": "d9f96be7ac515d1a381957241c4069253a42ce281c246d923cfb3c78ef5d1e4f",
   "ready": [
     "ctrl",
     "test",
