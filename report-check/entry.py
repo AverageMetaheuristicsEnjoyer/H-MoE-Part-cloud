@@ -11,6 +11,9 @@ all GPUs of the pod. Arguments are KEY=VALUE tokens (mlsub allows only letters, 
   payload=SHA8 mode=shell cmd=NAME                                         one of the fixed commands in SHELL below
   mode=inventory                                                           checkpoint files on the shared volumes
   mode=hfupload list=NAME                                                  upload the files of uploads/NAME.txt (HF_TOKEN env)
+  mode=hfdelete list=NAME [confirm=1]                                      verify each file of uploads/NAME.txt on HF (sha256 +
+                                                                           size of the LFS object on main); with confirm=1 delete
+                                                                           only the verified local files
 
 Results come back through the job log: a gzip+base64 tarball of the output directory (plots, result.json files,
 provenance, run logs' tails) as RCHK lines plus an RRCP receipt; decode with decode_rchk.py.
@@ -107,6 +110,34 @@ def hfupload(name):
                 time.sleep(120)
 
 
+def hfdelete(name, confirm):
+    sh('python -m pip install --user -q --disable-pip-version-check huggingface_hub 2>&1 | tail -1', check=False)
+    import site
+    sys.path.insert(0, site.getusersitepackages())
+    from huggingface_hub import HfApi
+    api = HfApi()
+    repo = 'AverageMetaheuristicsEnjoyer/hmoe-stage3-checkpoints'
+    here = Path(__file__).resolve().parent
+    for line in (here / 'uploads' / f'{name}.txt').read_text().split('\n'):
+        if not line.strip():
+            continue
+        local, remote = line.split()
+        if not Path(local).is_file():
+            print(f'HFDEL_ABSENT {local}', flush=True)
+            continue
+        digest = hashlib.sha256()
+        with open(local, 'rb') as handle:
+            for block in iter(lambda: handle.read(1 << 24), b''):
+                digest.update(block)
+        sha, size = digest.hexdigest(), Path(local).stat().st_size
+        entries = [e for e in api.list_repo_tree(repo, path_in_repo=str(Path(remote).parent), expand=True) if e.path == remote]
+        ok = bool(entries) and entries[0].lfs is not None and entries[0].lfs.sha256 == sha and entries[0].size == size
+        print(f'HFDEL_CHECK {remote} bytes={size} sha256={sha} on_hf={ok}', flush=True)
+        if ok and confirm:
+            Path(local).unlink()
+            print(f'HFDEL_REMOVED {local}', flush=True)
+
+
 def emit(directory):
     """Print a tarball of the small outputs as base64 chunks."""
     buffer = io.BytesIO()
@@ -139,6 +170,9 @@ def main():
     sh('nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader', check=False)
     if mode == 'hfupload':
         hfupload(args['list'])
+        return
+    if mode == 'hfdelete':
+        hfdelete(args['list'], args.get('confirm') == '1')
         return
     if mode == 'inventory':
         for volume in VOLUMES:
