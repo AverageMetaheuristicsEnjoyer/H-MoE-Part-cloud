@@ -231,7 +231,8 @@ def main():
             code = sh(f'python -m pytest -q tests/stage3_moe{k} 2>&1 | tee {out}/pytest.log | tail -60', cwd=repo, env=env, check=False)
         elif mode == 'replot':
             ids = ' '.join(args['ids'].split(','))
-            code = sh(f'python scripts/report_figures.py --figures {ids} --runs-dir _replot --output-dir {out}',
+            runs = '' if args.get('archived') == '1' else ' --runs-dir _replot'
+            code = sh(f'python scripts/report_figures.py --figures {ids}{runs} --output-dir {out}',
                       cwd=repo, env=env, check=False)
         elif mode == 'shell':
             code = sh(SHELL[args['cmd']], cwd=repo, env=env, check=False)
