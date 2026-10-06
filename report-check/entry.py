@@ -61,7 +61,8 @@ def sh(command, cwd=None, env=None, check=True):
 
 def decrypt(destination, expected):
     here = Path(__file__).resolve().parent
-    payload = (here / 'payload.fernet').read_bytes()
+    candidate = here / 'payloads' / f'{expected}.fernet'
+    payload = (candidate if candidate.exists() else here / 'payload.fernet').read_bytes()
     digest = hashlib.sha256(payload).hexdigest()
     if not digest.startswith(expected):
         raise SystemExit(f'payload {digest[:8]} is not the requested {expected}')
