@@ -180,7 +180,7 @@ def main():
         for base in ('/home/jovyan/shares/SR006.nfs2/mlsub-logs', '/workspace-SR006.nfs2/mlsub-logs'):
             sh(f"date -u; find {base} -path '*{job}*' -type f -exec ls -la --time-style=full-iso {{}} + 2>&1 | head",
                check=False)
-            sh(f"find {base} -path '*{job}*' -type f -name '*.log' 2>/dev/null | head -2 | while read f; do "
+            sh(f"find {base} -path '*{job}*' -type f -name stdout 2>/dev/null | head -2 | while read f; do "
                f"tail -c 400000 \"$f\" | grep -av RCHK | tail -40 | cut -c1-300; done", check=False)
         return
     if mode == 'inventory':
