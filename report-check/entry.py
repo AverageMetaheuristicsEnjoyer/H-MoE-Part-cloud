@@ -1,15 +1,16 @@
-"""Cloud.ru check entry for the public Stage 3 MoE reproduction branch.
+"""Cloud.ru check entry for the Stage 3 MoE reproduction branch (private repository Huawei-stage2, branch stage3_moe).
 
-mlsub starts one MPI rank per GPU; rank 0 clones github.com/AverageMetaheuristicsEnjoyer/Huawei-stage2 at REF and runs
-one command of that public code on all GPUs of the pod. Arguments are KEY=VALUE tokens (mlsub allows only
-letters, digits and . _ : / = + , [ ] - in --args):
+The branch is private, so its tree travels as a Fernet-encrypted payload (report-check/payload.fernet, key in the
+BUNDLE_KEY job environment). mlsub starts one MPI rank per GPU; rank 0 decrypts the tree and runs one command of it on
+all GPUs of the pod. Arguments are KEY=VALUE tokens (mlsub allows only letters, digits and . _ : / = + , [ ] - in --args):
 
-  ref=SHA mode=figure ids=9a,12a [smoke=1] [gpus=4] [revision=main]   scripts/run_report_figure.py
-  ref=SHA mode=pairs [smoke=1] [only=adamw-coatopt]                   scripts/run_report_figure.py --downstream-pairs
-  ref=SHA mode=plan ids=9,10                                          scripts/run_report_figure.py --plan
-  ref=SHA mode=pytest [k=EXPR]                                        python -m pytest tests/stage3_moe
-  ref=SHA mode=shell cmd=NAME                                         one of the fixed commands in SHELL below
-  mode=inventory                                                      checkpoint files on the shared volumes
+  payload=SHA8 mode=figure ids=9a,12a [smoke=1] [gpus=4] [revision=main]   scripts/run_report_figure.py
+  payload=SHA8 mode=pairs [smoke=1] [only=adamw-coatopt]                   scripts/run_report_figure.py --downstream-pairs
+  payload=SHA8 mode=plan ids=9,10                                          scripts/run_report_figure.py --plan
+  payload=SHA8 mode=pytest [k=EXPR]                                        python -m pytest tests/stage3_moe
+  payload=SHA8 mode=shell cmd=NAME                                         one of the fixed commands in SHELL below
+  mode=inventory                                                           checkpoint files on the shared volumes
+  mode=hfupload list=NAME                                                  upload the files of uploads/NAME.txt (HF_TOKEN env)
 
 Results come back through the job log: a gzip+base64 tarball of the output directory (plots, result.json files,
 provenance, run logs' tails) as RCHK lines plus an RRCP receipt; decode with decode_rchk.py.
@@ -30,7 +31,6 @@ if os.environ.get('OMPI_COMM_WORLD_RANK', '0') != '0':
     print('CHECK_IDLE_RANK=' + os.environ['OMPI_COMM_WORLD_RANK'], flush=True)
     raise SystemExit(0)
 
-REPO = 'https://github.com/AverageMetaheuristicsEnjoyer/Huawei-stage2'
 DATA_CANDIDATES = ['/home/jovyan/data/fineweb-edu-gpt2-megatron',
                    '/workspace-SR006.nfs2/hmoe-data/fineweb-edu-gpt2-megatron',
                    '/workspace-SR006.nfs3/hmoe-data/fineweb-edu-gpt2-megatron']
@@ -52,6 +52,56 @@ def sh(command, cwd=None, env=None, check=True):
     if check and result.returncode:
         raise SystemExit(result.returncode)
     return result.returncode
+
+
+def decrypt(destination, expected):
+    here = Path(__file__).resolve().parent
+    payload = (here / 'payload.fernet').read_bytes()
+    digest = hashlib.sha256(payload).hexdigest()
+    if not digest.startswith(expected):
+        raise SystemExit(f'payload {digest[:8]} is not the requested {expected}')
+    deps = destination.parent / 'deps'
+    sh(f'{sys.executable} -m pip install -q --disable-pip-version-check --no-cache-dir --only-binary=:all: '
+       f'--target {deps} cryptography==46.0.5')
+    sys.path.insert(0, str(deps))
+    from cryptography.fernet import Fernet
+    plaintext = Fernet(os.environ.pop('BUNDLE_KEY').encode()).decrypt(payload)
+    destination.mkdir(parents=True)
+    with tarfile.open(fileobj=io.BytesIO(plaintext), mode='r:gz') as archive:
+        archive.extractall(destination, filter='data')
+    print('CHECK_PAYLOAD ' + (destination / 'payload_manifest.json').read_text()[:300].replace('\n', ' '), flush=True)
+
+
+def hfupload(name):
+    """Upload the checkpoint files listed in uploads/NAME.txt (lines: LOCAL_PATH REMOTE_PATH) and verify sha256 + size."""
+    here = Path(__file__).resolve().parent
+    sh('python -m pip install --user -q --disable-pip-version-check huggingface_hub hf_transfer 2>&1 | tail -1', check=False)
+    import site
+    sys.path.insert(0, site.getusersitepackages())
+    os.environ.setdefault('HF_HUB_ENABLE_HF_TRANSFER', '1')
+    from huggingface_hub import HfApi
+    api = HfApi(token=os.environ['HF_TOKEN'])
+    repo = 'AverageMetaheuristicsEnjoyer/hmoe-stage3-checkpoints'
+    for line in (here / 'uploads' / f'{name}.txt').read_text().split('\n'):
+        if not line.strip():
+            continue
+        local, remote = line.split()
+        digest = hashlib.sha256()
+        with open(local, 'rb') as handle:
+            for block in iter(lambda: handle.read(1 << 24), b''):
+                digest.update(block)
+        sha, size = digest.hexdigest(), Path(local).stat().st_size
+        for attempt in range(5):
+            try:
+                api.upload_file(path_or_fileobj=local, path_in_repo=remote, repo_id=repo, commit_message=f'legacy: {remote}')
+                entry = next(e for e in api.list_repo_tree(repo, path_in_repo=str(Path(remote).parent), expand=True)
+                             if e.path == remote)
+                ok = entry.lfs is not None and entry.lfs.sha256 == sha and entry.size == size
+                print(f'HFUP {remote} bytes={size} sha256={sha} verified={ok}', flush=True)
+                break
+            except Exception as error:
+                print(f'HFUP_RETRY {remote} {type(error).__name__}', flush=True)
+                time.sleep(120)
 
 
 def emit(directory):
@@ -84,6 +134,9 @@ def main():
     mode = args.get('mode', 'figure')
     print('CHECK_ARGS ' + json.dumps(args), flush=True)
     sh('nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader', check=False)
+    if mode == 'hfupload':
+        hfupload(args['list'])
+        return
     if mode == 'inventory':
         for volume in VOLUMES:
             sh(f"find {volume} -xdev \\( -name '*.pt' -o -name 'model_optim_rng.pt' -o -name 'latest_checkpointed_iteration.txt' \\) "
@@ -94,9 +147,7 @@ def main():
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     repo = work / 'repo'
-    sh(f'git clone -q {REPO} -b stage3_moe {repo}')
-    sh(f'git -C {repo} checkout -q {args["ref"]}')
-    sh(f'git -C {repo} log --oneline -1')
+    decrypt(repo, args['payload'])
     env = dict(os.environ)
     env.pop('PYTHONNOUSERSITE', None)
     env['HF_HUB_ENABLE_HF_TRANSFER'] = env.get('HF_HUB_ENABLE_HF_TRANSFER', '1')
