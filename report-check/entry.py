@@ -181,7 +181,9 @@ def main():
             sh(f"date -u; find {base} -path '*{job}*' -type f -exec ls -la --time-style=full-iso {{}} + 2>&1 | head",
                check=False)
             sh(f"find {base} -path '*{job}*' -type f -name stdout 2>/dev/null | head -2 | while read f; do "
-               f"tail -c 400000 \"$f\" | grep -av RCHK | tail -40 | cut -c1-300; done", check=False)
+               f"tail -c 400000 \"$f\" | grep -av RCHK | tail -40 | cut -c1-300; "
+               f"grep -av RCHK \"$f\" | grep -aE 'CHECK_|Traceback|Error|FAILED|failed|status' | tail -80 | cut -c1-300; done",
+               check=False)
         return
     if mode == 'inventory':
         for volume in VOLUMES:
