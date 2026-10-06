@@ -70,6 +70,9 @@ def decrypt(destination, expected):
     with tarfile.open(fileobj=io.BytesIO(plaintext), mode='r:gz') as archive:
         archive.extractall(destination, filter='data')
     print('CHECK_PAYLOAD ' + (destination / 'payload_manifest.json').read_text()[:300].replace('\n', ' '), flush=True)
+    # result_writer records `git rev-parse HEAD`: give the decrypted tree a local commit.
+    sh(f'git -C {destination} init -q && git -C {destination} add -A && '
+       f'git -C {destination} -c user.name=check -c user.email=check@localhost commit -qm payload-{expected}')
 
 
 def hfupload(name):
