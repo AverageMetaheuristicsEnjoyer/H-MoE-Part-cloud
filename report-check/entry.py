@@ -6,6 +6,7 @@ all GPUs of the pod. Arguments are KEY=VALUE tokens (mlsub allows only letters, 
 
   payload=SHA8 mode=figure ids=9a,12a [smoke=1] [gpus=4] [revision=main]   scripts/run_report_figure.py
   payload=SHA8 mode=pairs [smoke=1] [only=adamw-coatopt,...]                scripts/run_report_figure.py --downstream-pairs
+  payload=SHA8 mode=replot ids=9,16                                         scripts/report_figures.py --runs-dir _replot
   payload=SHA8 mode=plan ids=9,10                                          scripts/run_report_figure.py --plan
   payload=SHA8 mode=pytest [k=EXPR]                                        python -m pytest tests/stage3_moe
   payload=SHA8 mode=shell cmd=NAME                                         one of the fixed commands in SHELL below
@@ -228,6 +229,10 @@ def main():
             k = f' -k "{args["k"]}"' if args.get('k') else ''
             out.mkdir(parents=True, exist_ok=True)
             code = sh(f'python -m pytest -q tests/stage3_moe{k} 2>&1 | tee {out}/pytest.log | tail -60', cwd=repo, env=env, check=False)
+        elif mode == 'replot':
+            ids = ' '.join(args['ids'].split(','))
+            code = sh(f'python scripts/report_figures.py --figures {ids} --runs-dir _replot --output-dir {out}',
+                      cwd=repo, env=env, check=False)
         elif mode == 'shell':
             code = sh(SHELL[args['cmd']], cwd=repo, env=env, check=False)
     finally:
