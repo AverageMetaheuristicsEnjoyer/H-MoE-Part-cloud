@@ -5,7 +5,7 @@ BUNDLE_KEY job environment). mlsub starts one MPI rank per GPU; rank 0 decrypts 
 all GPUs of the pod. Arguments are KEY=VALUE tokens (mlsub allows only letters, digits and . _ : / = + , [ ] - in --args):
 
   payload=SHA8 mode=figure ids=9a,12a [smoke=1] [gpus=4] [revision=main]   scripts/run_report_figure.py
-  payload=SHA8 mode=pairs [smoke=1] [only=adamw-coatopt]                   scripts/run_report_figure.py --downstream-pairs
+  payload=SHA8 mode=pairs [smoke=1] [only=adamw-coatopt,...]                scripts/run_report_figure.py --downstream-pairs
   payload=SHA8 mode=plan ids=9,10                                          scripts/run_report_figure.py --plan
   payload=SHA8 mode=pytest [k=EXPR]                                        python -m pytest tests/stage3_moe
   payload=SHA8 mode=shell cmd=NAME                                         one of the fixed commands in SHELL below
@@ -206,8 +206,9 @@ def main():
             extra = (' --smoke' if args.get('smoke') == '1' else '') + (f' --gpus {args["gpus"]}' if args.get('gpus') else '')
             code = sh(f'python scripts/run_report_figure.py {ids} {common}{extra}', cwd=repo, env=env, check=False)
         elif mode == 'pairs':
-            extra = (' --smoke' if args.get('smoke') == '1' else '') + (f' --only {args["only"]}' if args.get('only') else '')
-            code = sh(f'python scripts/run_report_figure.py --downstream-pairs {common}{extra}', cwd=repo, env=env, check=False)
+            endpoints = ' '.join(args.get('only', '').split(','))
+            extra = ' --smoke' if args.get('smoke') == '1' else ''
+            code = sh(f'python scripts/run_report_figure.py --downstream-pairs {endpoints} {common}{extra}', cwd=repo, env=env, check=False)
         elif mode == 'plan':
             ids = ' '.join(args['ids'].split(','))
             code = sh(f'python scripts/run_report_figure.py {ids} --plan {common}', cwd=repo, env=env, check=False)
