@@ -47,6 +47,12 @@ SHELL = {
     'env': 'python -c "import torch, transformer_engine, triton; print(torch.__version__, torch.version.cuda, '
            'transformer_engine.__version__, triton.__version__)"; nvidia-smi; df -h /tmp',
     'setup-check': 'bash setup.sh --check-only',
+    'findlogs': 'for r in /workspace-SR006.nfs3/hmoe-cloud/coat-20261002 /workspace-SR006.nfs2/hmoe-cloud /home/jovyan/hmoe-cloud; do '
+                'echo "== $r"; ls -d $r/runs-r* 2>&1 | head; '
+                'find $r -maxdepth 5 -path "*runs-r*" \\( -name "train-*.log" -o -name results.jsonl -o -name routing_telemetry.jsonl \\) '
+                '-printf "LOGF %s %TY-%Tm-%Td %p\\n" 2>/dev/null | sort -k4 | head -400; '
+                'find $r -maxdepth 6 -path "*runs-r*" -type d -name "offline-run-*" -printf "WANDB %p\\n" 2>/dev/null | head -100; '
+                'du -sh $r/runs-r* 2>/dev/null; done; df -h /workspace-SR006.nfs3 /workspace-SR006.nfs2',
 }
 
 
