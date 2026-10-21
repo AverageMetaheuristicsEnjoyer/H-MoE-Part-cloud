@@ -1,4 +1,4 @@
-"""Check-only guard (installed into the user site of the emucheck pod): with STAGE3_MOE_FP8_BACKEND=emulated, any native FP8
+"""Check-only guard (copied as sitecustomize.py into the pod's copy of the repository root, which the launcher puts on PYTHONPATH): with STAGE3_MOE_FP8_BACKEND=emulated, any native FP8
 GEMM (torch._scaled_mm) or Triton kernel that receives an FP8 tensor raises, so an emulated run on a Hopper GPU shows
 that the emulated path never needs native FP8 support."""
 import os
@@ -22,4 +22,6 @@ if os.environ.get("STAGE3_MOE_FP8_BACKEND") == "emulated":
         return _run(self, *args, **kwargs)
 
     jit.JITFunction.run = run
-    print(f"EMU_GUARD_ACTIVE pid={os.getpid()}", flush=True)
+    import sys
+
+    print(f"EMU_GUARD_ACTIVE pid={os.getpid()}", file=sys.stderr, flush=True)
