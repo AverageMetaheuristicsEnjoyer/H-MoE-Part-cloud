@@ -193,6 +193,20 @@ def main():
                f"grep -av RCHK \"$f\" | grep -aE 'CHECK_|Traceback|Error|FAILED|failed|status' | tail -80 | cut -c1-300; done",
                check=False)
         return
+    if mode == 'collectlogs':
+        # Train logs and results.jsonl of the listed from-scratch runs (ROUND/ARM,...), emitted as RCHK chunks.
+        out = Path('/tmp/report-check/out')
+        shutil.rmtree(out, ignore_errors=True)
+        base = Path('/workspace-SR006.nfs3/hmoe-cloud/coat-20261002')
+        for run in args['runs'].split(','):
+            for path in sorted((base / run).glob('*/*')):
+                if path.name.startswith('train-') or path.name == 'results.jsonl':
+                    target = out / run / path.parent.name / path.name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(path, target)
+                    print(f'COLLECT {path.stat().st_size} {path}', flush=True)
+        emit(out)
+        return
     if mode == 'inventory':
         for volume in VOLUMES:
             sh(f"find {volume} -xdev \\( -name '*.pt' -o -name 'model_optim_rng.pt' -o -name 'latest_checkpointed_iteration.txt' \\) "
