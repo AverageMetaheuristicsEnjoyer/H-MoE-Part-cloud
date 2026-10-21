@@ -244,6 +244,12 @@ def main():
             if args.get('pytest', '1') == '1':
                 code = sh(f'python -m pytest -q -s tests/stage3_moe/test_fp8_emulation.py 2>&1 | tee {out}/pytest.log | '
                           f'grep -E "EMU_REPORT|passed|failed|Error|assert" | tail -80', cwd=repo, env=env, check=False)
+            if args.get('guard') == '1':
+                user_site = subprocess.run([sys.executable, '-c', 'import site; print(site.getusersitepackages())'],
+                                           env=env, capture_output=True, text=True).stdout.strip()
+                Path(user_site).mkdir(parents=True, exist_ok=True)
+                shutil.copy(Path(__file__).resolve().parent / 'emuguard' / 'usercustomize.py', user_site)
+                print(f'CHECK_GUARD {user_site}', flush=True)
             iters = int(args.get('iters', '30'))
             checkpoints = {'coatact': 'coatact-fused', 'coat': 'coat-fused', 'blockwise': 'te-blockwise',
                            'delayed1024': 'te-delayed1024'}
@@ -262,7 +268,7 @@ def main():
                                    STAGE3_MOE_OUTPUT_ROOT=str(work / 'runs'),
                                    STAGE3_MOE_RUN_DIR=str(out / f'{optimizer}-{variant}-{backend}'), CUDA_VISIBLE_DEVICES='0')
                     rc = sh(f'bash scripts/run_series.sh {optimizer} {variant} continue 2>&1 | '
-                            f'grep -E "INSTALLED|lm loss|elapsed time per iteration|Error|error|Traceback|TRAIN_EXIT" | tail -120',
+                            f'grep -E "EMU_GUARD|INSTALLED|lm loss|elapsed time per iteration|Error|error|Traceback|TRAIN_EXIT" | tail -120',
                             cwd=repo, env=run_env, check=False)
                     code = code or rc
                 shutil.rmtree(work / 'ckpt', ignore_errors=True)
