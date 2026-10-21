@@ -237,6 +237,35 @@ def main():
                       cwd=repo, env=env, check=False)
         elif mode == 'shell':
             code = sh(SHELL[args['cmd']], cwd=repo, env=env, check=False)
+        elif mode == 'emucheck':
+            # FP8 emulation: GPU tests, then native vs emulated continuations of the 13,794 checkpoints.
+            sh('python -m pip install --user -q pytest 2>&1 | tail -1', env=env, check=False)
+            out.mkdir(parents=True, exist_ok=True)
+            if args.get('pytest', '1') == '1':
+                code = sh(f'python -m pytest -q -s tests/stage3_moe/test_fp8_emulation.py 2>&1 | tee {out}/pytest.log | '
+                          f'grep -E "EMU_REPORT|passed|failed|Error|assert" | tail -80', cwd=repo, env=env, check=False)
+            iters = int(args.get('iters', '30'))
+            checkpoints = {'coatact': 'coatact-fused', 'coat': 'coat-fused', 'blockwise': 'te-blockwise',
+                           'delayed1024': 'te-delayed1024'}
+            optimizer = args.get('opt', 'adamw')
+            for variant in [v for v in args.get('variants', '').split(',') if v]:
+                name = f'{optimizer}-{checkpoints[variant]}-iter0013794-full.pt'
+                load = subprocess.run(f'bash scripts/download_checkpoint.sh coat {name} {work}/ckpt | grep ^LOAD_ROOT=',
+                                      shell=True, cwd=repo, env=env, capture_output=True, text=True).stdout.strip()
+                print(f'CHECK_LOAD {variant} {load}', flush=True)
+                for backend in args.get('backends', 'native,emulated').split(','):
+                    run_env = dict(env, STAGE3_MOE_FP8_BACKEND=backend, STAGE3_MOE_LOAD=load.split('=', 1)[1],
+                                   STAGE3_MOE_TRAIN_ITERS=str(13794 + iters), STAGE3_MOE_WARMUP_STEPS='5',
+                                   STAGE3_MOE_MEASURE_STEPS=str(iters - 5), STAGE3_MOE_MICRO_BATCH=args.get('mb', '16'),
+                                   STAGE3_MOE_LOG_INTERVAL='1', STAGE3_MOE_EVAL_INTERVAL='1000000',
+                                   STAGE3_MOE_EVAL_ITERS=args.get('eval_iters', '8'), STAGE3_MOE_DATA_ROOT=data,
+                                   STAGE3_MOE_OUTPUT_ROOT=str(work / 'runs'),
+                                   STAGE3_MOE_RUN_DIR=str(out / f'{optimizer}-{variant}-{backend}'), CUDA_VISIBLE_DEVICES='0')
+                    rc = sh(f'bash scripts/run_series.sh {optimizer} {variant} continue 2>&1 | '
+                            f'grep -E "INSTALLED|lm loss|elapsed time per iteration|Error|error|Traceback|TRAIN_EXIT" | tail -120',
+                            cwd=repo, env=run_env, check=False)
+                    code = code or rc
+                shutil.rmtree(work / 'ckpt', ignore_errors=True)
     finally:
         print(f'CHECK_DONE mode={mode} exit={code} seconds={int(time.time() - started)}', flush=True)
         if out.exists():
