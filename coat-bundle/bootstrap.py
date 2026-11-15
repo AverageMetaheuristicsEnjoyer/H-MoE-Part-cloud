@@ -39,9 +39,15 @@ if actual_payload_sha256 != public_manifest['payload_sha256']:
 with tempfile.TemporaryDirectory(prefix='encrypted-job-', dir='/tmp') as directory:
     destination = Path(directory)
     deps = destination / 'dependencies'
-    subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '--disable-pip-version-check',
-                    '--no-cache-dir', '--only-binary=:all:', '--target', str(deps),
-                    'cryptography==46.0.5'], check=True)
+    pip_started = time.monotonic()
+    pip_result = subprocess.run(['timeout', '-k', '5s', '120s', sys.executable, '-m', 'pip',
+                                 'install', '-q', '--disable-pip-version-check', '--no-cache-dir',
+                                 '--only-binary=:all:', '--target', str(deps), 'cryptography==46.0.5'])
+    pip_seconds = time.monotonic() - pip_started
+    print(f'BOOTSTRAP_DEPENDENCY_EXIT={pip_result.returncode} BOOTSTRAP_DEPENDENCY_SECONDS={pip_seconds:.3f} '
+          'BOOTSTRAP_DEPENDENCY_TIMEOUT=120 BOOTSTRAP_DEPENDENCY_TARGET=job_tmp', flush=True)
+    if pip_result.returncode:
+        raise RuntimeError(f'Isolated bootstrap dependency installation failed: {pip_result.returncode}')
     sys.path.insert(0, str(deps))
     from cryptography.fernet import Fernet
     plaintext = Fernet(key.encode()).decrypt(payload)
