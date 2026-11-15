@@ -1,0 +1,33 @@
+group: stage3_broad_v1
+task:
+  - blimp
+  - swag
+  - mnli
+  - mnli_mismatch
+  - qnli
+  - task: qqp
+    num_fewshot: 0
+    metric_list:
+      - metric: acc
+        aggregation: mean
+        higher_is_better: true
+  - prost
+  - toxigen
+  - moral_stories
+  - boolq
+  - race
+  - task: lambada_openai
+    num_fewshot: 0
+    metric_list:
+      - metric: acc
+        aggregation: mean
+        higher_is_better: true
+  - task: pile_10k
+    num_fewshot: 0
+    metric_list:
+      - metric: bits_per_byte
+        aggregation: bits_per_byte
+        higher_is_better: false
+  - leaderboard_mmlu_pro
+metadata:
+  version: 1.0

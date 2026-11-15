@@ -1,0 +1,26 @@
+group: stage3_broad_v3
+# stage3_broad_v1 without the tasks a ~1B model scores at chance (MMLU-Pro, ToxiGen, PROST, MNLI/QNLI/QQP, BoolQ,
+# RACE), plus basic_v2. Moral Stories is left out: its lm-eval loader is a dataset script, which the image's
+# `datasets` no longer runs (smoke 2026-10-04). One group name, because mlsub --env values may not contain commas (STAGE3_MOE_EVAL_TASKS).
+task:
+  - basic_v2_hellaswag
+  - basic_v2_arc_easy
+  - basic_v2_arc_challenge
+  - basic_v2_piqa
+  - basic_v2_gsm8k_gold_bpb_5shot
+  - blimp
+  - swag
+  - task: lambada_openai
+    num_fewshot: 0
+    metric_list:
+      - metric: acc
+        aggregation: mean
+        higher_is_better: true
+  - task: pile_10k
+    num_fewshot: 0
+    metric_list:
+      - metric: bits_per_byte
+        aggregation: bits_per_byte
+        higher_is_better: false
+metadata:
+  version: 1.0

@@ -1,0 +1,783 @@
+#!/usr/bin/env bash
+# Stage 3 MoE matched pretraining, WSD trunk-and-branch.
+#
+#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|lr-sweep|smoke|resume-gate|stability|lr-screen|routing-calibration|routing-calibration-2254|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|corrected-time-match|time-match-stretched-decay|schedule-tail|schedule-tail-smoke|eval-lm-fixed|eval-routing-fixed|eval-downstream
+#
+# smoke exercises save and resume; bench measures throughput and peak memory with no
+# checkpoint traffic; resume-bench does the same from the trunk branch point, so the
+# measured steps sit in the phase training actually runs in. STAGE3_MOE_RUN_SUFFIX keeps
+# concurrent variants from sharing a run directory or a checkpoint.
+#
+# The schedule follows docs/design.md:182 -- linear warmup on steps 1-173,
+# constant peak LR through step 13,794, exponential decay over the final 20% to
+# 0.1x peak at step 17,242 (7,344,816,128 tokens, the Ling MoE-optimal budget).
+# Because the stable phase is at constant LR, one trunk serves every budget: a
+# shorter budget just branches off earlier and runs its own decay tail.
+set -euo pipefail
+
+arm=${1:?usage: run_stage3_moe_pretrain.sh ARM MODE}
+mode=${2:?usage: run_stage3_moe_pretrain.sh ARM MODE}
+root=$(cd "$(dirname "$0")/.." && pwd)
+source "$root/configs/stage3-moe-1p029b.sh"
+
+# --- budget, in steps of 208 x 2048 = 425,984 loss tokens ---
+full_iters=17242          # 7,344,816,128 tokens = 1C for this MoE
+full_decay_iters=3448     # final 20%, starts at step 13,795
+time_match_branch=13794
+time_match_plateau_iters=2328
+warmup_iters=173          # first 1%
+short_iters=2818          # 1,200,422,912 tokens
+short_decay_iters=564     # final 20% of the short budget
+short_branch=$((short_iters - short_decay_iters))   # 2254
+
+global_batch=208
+micro_batch=${STAGE3_MOE_MICRO_BATCH:-4}            # 4 x DP2 x accum26 = 208
+data_root=${STAGE3_MOE_DATA_ROOT:-/home/jovyan/data/fineweb-edu-gpt2-megatron/data}
+train_data_prefix=${STAGE3_MOE_TRAIN_DATA_PREFIX:-$data_root/train}
+valid_data_prefix=${STAGE3_MOE_VALID_DATA_PREFIX:-$data_root/development}
+test_data_prefix=${STAGE3_MOE_TEST_DATA_PREFIX:-$data_root/final}
+ckpt_root=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs3/hmoe-checkpoints/stage3}
+log_root=${STAGE3_MOE_LOG_ROOT:-/home/jovyan/hmoe-cloud/pretrain}
+
+# What an FP8-GEMM arm passes to MCore. The default is what every 1C arm ran: per-tensor
+# delayed scaling on MCore's own dataclass defaults, i.e. amax_history_len=1 and
+# most_recent -- neither TE's default (1024/max) nor the 1024/max of NVIDIA's reference
+# FP8 scripts, and the opposite of docs/design.md:735-740, which rejected delayed scaling
+# outright. STAGE3_MOE_FP8_COMPUTE_ARGS replaces the whole list so a recipe probe can vary
+# it without minting an arm per variant. Unset, every existing mode reproduces byte for byte.
+fp8_compute=(--fp8-format hybrid --fp8-recipe delayed)
+if [[ -n ${STAGE3_MOE_FP8_COMPUTE_ARGS:-} ]]; then
+  read -ra fp8_compute <<<"$STAGE3_MOE_FP8_COMPUTE_ARGS"
+fi
+
+case "$arm" in
+  adamw_bf16_state_fp32) optimizer=adam; state_precision=fp32; compute=() ;;
+  adamw_bf16_state_fp8)  optimizer=adam; state_precision=fp8;  compute=() ;;
+  muon_bf16_state_fp32)  optimizer=muon; state_precision=fp32; compute=() ;;
+  muon_bf16_state_fp8)   optimizer=muon; state_precision=fp8;  compute=() ;;
+  adamw_fp8gemm_state_fp32) optimizer=adam; state_precision=fp32; compute=("${fp8_compute[@]}") ;;
+  muon_fp8gemm_state_fp32)  optimizer=muon; state_precision=fp32; compute=("${fp8_compute[@]}") ;;
+  adamw_fp8gemm_state_fp8) optimizer=adam; state_precision=fp8; compute=("${fp8_compute[@]}") ;;
+  muon_fp8gemm_state_fp8) optimizer=muon; state_precision=fp8; compute=("${fp8_compute[@]}") ;;
+  frugal_coord_fp8gemm_state_fp8) optimizer=frugal; state_precision=fp8; compute=("${fp8_compute[@]}") ;;
+  frugal_coord_bf16_state_fp32) optimizer=frugal; state_precision=fp32; compute=() ;;
+  # FP8 GEMM is a model-level setting, so it composes with any optimizer. Routing telemetry
+  # matters more here than on the other arms: Frugal's experts look collapsed for the first
+  # few hundred steps (min/mean 0.0 at 235, 0.002 at 587, recovered to 0.792 by 2,750) and
+  # FP8 GEMM independently worsens early routing (AdamW's first-window CV .2254 against
+  # .0587 in bf16). Both together will look alarming early and must not be read as failure.
+  frugal_coord_fp8gemm_state_fp32) optimizer=frugal; state_precision=fp32; compute=("${fp8_compute[@]}") ;;
+  frugal_coord_bf16_state_fp8) optimizer=frugal; state_precision=fp8;  compute=() ;;
+  slimadam_bf16_state_fp32) optimizer=slimadam; state_precision=fp32; compute=() ;;
+  slimadam_coat_state_fp32) optimizer=slimadam; state_precision=fp32; compute=() ;;
+  slimadam_fp8gemm_state_fp32) optimizer=slimadam; state_precision=fp32; compute=("${fp8_compute[@]}") ;;
+  # AdEMAMix (stage3_moe/ademamix.py): the optimizer-switching target of SOW Stage 3 item 3.
+  ademamix_bf16_state_fp32) optimizer=ademamix; state_precision=fp32; compute=() ;;
+  ademamix_bf16_state_fp8) optimizer=ademamix; state_precision=fp8; compute=() ;;
+  ademamix_fp8gemm_state_fp32) optimizer=ademamix; state_precision=fp32; compute=("${fp8_compute[@]}") ;;
+  ademamix_coat_state_fp32) optimizer=ademamix; state_precision=fp32; compute=() ;;
+  ademamix_coat_state_fp8) optimizer=ademamix; state_precision=fp8; compute=() ;;
+  # COAT FP8 activation flow (stage3_moe/coat_activation.py); not TE FP8, so no fp8 flags.
+  adamw_coat_state_fp8) optimizer=adam; state_precision=fp8; compute=() ;;
+  muon_coat_state_fp8) optimizer=muon; state_precision=fp8; compute=() ;;
+  adamw_coat_state_fp32) optimizer=adam; state_precision=fp32; compute=() ;;
+  muon_coat_state_fp32) optimizer=muon; state_precision=fp32; compute=() ;;
+  *) echo "unknown arm: $arm" >&2; exit 2 ;;
+esac
+probe_warmup=20
+probe_measure=100
+optimizer_args=()
+[[ $optimizer == muon ]] && optimizer_args=("${STAGE3_MOE_MUON_ARGS[@]}")
+learning_rate=${STAGE3_MOE_LR:-1.63e-3}
+# Derived rather than a second literal, so sweeping the peak carries the floor with it and
+# the 0.1x ratio cannot silently drift. LC_ALL=C is not decoration: under a comma-decimal
+# locale awk prints "0,000163" and MCore gets a value it cannot parse as a float.
+min_learning_rate=${STAGE3_MOE_MIN_LR:-$(LC_ALL=C awk -v l="$learning_rate" 'BEGIN{printf "%.6g", l/10}')}
+adam_beta2=${STAGE3_MOE_ADAM_BETA2:-0.95}
+
+trunk_dir="$ckpt_root/trunk/$arm"
+decay_dir="$ckpt_root/1p2b/$arm"
+
+run_id_eval="stage3-$arm-$mode${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
+eval_args=()
+phase_args=()
+exit_args=()
+full_dir="$ckpt_root/${STAGE3_MOE_FULL_DIR:-1c}/$arm"
+
+case "$mode" in
+  coldstart)
+    train_iters=${STAGE3_MOE_COLDSTART_ITERS:-1000}
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    save_args=()
+    load_args=()
+    probe_warmup=0
+    probe_measure=1
+    ;;
+  full)
+    # The 1C budget: 17,242 steps = 7,344,816,128 tokens, decay tail included.
+    # This is not a new run. `trunk` was already launched on exactly this schedule
+    # (--lr-decay-iters 17242, --lr-wsd-decay-iters 3448) and stopped at 2254 inside the
+    # constant-LR plateau, so continuing it reproduces the single 1C curve. train_iters is
+    # the only argument that changes, and it is precisely what makes the parameter
+    # scheduler assert (wd_incr_steps = train_iters * global_batch), hence the override --
+    # weight decay is constant here (start_wd = end_wd = 0.1) and every LR argument
+    # matches, so the rebuilt schedule is identical and num_steps still comes from the
+    # checkpoint.
+    # STAGE3_MOE_FULL_TRAIN_ITERS: an early stop on the same schedule (noise-floor replicates).
+    train_iters=${STAGE3_MOE_FULL_TRAIN_ITERS:-$full_iters}
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    mkdir -p "$full_dir"
+    # 363 x 38 = 13,794 = lr_decay_iters - lr_wsd_decay_iters, which the scheduler makes
+    # the last step at peak LR (optimizer_param_scheduler.py:263-266: coeff is 1.0 while
+    # num_steps <= wsd_anneal_start_). So a checkpoint lands exactly on the end of the
+    # stable phase. The trunk's 322 cannot: it divides 2254, which is why it was chosen,
+    # but 13,794 = 2*3*11^2*19 shares only a factor of 2 with it, and the nearest saves
+    # would straddle the boundary at 13,524 and 13,846.
+    #
+    # Retaining that one iteration is the whole point of a WSD run. The stable phase is
+    # constant-LR, so every shorter budget, every alternative decay tail and any later WSM
+    # merge branch from it -- exactly as the 1.2B deliverables branched from the trunk at
+    # 2254. Without it those cost a 13,794-step re-run. 13,794 is the only multiple of
+    # itself below 17,242, so precisely one checkpoint is ever retained; everything else is
+    # dropped as soon as its successor is on disk and the tracker points at it.
+    save_args=(--save "$full_dir" --save-interval 363 --save-retain-interval 13794)
+    load_args=(--load "$full_dir" --override-opt_param-scheduler)
+    ;;
+  trunk)
+    # Stable phase only: stop at the branch point, never reaching decay.
+    train_iters=$short_branch
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    # Keep the latest for crash resume; retain the branch point permanently.
+    save_args=(--save "$trunk_dir" --save-interval 322 --save-retain-interval "$short_branch")
+    load_args=(--load "$trunk_dir")
+    ;;
+  decay-1p2b)
+    train_iters=$short_iters
+    target_iters=$short_iters
+    decay_iters=$short_decay_iters
+    mkdir -p "$decay_dir"
+    # Seed the branch from the trunk with hardlinks: same filesystem, no copy,
+    # no extra space, and the run can then load and save in one directory.
+    if [[ ! -f "$decay_dir/latest_checkpointed_iteration.txt" ]]; then
+      src=$(printf '%s/iter_%07d' "$trunk_dir" "$short_branch")
+      [[ -d $src ]] || { echo "trunk branch point missing: $src" >&2; exit 2; }
+      cp -al "$src" "$decay_dir/" 2>/dev/null || cp -a "$src" "$decay_dir/"
+      echo "$short_branch" > "$decay_dir/latest_checkpointed_iteration.txt"
+    fi
+    # Only the endpoint is kept, and without optimizer state: we never resume
+    # from it, it feeds validation and downstream evaluation.
+    save_args=(--save "$decay_dir" --save-interval "$short_decay_iters" --no-save-optim --no-save-rng)
+    load_args=(--load "$decay_dir" --override-opt_param-scheduler)
+    ;;
+  smoke)
+    # Exercises the whole path cheaply: real data, 2 GPUs, checkpoint save and
+    # resume on the alternate volume, loggers. Three checkpoints of ~7.3 GB per
+    # run filled the 100 GB volume twice, so they are removed when the run ends;
+    # set STAGE3_MOE_KEEP_SMOKE_CKPT=1 to keep them and re-run to test resume.
+    train_iters=${STAGE3_MOE_SMOKE_ITERS:-25}
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    smoke_dir="$ckpt_root/smoke/$arm${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
+    save_args=(--save "$smoke_dir" --save-interval 10 --save-retain-interval 1000000)
+    load_args=(--load "$smoke_dir" --override-opt_param-scheduler)
+    probe_warmup=5
+    probe_measure=10
+    ;;
+  resume-gate)
+    case "$arm" in
+      frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) echo "resume-gate is only defined for Frugal CoordAdamW and SlimAdam" >&2; exit 2 ;;
+    esac
+    train_iters=52
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    resume_dir="$ckpt_root/resume-gate/$arm${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
+    mkdir -p "$resume_dir"
+    save_args=(--save "$resume_dir" --save-interval 50)
+    load_args=(--load "$resume_dir")
+    if [[ ! -f $resume_dir/latest_checkpointed_iteration.txt ]]; then
+      exit_args=(--exit-interval 50)
+    fi
+    probe_warmup=0
+    probe_measure=2
+    ;;
+  stability)
+    case "$arm" in
+      frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) echo "stability is only defined for Frugal CoordAdamW and SlimAdam" >&2; exit 2 ;;
+    esac
+    train_iters=235
+    target_iters=$train_iters
+    decay_iters=47
+    warmup_iters=2
+    gate_dir="$ckpt_root/stability/$arm${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
+    mkdir -p "$gate_dir"
+    save_args=(--save "$gate_dir" --save-interval "$train_iters")
+    load_args=()
+    ;;
+  lr-screen)
+    case "$arm" in
+      frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) echo "lr-screen is only defined for Frugal CoordAdamW and SlimAdam" >&2; exit 2 ;;
+    esac
+    train_iters=587
+    target_iters=$train_iters
+    decay_iters=117
+    warmup_iters=6
+    gate_dir="$ckpt_root/lr-screen/$arm${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
+    mkdir -p "$gate_dir"
+    save_args=(--save "$gate_dir" --save-interval "$train_iters")
+    load_args=()
+    ;;
+  routing-calibration)
+    case "$arm" in
+      adamw_bf16_state_fp32|frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) echo "routing-calibration is only defined for matched AdamW, Frugal CoordAdamW, and SlimAdam" >&2; exit 2 ;;
+    esac
+    # Reproduce the first 587 steps of the full baseline schedule exactly: the
+    # 173-step warmup followed by peak LR, with the full run's decay still far away.
+    train_iters=587
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    gate_dir="$ckpt_root/routing-calibration/$arm${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
+    mkdir -p "$gate_dir"
+    save_args=(--save "$gate_dir" --save-interval "$train_iters")
+    load_args=()
+    ;;
+  routing-calibration-2254)
+    case "$arm" in
+      adamw_bf16_state_fp32|frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) echo "routing-calibration-2254 is only defined for matched AdamW, Frugal CoordAdamW, and SlimAdam" >&2; exit 2 ;;
+    esac
+    routing_source=${STAGE3_MOE_ROUTING_RESUME_SOURCE:?set STAGE3_MOE_ROUTING_RESUME_SOURCE}
+    routing_output=${STAGE3_MOE_ROUTING_RESUME_OUTPUT:?set STAGE3_MOE_ROUTING_RESUME_OUTPUT}
+    train_iters=$short_branch
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    mkdir -p "$routing_output"
+    save_args=(--save "$routing_output" --save-interval "$train_iters")
+    load_args=(--load "$routing_source" --override-opt_param-scheduler)
+    ;;
+  bench)
+    # Throughput and peak memory only. No checkpoint traffic, so an NFS write never
+    # lands inside the measured window and topologies stay comparable.
+    probe_warmup=${STAGE3_MOE_BENCH_WARMUP:-5}
+    probe_measure=${STAGE3_MOE_BENCH_MEASURE:-10}
+    train_iters=$((probe_warmup + probe_measure + 10))
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    save_args=()
+    load_args=()
+    ;;
+  resume-bench)
+    # Steady-state timing. `bench` measures 25 cold iterations of an untrained model,
+    # which is a different regime: at iteration 2254 the checkpoint carries trained
+    # router scores and biases, and FP8 delayed scaling measures very differently there.
+    # Resume the branch point, run a short window, never write a checkpoint.
+    train_iters=$((short_branch + ${STAGE3_MOE_BENCH_ITERS:-150}))
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    save_args=()
+    # The scheduler derives wd_incr_steps from train_iters, which no longer equals the
+    # trunk's, and refuses to load on the mismatch. Weight decay is constant here
+    # (start_wd = end_wd = 0.1) and every LR argument matches the trunk, so overriding
+    # rebuilds the identical schedule; num_steps still comes from the checkpoint.
+    bench_load=${STAGE3_MOE_BENCH_LOAD:-$trunk_dir}
+    load_args=(--load "$bench_load" --override-opt_param-scheduler)
+    ;;
+  recipe-probe)
+    # Compare FP8 recipes against each other and against bf16 on the same weights, the
+    # same optimizer state and the same data. The base is a *bf16* checkpoint on purpose:
+    # it carries no TE FP8 metadata, so no variant inherits another recipe's amax history
+    # and every arm starts from an identical, recipe-neutral state.
+    #
+    # The window sits inside the 1C plateau where the grad-norm spikes actually happen --
+    # the FP8-GEMM arms exceeded 0.3 on ~3.7 % of logged steps between 6k and 15k while
+    # no bf16 arm ever passed 0.15 in 17,242 steps -- so a few hundred steps already
+    # separate a recipe that spikes from one that does not. Nothing is saved.
+    train_iters=$(( ${STAGE3_MOE_PROBE_BASE_ITER:-$time_match_branch} + ${STAGE3_MOE_PROBE_ITERS:-400} ))
+    # Decay branch (SOW Stage 4, steps to a target loss): STAGE3_MOE_PROBE_TARGET_ITERS / _DECAY_ITERS put the WSD
+    # decay of length D right after a plateau checkpoint B (target = B + D), so the branch ends at B + D with LR 0.1x.
+    # The plateau is constant-LR, so the trajectory up to B is the one a run with that shorter budget would have had.
+    target_iters=${STAGE3_MOE_PROBE_TARGET_ITERS:-$full_iters}
+    decay_iters=${STAGE3_MOE_PROBE_DECAY_ITERS:-$full_decay_iters}
+    probe_load=${STAGE3_MOE_PROBE_LOAD:?set STAGE3_MOE_PROBE_LOAD to the base checkpoint directory}
+    save_args=()
+    # Optimizer-switching runs keep their endpoint (weights only) for downstream scoring and delivery;
+    # STAGE3_MOE_PROBE_SAVE_INTERVAL adds periodic weights-only saves (WSM checkpoint merging). MCore
+    # saves the endpoint as well when it is not a multiple of the interval.
+    if [[ -n ${STAGE3_MOE_PROBE_SAVE_DIR:-} ]]; then
+      save_args=(--save "$STAGE3_MOE_PROBE_SAVE_DIR" --save-interval "${STAGE3_MOE_PROBE_SAVE_INTERVAL:-$train_iters}" --no-save-optim --no-save-rng)
+      # STAGE3_MOE_PROBE_SAVE_OPTIM=1: keep the optimizer state too, so a later switch can resume warm from this endpoint.
+      [[ ${STAGE3_MOE_PROBE_SAVE_OPTIM:-0} == 1 ]] && save_args=(--save "$STAGE3_MOE_PROBE_SAVE_DIR" --save-interval "${STAGE3_MOE_PROBE_SAVE_INTERVAL:-$train_iters}")
+    fi
+    # Same reason as resume-bench: train_iters no longer equals the one the checkpoint was
+    # written with, so the scheduler has to be rebuilt. Every LR argument is unchanged, so
+    # the rebuilt schedule is the 1C schedule and num_steps still comes from the checkpoint.
+    load_args=(--load "$probe_load" --override-opt_param-scheduler)
+    # A loss probe needs no timing window; a timing probe sets one.
+    probe_warmup=${STAGE3_MOE_PROBE_WARMUP:-0}
+    probe_measure=${STAGE3_MOE_PROBE_MEASURE:-1}
+    # A data-switch probe needs the phase-local offset: with the transition set to the very
+    # iteration being resumed, consumed_train_samples_in_current_phase is 0, so the new
+    # corpus is read from its start instead of at the old stream's offset -- which would
+    # land past the end of a smaller corpus and silently start a second epoch.
+    if [[ -n ${STAGE3_MOE_PROBE_PHASE_TRANSITION:-} ]]; then
+      phase_args=(--phase-transition-iterations "$STAGE3_MOE_PROBE_PHASE_TRANSITION")
+    fi
+    ;;
+  resume-replay)
+    [[ $arm == adamw_fp8gemm_state_fp32 ]] || {
+      echo "resume-replay is only defined for AdamW FP8-GEMM" >&2
+      exit 2
+    }
+    train_iters=$full_iters
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    replay_load=${STAGE3_MOE_REPLAY_LOAD:?set STAGE3_MOE_REPLAY_LOAD to the checkpoint directory}
+    save_args=()
+    load_args=(--load "$replay_load" --override-opt_param-scheduler)
+    probe_warmup=0
+    probe_measure=6
+    exit_args=(--exit-interval $((time_match_branch + 6)))
+    ;;
+  time-match|time-match-smoke)
+    case "$arm" in
+      adamw_fp8gemm_state_fp32) target_iters=19570 ;;
+      muon_fp8gemm_state_fp32) target_iters=22208 ;;
+      *) echo "time-match is only defined for the two FP8-GEMM arms" >&2; exit 2 ;;
+    esac
+    [[ -n ${STAGE3_MOE_TRAIN_DATA_PREFIX:-} ]] || {
+      echo "time-match requires STAGE3_MOE_TRAIN_DATA_PREFIX" >&2
+      exit 2
+    }
+    decay_iters=$full_decay_iters
+    phase_args=(--phase-transition-iterations "$time_match_branch")
+    if [[ $mode == time-match ]]; then
+      train_iters=$target_iters
+      time_match_dir="$ckpt_root/time-match/$arm"
+      mkdir -p "$time_match_dir"
+      save_args=(--save "$time_match_dir" --save-interval 363 --save-retain-interval 13794)
+      load_args=(--load "${STAGE3_MOE_TIME_MATCH_LOAD:-$time_match_dir}" --override-opt_param-scheduler)
+    else
+      train_iters=$((time_match_branch + 1))
+      time_match_source=${STAGE3_MOE_TIME_MATCH_SOURCE:?set STAGE3_MOE_TIME_MATCH_SOURCE to the checkpoint directory}
+      save_args=()
+      load_args=(--load "$time_match_source" --override-opt_param-scheduler)
+      probe_warmup=0
+      probe_measure=1
+    fi
+    ;;
+  extension-decay-control)
+    [[ $arm == adamw_fp8gemm_state_fp32 ]] || {
+      echo "extension-decay-control is only defined for AdamW FP8-GEMM" >&2
+      exit 2
+    }
+    [[ -n ${STAGE3_MOE_TRAIN_DATA_PREFIX:-} ]] || {
+      echo "extension-decay-control requires STAGE3_MOE_TRAIN_DATA_PREFIX" >&2
+      exit 2
+    }
+    train_iters=$full_iters
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    # Construct the same 5,776-step extension dataset as time-match and start at
+    # local offset 2,328, so both decay tails consume exactly the same data batches.
+    control_phase_start=$((time_match_branch - time_match_plateau_iters))
+    phase_args=(--phase-transition-iterations "$control_phase_start")
+    control_dir="$ckpt_root/extension-decay-control/$arm"
+    mkdir -p "$control_dir"
+    save_args=(--save "$control_dir" --save-interval "$full_iters" --no-save-optim --no-save-rng)
+    control_load=${STAGE3_MOE_EXTENSION_DECAY_LOAD:?set STAGE3_MOE_EXTENSION_DECAY_LOAD to the checkpoint directory}
+    load_args=(--load "$control_load" --override-opt_param-scheduler)
+    ;;
+  original-data-plateau-control)
+    [[ $arm == adamw_fp8gemm_state_fp32 ]] || {
+      echo "original-data-plateau-control is only defined for AdamW FP8-GEMM" >&2
+      exit 2
+    }
+    plateau_end=$((time_match_branch + time_match_plateau_iters))
+    # Keep the original 17,242-step dataset sizing so this run reuses the exact
+    # cache of the uninterrupted arm. The runtime WSD schedule stays at peak LR
+    # through 16,122, and --exit-interval stops before its decay begins.
+    train_iters=$full_iters
+    target_iters=$((plateau_end + full_decay_iters))
+    decay_iters=$full_decay_iters
+    original_plateau_dir="$ckpt_root/original-data-plateau-control/$arm"
+    mkdir -p "$original_plateau_dir"
+    save_args=(--save "$original_plateau_dir" --save-interval "$plateau_end"
+               --no-save-optim --no-save-rng)
+    original_plateau_load=${STAGE3_MOE_ORIGINAL_PLATEAU_LOAD:?set STAGE3_MOE_ORIGINAL_PLATEAU_LOAD to the checkpoint directory}
+    load_args=(--load "$original_plateau_load" --override-opt_param-scheduler)
+    exit_args=(--exit-interval "$plateau_end")
+    ;;
+  corrected-time-match)
+    [[ $arm == adamw_fp8gemm_state_fp32 ]] || {
+      echo "corrected-time-match is only defined for AdamW FP8-GEMM" >&2
+      exit 2
+    }
+    corrected_phase=${STAGE3_MOE_CORRECTED_PHASE:?set STAGE3_MOE_CORRECTED_PHASE to base or tail}
+    corrected_transition=${STAGE3_MOE_CORRECTED_TRANSITION_DIR:?set STAGE3_MOE_CORRECTED_TRANSITION_DIR}
+    corrected_source=${STAGE3_MOE_CORRECTED_SOURCE:?set STAGE3_MOE_CORRECTED_SOURCE}
+    corrected_dir="$ckpt_root/corrected-time-match/$arm"
+    train_iters=19570
+    target_iters=$train_iters
+    decay_iters=$full_decay_iters
+    phase_args=(--phase-transition-iterations "$full_iters")
+    case $corrected_phase in
+      base)
+        mkdir -p "$corrected_transition"
+        save_args=(--save "$corrected_transition" --save-interval "$full_iters")
+        load_args=(--load "$corrected_source" --override-opt_param-scheduler)
+        ;;
+      tail)
+        mkdir -p "$corrected_dir"
+        save_args=(--save "$corrected_dir" --save-interval "$train_iters"
+                   --no-save-optim --no-save-rng)
+        load_args=(--load "$corrected_transition" --override-opt_param-scheduler)
+        ;;
+      *) echo "unknown corrected time-match phase: $corrected_phase" >&2; exit 2 ;;
+    esac
+    ;;
+  time-match-stretched-decay)
+    [[ $arm == adamw_fp8gemm_state_fp32 ]] || {
+      echo "time-match-stretched-decay is only defined for AdamW FP8-GEMM" >&2
+      exit 2
+    }
+    [[ -n ${STAGE3_MOE_TRAIN_DATA_PREFIX:-} ]] || {
+      echo "time-match-stretched-decay requires STAGE3_MOE_TRAIN_DATA_PREFIX" >&2
+      exit 2
+    }
+    train_iters=19570
+    target_iters=$train_iters
+    decay_iters=$((train_iters - time_match_branch))
+    phase_args=(--phase-transition-iterations "$time_match_branch")
+    stretched_dir="$ckpt_root/time-match-stretched/$arm"
+    mkdir -p "$stretched_dir"
+    save_args=(--save "$stretched_dir" --save-interval "$train_iters" --no-save-optim --no-save-rng)
+    stretched_load=${STAGE3_MOE_STRETCHED_LOAD:?set STAGE3_MOE_STRETCHED_LOAD to the checkpoint directory}
+    load_args=(--load "$stretched_load" --override-opt_param-scheduler)
+    ;;
+  schedule-tail|schedule-tail-smoke)
+    case "$arm" in
+      adamw_bf16_state_fp32|adamw_bf16_state_fp8) ;;
+      *) echo "schedule tails are only defined for the two AdamW BF16-GEMM arms" >&2; exit 2 ;;
+    esac
+    schedule=${STAGE3_MOE_SCHEDULE:?set STAGE3_MOE_SCHEDULE to short or long}
+    case "$schedule" in
+      short) decay_iters=$full_decay_iters ;;
+      long) decay_iters=$((19570 - time_match_branch)) ;;
+      *) echo "unknown schedule tail: $schedule" >&2; exit 2 ;;
+    esac
+    [[ -n ${STAGE3_MOE_TRAIN_DATA_PREFIX:-} ]] || {
+      echo "schedule tails require STAGE3_MOE_TRAIN_DATA_PREFIX" >&2
+      exit 2
+    }
+    target_iters=19570
+    phase_args=(--phase-transition-iterations "$time_match_branch")
+    schedule_load=${STAGE3_MOE_SCHEDULE_LOAD:?set STAGE3_MOE_SCHEDULE_LOAD to the checkpoint directory}
+    load_args=(--load "$schedule_load" --override-opt_param-scheduler)
+    if [[ $mode == schedule-tail-smoke ]]; then
+      train_iters=$((time_match_branch + 1))
+      save_args=()
+      probe_warmup=0
+      probe_measure=1
+    else
+      train_iters=$target_iters
+      schedule_dir="$ckpt_root/schedule-matrix/$schedule/$arm"
+      mkdir -p "$schedule_dir"
+      save_args=(--save "$schedule_dir" --save-interval "$target_iters"
+                 --no-save-optim --no-save-rng)
+    fi
+    ;;
+  lr-sweep)
+    # A 1.2B arm run end to end instead of branched from the shared trunk. That is the whole
+    # point: the LR being swept acts through the plateau, so reusing the trunk would hold it
+    # fixed exactly where it matters. The shape is the same one the real 1.2B arms ended up
+    # with -- warmup 173, constant peak to 2,254, exponential decay over the final 564 to
+    # 0.1x -- because WSD with target 2818 and a 564 decay starts decaying at 2,254.
+    # Nothing is saved: only the end-of-training validation and test numbers are wanted,
+    # and the volumes have no room (nfs2 full, nfs3 at 4.6 G on 2026-09-21).
+    train_iters=$short_iters
+    target_iters=$short_iters
+    decay_iters=$short_decay_iters
+    save_args=()
+    load_args=()
+    probe_warmup=0
+    probe_measure=1
+    ;;
+  eval-lm-fixed)
+    # Model-only evaluation on the first validation and test windows. --skip-train
+    # makes both samplers start at zero instead of restoring consumed_valid_samples.
+    # train_iters only sizes an unused train dataset in this mode.
+    train_iters=1
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    eval_load=${STAGE3_MOE_EVAL_LOAD:?set STAGE3_MOE_EVAL_LOAD to the checkpoint directory}
+    save_args=()
+    load_args=(--load "$eval_load" --no-load-optim --no-load-rng --skip-train
+               --override-opt_param-scheduler)
+    probe_warmup=0
+    probe_measure=1
+    ;;
+  eval-routing-fixed)
+    train_iters=1
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    eval_load=${STAGE3_MOE_EVAL_LOAD:?set STAGE3_MOE_EVAL_LOAD to the checkpoint directory}
+    routing_audit_path=${STAGE3_MOE_ROUTING_AUDIT_PATH:?set STAGE3_MOE_ROUTING_AUDIT_PATH}
+    save_args=()
+    load_args=(--load "$eval_load" --no-load-optim --no-load-rng --skip-train
+               --override-opt_param-scheduler)
+    probe_warmup=0
+    probe_measure=1
+    eval_args=(
+      --stage3-routing-audit-path "$routing_audit_path"
+      --eval-global-batch-size "${STAGE3_MOE_ROUTING_EVAL_GLOBAL_BATCH:-208}"
+      --eval-micro-batch-size "${STAGE3_MOE_ROUTING_EVAL_MICRO_BATCH:-16}"
+    )
+    ;;
+  eval-downstream)
+    # Score a finished checkpoint. --skip-train makes MCore build the model, load the
+    # weights and go straight to evaluation, which is what the decay endpoints support:
+    # they are saved with --no-save-optim, so there is no optimizer state to restore.
+    # The budget has to be the one the endpoint was trained on. MCore restores
+    # consumed_train_samples from the checkpoint and sizes the train dataset from
+    # train_iters, and MegatronPretrainingSampler refuses a dataloader whose samples are
+    # already consumed -- so a 1C endpoint (17,242) cannot be scored on the 1.2B schedule.
+    case ${STAGE3_MOE_EVAL_BUDGET:-1p2b} in
+      1p2b) train_iters=$short_iters; decay_iters=$short_decay_iters ;;
+      1c)   train_iters=$full_iters;  decay_iters=$full_decay_iters ;;
+      # A decay-branch endpoint (e.g. 12,160): train_iters must equal its iteration, or MCore trains on up to the budget
+      # with a fresh optimizer before scoring (s4-evalpair-*br, 2026-10-22).
+      iter[0-9]*) train_iters=${STAGE3_MOE_EVAL_BUDGET#iter}; decay_iters=$full_decay_iters ;;
+      *) echo "unknown eval budget: $STAGE3_MOE_EVAL_BUDGET" >&2; exit 2 ;;
+    esac
+    target_iters=$train_iters
+    eval_load=${STAGE3_MOE_EVAL_LOAD:?set STAGE3_MOE_EVAL_LOAD to the checkpoint directory}
+    save_args=()
+    # No --skip-train: it returns optimizer=None, and both the FP8-state bootstrap check
+    # and the record's optimizer ledgers need a real optimizer object. Training is skipped
+    # anyway because the checkpoint's iteration already equals train_iters.
+    load_args=(--load "$eval_load" --no-load-optim --no-load-rng
+               --override-opt_param-scheduler)
+    probe_warmup=0
+    probe_measure=1
+    eval_args=(
+      --stage3-eval-downstream "${STAGE3_MOE_EVAL_TASKS:-basic_v2_hellaswag,basic_v2_arc_easy,basic_v2_arc_challenge,basic_v2_piqa,basic_v2_gsm8k_gold_bpb_5shot}"
+      --stage3-eval-artifact-dir "$log_root/$run_id_eval/downstream"
+      --stage3-eval-batch-size "${STAGE3_MOE_EVAL_BATCH:-8}"
+    )
+    if [[ -n ${STAGE3_MOE_EVAL_LIMIT:-} ]]; then
+      eval_args+=(--stage3-eval-limit "$STAGE3_MOE_EVAL_LIMIT")
+    fi
+    ;;
+  *) echo "unknown mode: $mode" >&2; exit 2 ;;
+esac
+
+data_cache_args=()
+if [[ -n ${STAGE3_MOE_DATA_CACHE_PATH:-} ]]; then
+  data_cache_args=(--data-cache-path "$STAGE3_MOE_DATA_CACHE_PATH")
+fi
+
+run_id="stage3-$arm-$mode${STAGE3_MOE_RUN_SUFFIX:+-$STAGE3_MOE_RUN_SUFFIX}"
+mkdir -p "$log_root/$run_id" "$trunk_dir"
+export PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root"
+# Transformer Engine loads cudart and friends from the pip nvidia packages; without
+# these the run dies with "cudart shared object not found".
+unset PYTHONNOUSERSITE
+# Locate the CUDA packages in the active interpreter, including namespace roots.
+nvidia_lib_path=$(python - <<'PYEOF' 2>/dev/null || true
+import importlib.util, pathlib
+spec = importlib.util.find_spec("nvidia")
+roots = list(spec.submodule_search_locations) if spec and spec.submodule_search_locations else []
+libs = [str(p) for root in roots for p in sorted(pathlib.Path(root).glob("*/lib")) if p.is_dir()]
+print(":".join(libs))
+PYEOF
+)
+[[ -n $nvidia_lib_path ]] && export LD_LIBRARY_PATH=${nvidia_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+# TE's system-library search needs these roots for versioned pip libraries. Without
+# them it enters its no-toolkit fallback, which fails to locate pip's cuda_runtime.
+IFS=: read -r -a nvidia_lib_dirs <<< "$nvidia_lib_path"
+for library in "${nvidia_lib_dirs[@]}"; do
+  case "$library" in
+    */cudnn/lib) export CUDNN_HOME=${CUDNN_HOME:-${library%/lib}} ;;
+    */curand/lib) export CURAND_HOME=${CURAND_HOME:-${library%/lib}} ;;
+    */cuda_nvrtc/lib) export NVRTC_HOME=${NVRTC_HOME:-${library%/lib}} ;;
+  esac
+done
+# Without credentials wandb.init() would abort the run, so fall back to offline
+# logging: the run still records everything and can be `wandb sync`ed later.
+# A key in the environment (mlsub run --env WANDB_API_KEY=...) wins: that is how the
+# self-hosted server is reached, and WANDB_BASE_URL has to travel with it.
+if [[ -n ${WANDB_API_KEY:-} ]]; then
+  echo "WANDB=online host=${WANDB_BASE_URL:-https://api.wandb.ai}"
+elif [[ -f /home/jovyan/.wandb-key ]]; then
+  export WANDB_API_KEY=$(cat /home/jovyan/.wandb-key)
+else
+  export WANDB_MODE=offline
+  echo "WANDB=offline (no key in the environment and no /home/jovyan/.wandb-key); sync later with 'wandb sync'"
+fi
+# A 1C arm outlives one job, so every segment must land in the same W&B run instead of
+# opening a new one. MCore calls wandb.init() without an id, so the env vars decide.
+export WANDB_RUN_ID="${WANDB_RUN_ID:-$run_id}"
+export WANDB_RESUME="${WANDB_RESUME:-allow}"
+
+# A missing logger must not kill a multi-hour run: drop the loggers instead.
+logger_args=()
+if python -c 'import wandb, torch.utils.tensorboard' >/dev/null 2>&1; then
+  logger_args=(
+    --tensorboard-dir "$log_root/$run_id/tensorboard"
+    --tensorboard-log-interval 10
+    --wandb-project "${STAGE3_MOE_WANDB_PROJECT:-hmoe-stage3}"
+    --wandb-entity "${STAGE3_MOE_WANDB_ENTITY:-andrey}"
+    --wandb-exp-name "$run_id"
+    --wandb-save-dir "$log_root/$run_id"
+  )
+else
+  echo "LOGGERS=absent (wandb/tensorboard not importable); running without them"
+fi
+
+# Apex's fused kernel is absent from the cloud image. Transformer Engine implements the
+# fusion itself, so only the LM head (a plain ColumnParallelLinear) actually needs Apex,
+# and the patched layer now degrades on its own instead of aborting the run. Asking for
+# the fusion therefore buys it for every TE layer, including the expert GEMMs.
+fusion_args=()
+if [[ ${STAGE3_MOE_WGRAD_FUSION:-0} == 1 ]]; then
+  echo "GRADIENT_ACCUMULATION_FUSION=requested (TE layers fuse, LM head falls back)"
+elif ! python -c 'import torch; import fused_weight_gradient_mlp_cuda' >/dev/null 2>&1; then
+  fusion_args=(--no-gradient-accumulation-fusion)
+  echo "GRADIENT_ACCUMULATION_FUSION=disabled"
+fi
+
+# Throughput levers, kept off until a paired measurement justifies each one.
+speed_args=()
+# Anything else a probe wants to pass to MCore verbatim (e.g. --use-transformer-engine-op-fuser).
+if [[ -n ${STAGE3_MOE_EXTRA_ARGS:-} ]]; then
+  read -ra extra_args <<<"$STAGE3_MOE_EXTRA_ARGS"
+  speed_args+=("${extra_args[@]}")
+fi
+if [[ ${STAGE3_MOE_OVERLAP_GRAD_REDUCE:-0} == 1 ]]; then
+  speed_args+=(--overlap-grad-reduce)
+fi
+if [[ ${STAGE3_MOE_MOE_FUSIONS:-0} == 1 ]]; then
+  speed_args+=(--moe-permute-fusion --moe-shared-expert-overlap)
+fi
+if [[ ${#speed_args[@]} -gt 0 ]]; then
+  echo "SPEED_ARGS=${speed_args[*]}"
+fi
+
+# nvidia-smi ignores CUDA_VISIBLE_DEVICES, so a run sharing a node with another arm says how
+# many ranks it owns.
+gpu_count=${STAGE3_MOE_NPROC:-$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)}
+# The result writer reads these; on real data the manifest hash is mandatory.
+export STAGE3_MOE_RUN_ID="$run_id"
+export STAGE3_MOE_SITE=cloudru
+export STAGE3_MOE_IMAGE="${MLSUB_IMAGE:-torch28}"
+export STAGE3_MOE_CONFIG_SHA256=$(sha256sum "$root/configs/stage3-moe-1p029b.sh" | awk '{print $1}')
+export STAGE3_MOE_DATA_MANIFEST_SHA256=$(
+  if [[ -n ${STAGE3_MOE_DATA_MANIFEST_PATH:-} ]]; then
+    sha256sum "$STAGE3_MOE_DATA_MANIFEST_PATH" | awk '{print $1}'
+  elif [[ -f "$data_root/../artifact-manifest.json" ]]; then
+    sha256sum "$data_root/../artifact-manifest.json" | awk '{print $1}'
+  else
+    printf '%s' 'AverageMetaheuristicsEnjoyer/fineweb-edu-gpt2-megatron' | sha256sum | awk '{print $1}'
+  fi)
+export STAGE3_MOE_MCORE_COMMIT="$STAGE3_MOE_MCORE_COMMIT"
+export STAGE3_MOE_EO_COMMIT="$STAGE3_MOE_EO_COMMIT"
+export STAGE3_MOE_GPU_UUID=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | paste -sd, -)
+export STAGE3_MOE_DRIVER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1 | tr -d ' ')
+# Ask TE for the cuBLASLt version; the writer's ctypes fallback cannot find the
+# shared object in this image.
+export STAGE3_MOE_CUBLASLT=$(python -c 'import transformer_engine_torch as t; print(t.get_cublasLt_version())' 2>/dev/null || echo unknown)
+export STAGE3_MOE_GPU_CLEAN_BEFORE=1 STAGE3_MOE_GPU_CLEAN_DURING=1 STAGE3_MOE_GPU_CLEAN_AFTER=1
+echo "ARM=$arm MODE=$mode GPUS=$gpu_count micro_batch=$micro_batch global_batch=$global_batch"
+echo "DATA train=$train_data_prefix valid=$valid_data_prefix test=$test_data_prefix"
+echo "FP8_DEQUANT_CHUNK=${STAGE3_MOE_FP8_DEQUANT_CHUNK:-0} (0 = every state in FP32 at once)"
+echo "SCHEDULE target_iters=$target_iters decay_iters=$decay_iters warmup=$warmup_iters train_iters=$train_iters"
+# STAGE3_MOE_FP32_MODEL=1: FP32 parameters and compute (the Hessian-trace diagnostic needs a finer grid than BF16).
+precision_args=(--bf16)
+[[ ${STAGE3_MOE_FP32_MODEL:-0} == 1 ]] && precision_args=()
+echo "OPTIMIZER_HPARAMS lr=$learning_rate min_lr=$min_learning_rate beta1=0.9 beta2=$adam_beta2 weight_decay=0.1"
+echo "CKPT save=${save_args[*]} load=${load_args[*]}"
+
+# Training-fraction schedules of the Muon variants (stage3_moe/lionmuon.py) run over this run's WSD length unless a
+# branch keeps its trunk's (cloud_quantization_probe.sh sets 17242).
+export STAGE3_MOE_SCHEDULE_ITERS=${STAGE3_MOE_SCHEDULE_ITERS:-$target_iters}
+echo "SCHEDULE_ITERS=$STAGE3_MOE_SCHEDULE_ITERS"
+train_log="$log_root/$run_id/train-$(date -u +%Y%m%dT%H%M%SZ).log"
+echo "TRAIN_LOG=$train_log"
+set +e
+python -m torch.distributed.run --standalone --nproc-per-node "$gpu_count" \
+  stage3_moe/pretrain_gpt.py \
+  --stage3-arm "$arm" \
+  --stage3-result-path "$log_root/$run_id/results.jsonl" \
+  --stage3-warmup-steps "$probe_warmup" \
+  --stage3-measure-steps "$probe_measure" \
+  "${eval_args[@]}" \
+  --optimizer-state-precision "$state_precision" \
+  "${STAGE3_MOE_MODEL_ARGS[@]}" \
+  "${STAGE3_MOE_ROUTER_ARGS[@]}" \
+  --tensor-model-parallel-size 1 \
+  --pipeline-model-parallel-size 1 \
+  --context-parallel-size 1 \
+  --expert-model-parallel-size "${STAGE3_MOE_EP:-1}" \
+  --expert-tensor-parallel-size 1 \
+  --transformer-impl transformer_engine \
+  "${precision_args[@]}" \
+  --adam-beta1 0.9 --adam-beta2 "$adam_beta2" --adam-eps 1e-8 \
+  --lr "$learning_rate" \
+  --min-lr "$min_learning_rate" \
+  --lr-decay-style WSD \
+  --lr-decay-iters "$target_iters" \
+  --lr-wsd-decay-iters "$decay_iters" \
+  --lr-wsd-decay-style exponential \
+  --lr-warmup-iters "$warmup_iters" \
+  --weight-decay 0.1 \
+  --clip-grad 1 \
+  --micro-batch-size "$micro_batch" \
+  --global-batch-size "$global_batch" \
+  --train-iters "$train_iters" \
+  "${exit_args[@]}" \
+  "${phase_args[@]}" \
+  --tokenizer-type NullTokenizer --vocab-size 50257 \
+  --null-tokenizer-eod-id 50256 --null-tokenizer-pad-id -1 \
+  --train-data-path "$train_data_prefix" \
+  --valid-data-path "$valid_data_prefix" \
+  --test-data-path "$test_data_prefix" \
+  "${data_cache_args[@]}" \
+  --dataloader-type single \
+  --num-workers 2 \
+  --no-create-attention-mask-in-dataloader \
+  --seed "${STAGE3_MOE_SEED:-1234}" \
+  --eval-interval "${STAGE3_MOE_EVAL_INTERVAL:-250}" \
+  --eval-iters "${STAGE3_MOE_EVAL_ITERS:-32}" \
+  --log-interval "${STAGE3_MOE_LOG_INTERVAL:-10}" \
+  --log-throughput \
+  --timing-log-level 1 \
+  "${logger_args[@]}" \
+  --optimizer "$optimizer" \
+  "${optimizer_args[@]}" \
+  "${compute[@]}" \
+  "${fusion_args[@]}" \
+  "${speed_args[@]}" \
+  --ckpt-format torch \
+  "${save_args[@]}" \
+  "${load_args[@]}" \
+  >"$train_log" 2>&1
+code=$?
+set -e
+echo "TRAIN_EXIT=$code"
+tail -n 150 "$train_log"
+
+if [[ $mode == smoke && ${STAGE3_MOE_KEEP_SMOKE_CKPT:-0} != 1 ]]; then
+  echo "SMOKE_CKPT=removing $smoke_dir"
+  rm -rf "$smoke_dir"
+  df -h "$ckpt_root" | tail -1
+fi
+if [[ ${STAGE3_MOE_PROPAGATE_EXIT:-0} == 1 ]]; then
+  exit "$code"
+fi
+exit 0

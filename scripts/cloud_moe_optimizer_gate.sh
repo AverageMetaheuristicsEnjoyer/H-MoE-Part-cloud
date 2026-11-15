@@ -1,0 +1,562 @@
+#!/usr/bin/env bash
+# Bounded Frugal CoordAdamW / SlimAdam checkpoint and calibration gates.
+# Usage: cloud_moe_optimizer_gate.sh cpu-contract|smoke|resume|stability|lr-screen|routing-calibration|routing-calibration-2254|cleanup-stability|cleanup-lr-screen [RECIPE]
+set -u
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+mode=${1:?usage: cloud_moe_optimizer_gate.sh cpu-contract|smoke|resume|stability|lr-screen|routing-calibration|routing-calibration-2254|cleanup-stability|cleanup-lr-screen [RECIPE]}
+recipe=${2:-}
+gate_arm=${STAGE3_MOE_GATE_ARM:-both}
+ckpt_root=${STAGE3_MOE_CKPT_ROOT:-/workspace-SR006.nfs2/hmoe-checkpoints/frugal-slimadam-gates}
+log_root=${STAGE3_MOE_LOG_ROOT:-/workspace-SR006.nfs2/hmoe-cloud/pretrain}
+export STAGE3_MOE_CKPT_ROOT=$ckpt_root
+export STAGE3_MOE_LOG_ROOT=$log_root
+export STAGE3_MOE_MICRO_BATCH=${STAGE3_MOE_MICRO_BATCH:-4}
+export STAGE3_MOE_WANDB_PROJECT=${STAGE3_MOE_WANDB_PROJECT:-hmoe-stage3-frugal-slimadam}
+export STAGE3_MOE_PROPAGATE_EXIT=1
+mkdir -p "$ckpt_root" "$log_root"
+
+if [[ ${MLSUB_IMAGE:-} != torch28 ]]; then
+  echo "GATE_FAIL reason=image MLSUB_IMAGE=${MLSUB_IMAGE:-unset} expected=torch28"
+  echo "EXIT=1"
+  exit 0
+fi
+
+echo "=== SOURCE AND DISK ==="
+git -C "$root" status --short --branch
+git -C "$root" rev-parse HEAD
+df -h "$ckpt_root" "$log_root" | awk 'NR == 1 || !seen[$1]++'
+available_kb=$(df -Pk "$ckpt_root" | awk 'NR == 2 {print $4}')
+
+if [[ $mode == cleanup-stability ]]; then
+  [[ -z $recipe ]] || {
+    echo "GATE_FAIL mode=$mode reason=unexpected_recipe recipe=$recipe"
+    echo "EXIT=1"
+    exit 0
+  }
+  cleanup_paths=(
+    "$ckpt_root/stability/frugal_coord_bf16_state_fp32-stability-matched-v1"
+    "$ckpt_root/stability/slimadam_bf16_state_fp32-stability-matched-v1"
+  )
+  cleanup_status=0
+  for path in "${cleanup_paths[@]}"; do
+    if [[ ! -e $path ]]; then
+      echo "CLEANUP_ALREADY_ABSENT=$path"
+      continue
+    fi
+    tracker="$path/latest_checkpointed_iteration.txt"
+    iteration_dir="$path/iter_0000235"
+    if [[ ! -f $tracker || $(cat "$tracker") != 235 || ! -d $iteration_dir ]]; then
+      echo "GATE_FAIL mode=$mode reason=unexpected_checkpoint_layout path=$path"
+      cleanup_status=1
+      continue
+    fi
+    du -sh -- "$path"
+    find "$path" -mindepth 1 -maxdepth 1 -printf 'CLEANUP_MEMBER=%f\n' | sort
+  done
+  if (( cleanup_status != 0 )); then
+    echo "EXIT=1"
+    exit 0
+  fi
+  for path in "${cleanup_paths[@]}"; do
+    if [[ -e $path ]]; then
+      rm -rf -- "$path"
+      echo "GATE_CKPT_REMOVED=$path"
+    fi
+  done
+  df -h "$ckpt_root" | tail -1
+  echo "GATE_PASS mode=$mode"
+  echo "EXIT=0"
+  exit 0
+fi
+
+if [[ $mode == cleanup-lr-screen ]]; then
+  [[ -z $recipe ]] || {
+    echo "GATE_FAIL mode=$mode reason=unexpected_recipe recipe=$recipe"
+    echo "EXIT=1"
+    exit 0
+  }
+  cleanup_paths=(
+    "$ckpt_root/lr-screen/frugal_coord_bf16_state_fp32-lr-screen-matched-v1"
+    "$ckpt_root/lr-screen/frugal_coord_bf16_state_fp32-lr-screen-efficient-training-1e3-v1"
+    "$ckpt_root/lr-screen/frugal_coord_bf16_state_fp32-lr-screen-efficient-training-2e3-v1"
+    "$ckpt_root/lr-screen/slimadam_bf16_state_fp32-lr-screen-matched-v1"
+  )
+  cleanup_status=0
+  for path in "${cleanup_paths[@]}"; do
+    if [[ ! -e $path ]]; then
+      echo "CLEANUP_ALREADY_ABSENT=$path"
+      continue
+    fi
+    tracker="$path/latest_checkpointed_iteration.txt"
+    iteration_dir="$path/iter_0000587"
+    if [[ ! -f $tracker || $(cat "$tracker") != 587 || ! -d $iteration_dir ]]; then
+      echo "GATE_FAIL mode=$mode reason=unexpected_checkpoint_layout path=$path"
+      cleanup_status=1
+      continue
+    fi
+    du -sh -- "$path"
+    find "$path" -mindepth 1 -maxdepth 1 -printf 'CLEANUP_MEMBER=%f\n' | sort
+  done
+  if (( cleanup_status != 0 )); then
+    echo "EXIT=1"
+    exit 0
+  fi
+  for path in "${cleanup_paths[@]}"; do
+    if [[ -e $path ]]; then
+      rm -rf -- "$path"
+      echo "GATE_CKPT_REMOVED=$path"
+    fi
+  done
+  df -h "$ckpt_root" | tail -1
+  echo "GATE_PASS mode=$mode"
+  echo "EXIT=0"
+  exit 0
+fi
+
+if [[ $mode != cpu-contract ]] && (( available_kb < 20971520 )); then
+  echo "GATE_FAIL reason=disk available_kb=$available_kb required_kb=20971520"
+  echo "EXIT=1"
+  exit 0
+fi
+
+unset PYTHONNOUSERSITE
+nvidia_lib_path=$(find /home/user/conda/lib/python3.12/site-packages/nvidia \
+  -mindepth 2 -maxdepth 2 -type d -name lib -print 2>/dev/null | paste -sd: - || true)
+export LD_LIBRARY_PATH=${nvidia_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+export CUDNN_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cudnn
+export CURAND_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/curand
+export NVRTC_HOME=/home/user/conda/lib/python3.12/site-packages/nvidia/cuda_nvrtc
+export PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root"
+
+echo "=== CPU CONTRACT ==="
+python - "$root" <<'PY'
+import runpy
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+root = Path(sys.argv[1])
+count = 0
+for relative in (
+    "tests/stage3_moe/test_memory_efficient_optimizers.py",
+    "tests/stage3_moe/test_memory_optimizer_pretrain_gates.py",
+    "tests/stage3_moe/test_routing_telemetry.py",
+):
+    namespace = runpy.run_path(root / relative)
+    for name, function in sorted(namespace.items()):
+        if name.startswith("test_") and callable(function):
+            function()
+            count += 1
+
+from megatron.training import training
+
+args = SimpleNamespace(
+    train_samples=None,
+    train_iters=2_254,
+    global_batch_size=208,
+    full_validation=False,
+    skip_train=False,
+    eval_interval=2_254,
+    start_eval_at_iter=None,
+    eval_iters=32,
+    phase_transition_iterations=None,
+    iteration=587,
+    consumed_valid_samples=6_656,
+)
+original_get_args = training.get_args
+try:
+    training.get_args = lambda: args
+    _, valid_samples, test_samples = training.get_train_valid_test_num_samples()
+finally:
+    training.get_args = original_get_args
+assert valid_samples == 19_968
+assert test_samples == 6_656
+count += 1
+print(f"CPU_CONTRACT_PASS tests={count}")
+PY
+if [[ $? -ne 0 ]]; then
+  echo "GATE_FAIL reason=cpu_contract"
+  echo "EXIT=1"
+  exit 0
+fi
+
+if [[ $mode == cpu-contract ]]; then
+  [[ -z $recipe ]] || {
+    echo "GATE_FAIL mode=$mode reason=unexpected_recipe recipe=$recipe"
+    echo "EXIT=1"
+    exit 0
+  }
+  echo "GATE_PASS mode=$mode"
+  echo "EXIT=0"
+  exit 0
+fi
+
+echo "=== ALLOCATED RUNTIME ==="
+nvidia-smi --query-gpu=name,uuid,compute_cap,memory.total,driver_version --format=csv,noheader
+python - <<'PY'
+import torch
+import transformer_engine
+from megatron.core.package_info import __shortversion__ as mcore_version
+
+try:
+    import fused_weight_gradient_mlp_cuda  # noqa: F401
+except ImportError:
+    apex = "absent"
+else:
+    apex = "present"
+print(f"torch={torch.__version__} cuda={torch.version.cuda} te={transformer_engine.__version__} mcore={mcore_version} apex_wgrad={apex}")
+PY
+if [[ $? -ne 0 ]]; then
+  echo "GATE_FAIL reason=imports"
+  echo "EXIT=1"
+  exit 0
+fi
+
+run_launcher() {
+  "$root/scripts/run_stage3_moe_pretrain.sh" "$1" "$2"
+}
+
+run_smoke() {
+  local arm=$1
+  local suffix=routing-telemetry-smoke-v2
+  local run_dir="$log_root/stage3-$arm-smoke-$suffix"
+  export STAGE3_MOE_RUN_SUFFIX=$suffix
+  if [[ -e $run_dir ]]; then
+    echo "GATE_FAIL arm=$arm gate=smoke reason=run_path_exists path=$run_dir"
+    return 1
+  fi
+  run_launcher "$arm" smoke || return 1
+  python - "$run_dir/routing_telemetry.jsonl" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+records = [json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines() if line]
+last = records[-1]
+if last["iteration"] != 25:
+    raise SystemExit(f"routing telemetry ended at {last['iteration']}, expected 25")
+if len(last["layers"]) != 17:
+    raise SystemExit(f"routing telemetry has {len(last['layers'])} layers, expected 17")
+if any(len(row) != 64 for row in last["batch"]["tokens_per_expert"]):
+    raise SystemExit("routing telemetry expert dimension is not 64")
+if last["dropped_tokens"] != 0:
+    raise SystemExit(f"dropped tokens failed: {last['dropped_tokens']}")
+print(
+    f"TELEMETRY_PASS iteration=25 layers=17 experts=64 "
+    f"rolling_steps={last['rolling_100']['window_steps']}"
+)
+PY
+}
+
+validate_calibration_result() {
+  python - "$1" "$2" "$3" <<'PY'
+import json
+import math
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+telemetry_path = Path(sys.argv[2])
+target = int(sys.argv[3])
+records = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+record = records[-1]
+training_loss = record["measurement"]["loss"]["training"]
+if record["status"] != "completed":
+    raise SystemExit("result status is not completed")
+if training_loss is None or not math.isfinite(training_loss):
+    raise SystemExit("training loss is absent or non-finite")
+telemetry = [
+    json.loads(line) for line in telemetry_path.read_text().splitlines() if line.strip()
+]
+last = telemetry[-1]
+if last["iteration"] != target:
+    raise SystemExit(f"routing telemetry ended at {last['iteration']}, expected {target}")
+routing = last["rolling_100"]
+if routing["window_steps"] != 100:
+    raise SystemExit(f"routing window has {routing['window_steps']} steps, expected 100")
+if routing["minimum_to_mean_min"] < 0.1:
+    raise SystemExit(f"routing minimum/mean failed: {routing['minimum_to_mean_min']}")
+if routing["coefficient_of_variation_max"] >= 0.2:
+    raise SystemExit(f"routing CV failed: {routing['coefficient_of_variation_max']}")
+if last["dropped_tokens"] != 0:
+    raise SystemExit(f"dropped tokens failed: {last['dropped_tokens']}")
+measurement = record["measurement"]
+print(
+    f"RESULT_PASS training_loss={training_loss:.6f} "
+    f"route_min_mean={routing['minimum_to_mean_min']:.6f} "
+    f"route_cv={routing['coefficient_of_variation_max']:.6f} dropped=0 "
+    f"full_step_seconds={measurement['timing']['full_step_seconds']} "
+    f"max_allocated_bytes={measurement['memory']['max_allocated_bytes']} "
+    f"optimizer_state_bytes={measurement['optimizer_state']['persistent_total_bytes']}"
+)
+PY
+}
+
+run_resume() {
+  local arm=$1
+  local suffix=optimizer-resume-v1
+  local checkpoint_dir="$ckpt_root/resume-gate/$arm-$suffix"
+  local tracker="$checkpoint_dir/latest_checkpointed_iteration.txt"
+  local run_dir="$log_root/stage3-$arm-resume-gate-$suffix"
+  export STAGE3_MOE_RUN_SUFFIX=$suffix
+  export STAGE3_MOE_LR=1.63e-3
+  export STAGE3_MOE_MIN_LR=1.63e-4
+  export STAGE3_MOE_ADAM_BETA2=0.95
+
+  if [[ ! -f $tracker ]]; then
+    echo "=== RESUME SAVE arm=$arm target=50 ==="
+    run_launcher "$arm" resume-gate
+    if [[ $? -ne 0 || ! -f $tracker ]]; then
+      echo "GATE_FAIL arm=$arm phase=save tracker=missing"
+      return 1
+    fi
+    local iteration
+    iteration=$(cat "$tracker")
+    if [[ $iteration != 50 ]]; then
+      echo "GATE_FAIL arm=$arm phase=save tracker=$iteration expected=50"
+      return 1
+    fi
+  fi
+
+  local iteration
+  iteration=$(cat "$tracker")
+  if [[ $iteration == 50 ]]; then
+    echo "=== RESUME LOAD arm=$arm source=50 target=52 ==="
+    run_launcher "$arm" resume-gate
+    if [[ $? -ne 0 ]]; then
+      echo "GATE_FAIL arm=$arm phase=load"
+      return 1
+    fi
+  fi
+
+  iteration=$(cat "$tracker")
+  if [[ $iteration != 52 ]]; then
+    echo "GATE_FAIL arm=$arm phase=final tracker=$iteration expected=52"
+    return 1
+  fi
+  if ! grep -qE 'successfully loaded checkpoint.*iteration +50' "$run_dir"/train-*.log; then
+    echo "GATE_FAIL arm=$arm phase=verify reason=no_iteration_50_load"
+    return 1
+  fi
+  if ! grep -qE 'number of nan iterations: +0' "$run_dir"/train-*.log; then
+    echo "GATE_FAIL arm=$arm phase=verify reason=nan_summary_missing"
+    return 1
+  fi
+  echo "GATE_PASS arm=$arm gate=resume checkpoint=50 final=52"
+  if [[ ${STAGE3_MOE_KEEP_GATE_CKPT:-0} != 1 ]]; then
+    rm -rf -- "$checkpoint_dir"
+    echo "GATE_CKPT_REMOVED=$checkpoint_dir"
+  fi
+}
+
+run_calibration() {
+  local launcher_mode=$1
+  local arm=$2
+  local label=$3
+  local lr=$4
+  local min_lr=$5
+  local beta2=$6
+  local target=$7
+  local suffix="$launcher_mode-$label-v1"
+  local checkpoint_dir="$ckpt_root/$launcher_mode/$arm-$suffix"
+  local tracker="$checkpoint_dir/latest_checkpointed_iteration.txt"
+  local run_dir="$log_root/stage3-$arm-$launcher_mode-$suffix"
+
+  if [[ -e $checkpoint_dir ]]; then
+    echo "GATE_FAIL arm=$arm gate=$launcher_mode reason=checkpoint_path_exists path=$checkpoint_dir"
+    return 1
+  fi
+  export STAGE3_MOE_RUN_SUFFIX=$suffix
+  export STAGE3_MOE_LR=$lr
+  export STAGE3_MOE_MIN_LR=$min_lr
+  export STAGE3_MOE_ADAM_BETA2=$beta2
+  export STAGE3_MOE_EVAL_INTERVAL=$target
+
+  echo "=== CALIBRATION gate=$launcher_mode arm=$arm recipe=$label lr=$lr beta2=$beta2 target=$target ==="
+  run_launcher "$arm" "$launcher_mode"
+  if [[ $? -ne 0 || ! -f $tracker ]]; then
+    echo "GATE_FAIL arm=$arm gate=$launcher_mode recipe=$label"
+    return 1
+  fi
+  local iteration
+  iteration=$(cat "$tracker")
+  if [[ $iteration != "$target" ]]; then
+    echo "GATE_FAIL arm=$arm gate=$launcher_mode recipe=$label tracker=$iteration expected=$target"
+    return 1
+  fi
+  if ! grep -qE 'number of nan iterations: +0' "$run_dir"/train-*.log; then
+    echo "GATE_FAIL arm=$arm gate=$launcher_mode recipe=$label reason=nan_summary_missing"
+    return 1
+  fi
+  if ! grep -q 'validation loss at iteration' "$run_dir"/train-*.log; then
+    echo "GATE_FAIL arm=$arm gate=$launcher_mode recipe=$label reason=validation_missing"
+    return 1
+  fi
+  if ! validate_calibration_result \
+    "$run_dir/results.jsonl" "$run_dir/routing_telemetry.jsonl" "$target"; then
+    echo "GATE_FAIL arm=$arm gate=$launcher_mode recipe=$label reason=result_or_routing"
+    return 1
+  fi
+  echo "GATE_PASS arm=$arm gate=$launcher_mode recipe=$label target=$target"
+  grep -E 'validation loss at iteration|loss at iteration|number of nan iterations' "$run_dir"/train-*.log | tail -8
+  if [[ $launcher_mode == stability && ${STAGE3_MOE_KEEP_GATE_CKPT:-0} != 1 ]]; then
+    rm -rf -- "$checkpoint_dir"
+    echo "GATE_CKPT_REMOVED=$checkpoint_dir"
+  fi
+}
+
+run_routing_calibration_2254() {
+  local arm=$1
+  local source="$ckpt_root/routing-calibration/$arm-routing-calibration-matched-v1"
+  local output_root=${STAGE3_MOE_ROUTING_2254_CKPT_ROOT:-/workspace-SR006.nfs3/hmoe-checkpoints/frugal-slimadam-routing-2254}
+  local output="$output_root/$arm-routing-calibration-2254-matched-v1"
+  local source_tracker="$source/latest_checkpointed_iteration.txt"
+  local output_tracker="$output/latest_checkpointed_iteration.txt"
+  local run_suffix=routing-calibration-2254-matched-v1
+  local run_dir="$log_root/stage3-$arm-routing-calibration-2254-$run_suffix"
+
+  if [[ ! -f $source_tracker || $(cat "$source_tracker") != 587 || ! -d $source/iter_0000587 ]]; then
+    echo "GATE_FAIL arm=$arm gate=routing-calibration-2254 reason=source_587_missing path=$source"
+    return 1
+  fi
+  if [[ -e $output ]]; then
+    echo "GATE_FAIL arm=$arm gate=routing-calibration-2254 reason=output_path_exists path=$output"
+    return 1
+  fi
+  mkdir -p "$output_root"
+  local output_available_kb
+  output_available_kb=$(df -Pk "$output_root" | awk 'NR == 2 {print $4}')
+  if (( output_available_kb < 20971520 )); then
+    echo "GATE_FAIL arm=$arm gate=routing-calibration-2254 reason=output_disk available_kb=$output_available_kb required_kb=20971520"
+    return 1
+  fi
+
+  export STAGE3_MOE_RUN_SUFFIX=$run_suffix
+  export STAGE3_MOE_LR=1.63e-3
+  export STAGE3_MOE_MIN_LR=1.63e-4
+  export STAGE3_MOE_ADAM_BETA2=0.95
+  export STAGE3_MOE_EVAL_INTERVAL=2254
+  export STAGE3_MOE_ROUTING_RESUME_SOURCE=$source
+  export STAGE3_MOE_ROUTING_RESUME_OUTPUT=$output
+
+  echo "=== ROUTING CALIBRATION RESUME arm=$arm source=587 target=2254 output=$output ==="
+  run_launcher "$arm" routing-calibration-2254 || return 1
+  if [[ ! -f $output_tracker || $(cat "$output_tracker") != 2254 || ! -d $output/iter_0002254 ]]; then
+    echo "GATE_FAIL arm=$arm gate=routing-calibration-2254 reason=output_2254_missing path=$output"
+    return 1
+  fi
+  if ! grep -qE 'successfully loaded checkpoint.*iteration +587' "$run_dir"/train-*.log; then
+    echo "GATE_FAIL arm=$arm gate=routing-calibration-2254 reason=no_iteration_587_load"
+    return 1
+  fi
+  if ! grep -qE 'successfully saved checkpoint from iteration +2254' "$run_dir"/train-*.log; then
+    echo "GATE_FAIL arm=$arm gate=routing-calibration-2254 reason=no_iteration_2254_save"
+    return 1
+  fi
+  if ! grep -qE 'number of nan iterations: +0' "$run_dir"/train-*.log; then
+    echo "GATE_FAIL arm=$arm gate=routing-calibration-2254 reason=nan_summary_missing"
+    return 1
+  fi
+  if ! grep -q 'validation loss at iteration' "$run_dir"/train-*.log; then
+    echo "GATE_FAIL arm=$arm gate=routing-calibration-2254 reason=validation_missing"
+    return 1
+  fi
+
+  rm -rf -- "$source"
+  echo "GATE_CKPT_REMOVED=$source"
+
+  if ! validate_calibration_result \
+    "$run_dir/results.jsonl" "$run_dir/routing_telemetry.jsonl" 2254; then
+    echo "GATE_FAIL arm=$arm gate=routing-calibration-2254 reason=result_or_routing"
+    return 1
+  fi
+  echo "GATE_PASS arm=$arm gate=routing-calibration-2254 target=2254"
+}
+
+status=0
+case "$mode" in
+  smoke)
+    [[ -z $recipe ]] || status=1
+    case "$gate_arm" in
+      frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) status=1 ;;
+    esac
+    if (( status == 0 )); then
+      run_smoke "$gate_arm" || status=1
+    fi
+    ;;
+  resume)
+    [[ -z $recipe ]] || status=1
+    case "$gate_arm" in
+      both|frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) status=1 ;;
+    esac
+    if (( status == 0 )) && [[ $gate_arm == both || $gate_arm == frugal_coord_bf16_state_fp32 ]]; then
+      run_resume frugal_coord_bf16_state_fp32 || status=1
+    fi
+    if (( status == 0 )) && [[ $gate_arm == both || $gate_arm == slimadam_bf16_state_fp32 ]]; then
+      run_resume slimadam_bf16_state_fp32 || status=1
+    fi
+    ;;
+  stability)
+    [[ -z $recipe ]] || status=1
+    case "$gate_arm" in
+      both|frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) status=1 ;;
+    esac
+    if (( status == 0 )) && [[ $gate_arm == both || $gate_arm == frugal_coord_bf16_state_fp32 ]]; then
+      run_calibration stability frugal_coord_bf16_state_fp32 matched 1.63e-3 1.63e-4 0.95 235 || status=1
+    fi
+    if (( status == 0 )) && [[ $gate_arm == both || $gate_arm == slimadam_bf16_state_fp32 ]]; then
+      run_calibration stability slimadam_bf16_state_fp32 matched 1.63e-3 1.63e-4 0.95 235 || status=1
+    fi
+    ;;
+  lr-screen)
+    case "$gate_arm:$recipe" in
+      frugal_coord_bf16_state_fp32:matched)
+        run_calibration lr-screen frugal_coord_bf16_state_fp32 matched 1.63e-3 1.63e-4 0.95 587 || status=1
+        ;;
+      frugal_coord_bf16_state_fp32:efficient-training-1e3)
+        run_calibration lr-screen frugal_coord_bf16_state_fp32 efficient-training-1e3 1e-3 1e-4 0.999 587 || status=1
+        ;;
+      frugal_coord_bf16_state_fp32:efficient-training-2e3)
+        run_calibration lr-screen frugal_coord_bf16_state_fp32 efficient-training-2e3 2e-3 2e-4 0.999 587 || status=1
+        ;;
+      slimadam_bf16_state_fp32:matched)
+        run_calibration lr-screen slimadam_bf16_state_fp32 matched 1.63e-3 1.63e-4 0.95 587 || status=1
+        ;;
+      *) status=1 ;;
+    esac
+    ;;
+  routing-calibration)
+    [[ $recipe == matched ]] || status=1
+    case "$gate_arm" in
+      adamw_bf16_state_fp32|frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) status=1 ;;
+    esac
+    if (( status == 0 )); then
+      run_calibration routing-calibration "$gate_arm" matched 1.63e-3 1.63e-4 0.95 587 || status=1
+    fi
+    ;;
+  routing-calibration-2254)
+    [[ $recipe == matched ]] || status=1
+    case "$gate_arm" in
+      adamw_bf16_state_fp32|frugal_coord_bf16_state_fp32|slimadam_bf16_state_fp32) ;;
+      *) status=1 ;;
+    esac
+    if (( status == 0 )); then
+      run_routing_calibration_2254 "$gate_arm" || status=1
+    fi
+    ;;
+  *) status=1 ;;
+esac
+
+if (( status != 0 )); then
+  echo "GATE_FAIL mode=$mode recipe=${recipe:-none} arm=$gate_arm"
+  echo "EXIT=1"
+else
+  echo "GATE_PASS mode=$mode recipe=${recipe:-none} arm=$gate_arm"
+  echo "EXIT=0"
+fi
+exit 0

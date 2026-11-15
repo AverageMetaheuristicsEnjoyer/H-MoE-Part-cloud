@@ -1,0 +1,194 @@
+[
+  {
+    "old_job": "lm-mpi-job-d90bd2aa-e82d-42bd-aa7e-18dbd1302f90",
+    "old_note": "q1001-momentum-r1",
+    "optimizer": "muon",
+    "variant": "M00",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-momentum-r1/stage3-muon_bf16_state_fp32-recipe-probe-q1001-momentum-r1-M00"
+  },
+  {
+    "old_job": "lm-mpi-job-d90bd2aa-e82d-42bd-aa7e-18dbd1302f90",
+    "old_note": "q1001-momentum-r1",
+    "optimizer": "muon",
+    "variant": "M10",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-momentum-r1/stage3-muon_bf16_state_fp8-recipe-probe-q1001-momentum-r1-M10"
+  },
+  {
+    "old_job": "lm-mpi-job-d90bd2aa-e82d-42bd-aa7e-18dbd1302f90",
+    "old_note": "q1001-momentum-r1",
+    "optimizer": "muon",
+    "variant": "M20",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-momentum-r1/stage3-muon_bf16_state_fp8-recipe-probe-q1001-momentum-r1-M20"
+  },
+  {
+    "old_job": "lm-mpi-job-c505fb3c-8268-48a4-90a7-77b4c1ad3b4d",
+    "old_note": "q1001-adam-dre-r1",
+    "optimizer": "adamw",
+    "variant": "A0",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-adam-dre-r1/stage3-adamw_bf16_state_fp32-recipe-probe-q1001-adam-dre-r1-A0"
+  },
+  {
+    "old_job": "lm-mpi-job-c505fb3c-8268-48a4-90a7-77b4c1ad3b4d",
+    "old_note": "q1001-adam-dre-r1",
+    "optimizer": "adamw",
+    "variant": "A1",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-adam-dre-r1/stage3-adamw_bf16_state_fp8-recipe-probe-q1001-adam-dre-r1-A1"
+  },
+  {
+    "old_job": "lm-mpi-job-a3cdeb93-fca6-4372-88ef-4376f4adb7b0",
+    "old_note": "q1001-muon-fallback",
+    "optimizer": "muon",
+    "variant": "M01",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-muon-fallback/stage3-muon_bf16_state_fp8-recipe-probe-q1001-muon-fallback-M01"
+  },
+  {
+    "old_job": "lm-mpi-job-a3cdeb93-fca6-4372-88ef-4376f4adb7b0",
+    "old_note": "q1001-muon-fallback",
+    "optimizer": "muon",
+    "variant": "M02",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-muon-fallback/stage3-muon_bf16_state_fp8-recipe-probe-q1001-muon-fallback-M02"
+  },
+  {
+    "old_job": "lm-mpi-job-6f68dabd-860e-47e5-8163-91bdf94b03b0",
+    "old_note": "q1001-muon-dre-fallback",
+    "optimizer": "muon",
+    "variant": "M11",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-muon-dre-fallback/stage3-muon_bf16_state_fp8-recipe-probe-q1001-muon-dre-fallback-M11"
+  },
+  {
+    "old_job": "lm-mpi-job-6f68dabd-860e-47e5-8163-91bdf94b03b0",
+    "old_note": "q1001-muon-dre-fallback",
+    "optimizer": "muon",
+    "variant": "M21",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-muon-dre-fallback/stage3-muon_bf16_state_fp8-recipe-probe-q1001-muon-dre-fallback-M21"
+  },
+  {
+    "old_job": "lm-mpi-job-575bef08-9125-406c-b83b-c10b419f81f9",
+    "old_note": "q1001-muon-cross",
+    "optimizer": "muon",
+    "variant": "M12",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-muon-cross/stage3-muon_bf16_state_fp8-recipe-probe-q1001-muon-cross-M12"
+  },
+  {
+    "old_job": "lm-mpi-job-575bef08-9125-406c-b83b-c10b419f81f9",
+    "old_note": "q1001-muon-cross",
+    "optimizer": "muon",
+    "variant": "M22",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-muon-cross/stage3-muon_bf16_state_fp8-recipe-probe-q1001-muon-cross-M22"
+  },
+  {
+    "old_job": "lm-mpi-job-575bef08-9125-406c-b83b-c10b419f81f9",
+    "old_note": "q1001-muon-cross",
+    "optimizer": "muon",
+    "variant": "M13",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-muon-cross/stage3-muon_bf16_state_fp8-recipe-probe-q1001-muon-cross-M13"
+  },
+  {
+    "old_job": "lm-mpi-job-575bef08-9125-406c-b83b-c10b419f81f9",
+    "old_note": "q1001-muon-cross",
+    "optimizer": "muon",
+    "variant": "M00",
+    "technical_repeat": true,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-muon-cross/stage3-muon_bf16_state_fp32-recipe-probe-q1001-muon-cross-M00"
+  },
+  {
+    "old_job": "lm-mpi-job-5b6bfcc9-32cf-474d-bcc8-5510e5064ab9",
+    "old_note": "q1001-adam-maxabs",
+    "optimizer": "adamw",
+    "variant": "A2",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-adam-maxabs/stage3-adamw_bf16_state_fp8-recipe-probe-q1001-adam-maxabs-A2"
+  },
+  {
+    "old_job": "lm-mpi-job-5b6bfcc9-32cf-474d-bcc8-5510e5064ab9",
+    "old_note": "q1001-adam-maxabs",
+    "optimizer": "adamw",
+    "variant": "A3",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-adam-maxabs/stage3-adamw_bf16_state_fp8-recipe-probe-q1001-adam-maxabs-A3"
+  },
+  {
+    "old_job": "lm-mpi-job-5b6bfcc9-32cf-474d-bcc8-5510e5064ab9",
+    "old_note": "q1001-adam-maxabs",
+    "optimizer": "adamw",
+    "variant": "A0",
+    "technical_repeat": true,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-adam-maxabs/stage3-adamw_bf16_state_fp32-recipe-probe-q1001-adam-maxabs-A0"
+  },
+  {
+    "old_job": "lm-mpi-job-d5c95eae-fab4-4879-89b2-1f916cee4356",
+    "old_note": "q1001-muon-compute-hybrid",
+    "optimizer": "muon",
+    "variant": "delayed_h1",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-muon-compute-hybrid/stage3-muon_fp8gemm_state_fp32-recipe-probe-q1001-muon-compute-hybrid-delayed_h1"
+  },
+  {
+    "old_job": "lm-mpi-job-d5c95eae-fab4-4879-89b2-1f916cee4356",
+    "old_note": "q1001-muon-compute-hybrid",
+    "optimizer": "muon",
+    "variant": "current",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-muon-compute-hybrid/stage3-muon_fp8gemm_state_fp32-recipe-probe-q1001-muon-compute-hybrid-current"
+  },
+  {
+    "old_job": "lm-mpi-job-fcd03a93-3726-4a80-b8d7-1645effa4b6a",
+    "old_note": "q1001-muon-compute-e4",
+    "optimizer": "muon",
+    "variant": "current_e4m3",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-muon-compute-e4/stage3-muon_fp8gemm_state_fp32-recipe-probe-q1001-muon-compute-e4-current_e4m3"
+  },
+  {
+    "old_job": "lm-mpi-job-fcd03a93-3726-4a80-b8d7-1645effa4b6a",
+    "old_note": "q1001-muon-compute-e4",
+    "optimizer": "muon",
+    "variant": "blockwise",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-muon-compute-e4/stage3-muon_fp8gemm_state_fp32-recipe-probe-q1001-muon-compute-e4-blockwise"
+  },
+  {
+    "old_job": "lm-mpi-job-c57ede7d-b2b4-48aa-ab3f-5dc7e5d1490d",
+    "old_note": "q1001-adam-compute-hybrid",
+    "optimizer": "adamw",
+    "variant": "delayed_h1",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-adam-compute-hybrid/stage3-adamw_fp8gemm_state_fp32-recipe-probe-q1001-adam-compute-hybrid-delayed_h1"
+  },
+  {
+    "old_job": "lm-mpi-job-c57ede7d-b2b4-48aa-ab3f-5dc7e5d1490d",
+    "old_note": "q1001-adam-compute-hybrid",
+    "optimizer": "adamw",
+    "variant": "current",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-adam-compute-hybrid/stage3-adamw_fp8gemm_state_fp32-recipe-probe-q1001-adam-compute-hybrid-current"
+  },
+  {
+    "old_job": "lm-mpi-job-b342c5f5-6d74-4747-9c83-ffb10d470fe6",
+    "old_note": "q1001-adam-compute-e4",
+    "optimizer": "adamw",
+    "variant": "current_e4m3",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-adam-compute-e4/stage3-adamw_fp8gemm_state_fp32-recipe-probe-q1001-adam-compute-e4-current_e4m3"
+  },
+  {
+    "old_job": "lm-mpi-job-b342c5f5-6d74-4747-9c83-ffb10d470fe6",
+    "old_note": "q1001-adam-compute-e4",
+    "optimizer": "adamw",
+    "variant": "blockwise",
+    "technical_repeat": false,
+    "old_run_dir": "/workspace-SR006.nfs3/hmoe-cloud/quantization-20261001/q1001-adam-compute-e4/stage3-adamw_fp8gemm_state_fp32-recipe-probe-q1001-adam-compute-e4-blockwise"
+  }
+]

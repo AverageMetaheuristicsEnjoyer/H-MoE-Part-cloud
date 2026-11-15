@@ -1,0 +1,25 @@
+{
+  "files": [
+    {
+      "source": "/home/adam/Programming/Efficient-Training/src/models/base.py",
+      "copied_to": "models/base.py",
+      "sha256": "fa0585624316d20c386d4da346d3c2b263afa4a68b1b76a167f502f16daa9ee5"
+    },
+    {
+      "source": "/home/adam/Programming/Efficient-Training/src/models/llama.py",
+      "copied_to": "models/llama.py",
+      "sha256": "fe3fe79e3d7d72bbb660ea1da2a37582ea9b4f7e5f2b099f106e3a5a27e19e7a"
+    },
+    {
+      "source": "/home/adam/Programming/Efficient-Training/src/models/utils.py",
+      "copied_to": "models/utils.py",
+      "sha256": "2f1eaeebdd5e23470d95862e07c716dcd6c29afbf02460f9a4a18edf732cdc5c"
+    },
+    {
+      "source": "/home/adam/Programming/Efficient-Training/src/optim/sota_opt/ademamix.py",
+      "copied_to": "ademamix.py",
+      "sha256": "2a3cb328a61dc00fc794fca307d547d4f7eb18f93921f914e390c0d7de1bee0b"
+    }
+  ],
+  "usage": "Controlled BF16 gradient replay on stored Dense checkpoint; not exact historical training continuation."
+}

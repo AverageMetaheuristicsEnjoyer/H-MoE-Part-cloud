@@ -1,0 +1,7 @@
+group: basic_v2
+task:
+  - basic_v2_hellaswag
+  - basic_v2_arc_easy
+  - basic_v2_arc_challenge
+  - basic_v2_piqa
+  - basic_v2_gsm8k_gold_bpb_5shot

@@ -1,0 +1,24 @@
+task: basic_v2_gsm8k_gold_bpb_5shot
+dataset_path: openai/gsm8k
+dataset_name: main
+output_type: loglikelihood
+training_split: train
+test_split: test
+process_docs: !function utils.process_gsm8k_docs
+doc_to_text: !function utils.gsm8k_doc_to_text
+doc_to_target: !function utils.gsm8k_doc_to_target
+target_delimiter: ""
+fewshot_config:
+  sampler: first_n
+  split: train
+  process_docs: !function utils.process_gsm8k_docs
+num_fewshot: 5
+process_results: !function metrics.process_gsm8k_bpb_v2
+metric_list:
+  - metric: bpb_v2
+    aggregation: mean
+    higher_is_better: false
+metadata:
+  version: 1.0
+  prompt: olmo_basic_v2
+  fewshot: 5

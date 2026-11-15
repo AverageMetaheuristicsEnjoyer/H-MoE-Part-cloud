@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "primary": {
+    "provider": "lm-eval",
+    "version": "0.4.11",
+    "include_path": "stage4/eval_tasks",
+    "task_group": "basic_v2",
+    "tasks": [
+      "basic_v2_hellaswag",
+      "basic_v2_arc_easy",
+      "basic_v2_arc_challenge",
+      "basic_v2_piqa",
+      "basic_v2_gsm8k_gold_bpb_5shot"
+    ],
+    "log_samples": true,
+    "preserve_per_example_outputs": true,
+    "metrics": [
+      "acc_v2",
+      "len_norm_v2",
+      "bpb_v2"
+    ]
+  },
+  "secondary": {
+    "provider": "lm-eval",
+    "version": "0.4.11",
+    "analysis_scope": "exploratory_posthoc_wave2",
+    "task_group": "stage3_wave2",
+    "tasks": [
+      {
+        "name": "wikitext",
+        "num_fewshot": 0,
+        "type": "loglikelihood_rolling",
+        "metrics": ["bits_per_byte"]
+      },
+      {
+        "name": "c4",
+        "num_fewshot": 0,
+        "type": "loglikelihood_rolling",
+        "metrics": ["bits_per_byte"]
+      },
+      {
+        "name": "winogrande",
+        "num_fewshot": 5,
+        "type": "multiple_choice",
+        "metrics": ["acc"]
+      },
+      {
+        "name": "openbookqa",
+        "num_fewshot": 5,
+        "type": "multiple_choice",
+        "metrics": ["acc", "acc_norm"]
+      },
+      {
+        "name": "mmlu",
+        "num_fewshot": 5,
+        "type": "multiple_choice",
+        "metrics": ["acc"]
+      }
+    ],
+    "log_samples": true,
+    "preserve_per_example_outputs": true
+  },
+  "broad_screen": {
+    "provider": "lm-eval",
+    "version": "0.4.11",
+    "analysis_scope": "exploratory_posthoc_broad_v1",
+    "task_group": "stage3_broad_v1",
+    "tasks": [
+      {"name": "blimp", "num_fewshot": 0, "metrics": ["acc"]},
+      {"name": "swag", "num_fewshot": 0, "metrics": ["acc", "acc_norm"]},
+      {"name": "mnli", "num_fewshot": 0, "metrics": ["acc"]},
+      {"name": "mnli_mismatch", "num_fewshot": 0, "metrics": ["acc"]},
+      {"name": "qnli", "num_fewshot": 0, "metrics": ["acc"]},
+      {"name": "qqp", "num_fewshot": 0, "metrics": ["acc"]},
+      {"name": "prost", "num_fewshot": 0, "metrics": ["acc", "acc_norm"]},
+      {"name": "toxigen", "num_fewshot": 0, "metrics": ["acc", "acc_norm"]},
+      {"name": "moral_stories", "num_fewshot": 0, "metrics": ["acc", "acc_norm"]},
+      {"name": "boolq", "num_fewshot": 0, "metrics": ["acc"]},
+      {"name": "race", "num_fewshot": 0, "metrics": ["acc"]},
+      {"name": "lambada_openai", "num_fewshot": 0, "metrics": ["acc"]},
+      {"name": "pile_10k", "num_fewshot": 0, "metrics": ["bits_per_byte"]},
+      {"name": "leaderboard_mmlu_pro", "num_fewshot": 5, "metrics": ["acc"]}
+    ],
+    "log_samples": true,
+    "preserve_per_example_outputs": true
+  },
+  "comparison": {
+    "pair_key": "task_and_doc_id",
+    "bootstrap_confidence": 0.95,
+    "accuracy_test": "mcnemar_secondary",
+    "continuous_metrics": "paired_bootstrap"
+  }
+}

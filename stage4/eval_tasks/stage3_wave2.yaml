@@ -1,0 +1,18 @@
+group: stage3_wave2
+task:
+  - task: wikitext
+    num_fewshot: 0
+    metric_list:
+      - metric: bits_per_byte
+  - task: c4
+    num_fewshot: 0
+    metric_list:
+      - metric: bits_per_byte
+  - task: winogrande
+    num_fewshot: 5
+  - task: openbookqa
+    num_fewshot: 5
+  - task: mmlu
+    num_fewshot: 5
+metadata:
+  version: 1.0

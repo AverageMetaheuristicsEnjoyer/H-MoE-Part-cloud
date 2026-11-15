@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# Read-only inspection of router expert-bias tensors in Stage 3 checkpoints.
+set -eu
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+export PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root"
+nvidia_lib_path=$(find /home/user/conda/lib/python3.12/site-packages/nvidia \
+  -mindepth 2 -maxdepth 2 -type d -name lib -print 2>/dev/null | paste -sd: - || true)
+export LD_LIBRARY_PATH=${nvidia_lib_path}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+
+arm=adamw_fp8gemm_state_fp32
+paths=(
+  "source-original:/workspace-SR006.nfs3/hmoe-checkpoints/stage3/trunk/$arm/iter_0013794"
+  "source-resume:/workspace-SR006.nfs3/hmoe-checkpoints/stage3-time-match-source/$arm/iter_0013794"
+  "original-17242:/workspace-SR006.nfs3/hmoe-checkpoints/stage3/trunk/$arm/iter_0017242"
+  "time-match-19570-nfs2:/workspace-SR006.nfs2/hmoe-checkpoints/stage3-time-match/time-match/$arm/iter_0019570"
+  "time-match-19570-home:/home/jovyan/hmoe-checkpoints/stage3-time-match/time-match/$arm/iter_0019570"
+  "extension-control-17242:/workspace-SR006.nfs3/hmoe-checkpoints/stage3-extension-decay-control/extension-decay-control/$arm/iter_0017242"
+  "stretched-19570:/workspace-SR006.nfs3/hmoe-checkpoints/stage3-time-match-stretched-v1/time-match-stretched/$arm/iter_0019570"
+)
+
+files=()
+labels=()
+for item in "${paths[@]}"; do
+  label=${item%%:*}
+  path=${item#*:}
+  file=$(find "$path" -maxdepth 2 -type f -name 'model_optim_rng.pt' -print -quit 2>/dev/null || true)
+  if [[ -n $file ]]; then
+    labels+=("$label")
+    files+=("$file")
+    stat -c "CHECKPOINT_FILE label=$label size=%s inode=%i path=%n" "$file"
+  else
+    echo "CHECKPOINT_MISSING label=$label path=$path"
+  fi
+done
+
+python - "${labels[*]}" "${files[@]}" <<'PY'
+import hashlib
+import pickle
+import sys
+
+import torch
+
+
+class Placeholder:
+    def __new__(cls, *args, **kwargs):
+        return super().__new__(cls)
+
+
+class CheckpointUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        if module.startswith("megatron"):
+            return Placeholder
+        return super().find_class(module, name)
+
+
+class CheckpointPickle:
+    __name__ = "pickle"
+    Unpickler = CheckpointUnpickler
+    load = pickle.load
+    loads = pickle.loads
+    dump = pickle.dump
+    dumps = pickle.dumps
+
+
+labels = sys.argv[1].split()
+files = sys.argv[2:]
+for label, path in zip(labels, files):
+    checkpoint = torch.load(
+        path,
+        map_location="cpu",
+        mmap=True,
+        pickle_module=CheckpointPickle,
+        weights_only=False,
+    )
+    model = checkpoint["model"]
+    keys = sorted(k for k in model if k.endswith("expert_bias"))
+    tensors = [model[k].detach().float().reshape(-1) for k in keys]
+    flat = torch.cat(tensors) if tensors else torch.empty(0)
+    digest = hashlib.sha256(flat.numpy().tobytes()).hexdigest() if tensors else "none"
+    args = checkpoint.get("args")
+    consumed = getattr(args, "consumed_train_samples", None)
+    scheduler = checkpoint.get("opt_param_scheduler", checkpoint.get("lr_scheduler", {}))
+    print(
+        f"BIAS_SUMMARY label={label} iteration={checkpoint.get('iteration')} "
+        f"consumed_train_samples={consumed} keys={len(keys)} values={flat.numel()} "
+        f"nonzero={torch.count_nonzero(flat).item()} min={flat.min().item():.9g} "
+        f"max={flat.max().item():.9g} mean={flat.mean().item():.9g} "
+        f"std={flat.std(unbiased=False).item():.9g} sha256={digest} "
+        f"optimizer={'optimizer' in checkpoint} "
+        f"scheduler={'opt_param_scheduler' in checkpoint or 'lr_scheduler' in checkpoint} "
+        f"rng={'rng_state' in checkpoint}"
+    )
+    print(
+        f"SCHEDULER_SUMMARY label={label} "
+        f"num_steps={scheduler.get('num_steps', scheduler.get('num_iters'))} "
+        f"max_lr={scheduler.get('max_lr', scheduler.get('start_lr'))} "
+        f"min_lr={scheduler.get('min_lr')} "
+        f"lr_decay_steps={scheduler.get('lr_decay_steps', scheduler.get('decay_steps'))} "
+        f"wsd_decay_steps={scheduler.get('wsd_decay_steps')}"
+    )
+
+    def optimizer_param_groups(value, path="optimizer"):
+        if isinstance(value, dict):
+            groups = value.get("param_groups")
+            if isinstance(groups, list):
+                for index, group in enumerate(groups):
+                    print(
+                        f"OPTIMIZER_GROUP label={label} path={path}.param_groups[{index}] "
+                        f"lr={group.get('lr')} max_lr={group.get('max_lr')} "
+                        f"min_lr={group.get('min_lr')}"
+                    )
+            for key in ("optimizer", "optimizers", "chained_optimizers"):
+                if key in value:
+                    optimizer_param_groups(value[key], f"{path}.{key}")
+        elif isinstance(value, (list, tuple)):
+            for index, item in enumerate(value):
+                optimizer_param_groups(item, f"{path}[{index}]")
+
+    optimizer_param_groups(checkpoint.get("optimizer"))
+    for key, tensor in zip(keys, tensors):
+        key_digest = hashlib.sha256(tensor.numpy().tobytes()).hexdigest()[:16]
+        print(
+            f"BIAS_LAYER label={label} key={key} min={tensor.min().item():.9g} "
+            f"max={tensor.max().item():.9g} std={tensor.std(unbiased=False).item():.9g} "
+            f"sha256={key_digest}"
+        )
+    del checkpoint, model, tensors, flat
+PY
+
+for root in /workspace-SR006.nfs2/hmoe-cloud/pretrain /workspace-SR006.nfs3/hmoe-cloud/pretrain; do
+  [[ -d $root ]] || continue
+  find "$root" -type f -name 'train-*.log' \( -path '*time-match*' -o -path '*extension-decay-control*' \) -print0 2>/dev/null |
+    xargs -0 grep -HiaE 'load_return:|missing key|unexpected key|successfully loaded checkpoint|loading checkpoint.*iteration 13794' 2>/dev/null |
+    tail -80
+done
+
+echo EXIT=0
