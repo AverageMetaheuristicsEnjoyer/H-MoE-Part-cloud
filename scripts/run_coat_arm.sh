@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # One from-scratch 1C pretraining arm of the COAT series on the GPUs in CUDA_VISIBLE_DEVICES.
 #   run_coat_arm.sh ARM_ID
-# Checkpoints live on the node's /tmp: they serve restarts inside this job, nothing else.
+# Checkpoints default to the node's /tmp; set STAGE3_MOE_CKPT_ROOT for persistent restarts.
 # Real success is COAT_ARM_RESULT ... reached=17242.
 set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
 arm_id=${1:?usage: run_coat_arm.sh ARM_ID}
 campaign=${COAT_CAMPAIGN_ROOT:-/workspace-SR006.nfs3/hmoe-cloud/coat-20261002}
+run_tag=${COAT_RUN_TAG:-c1002}
 # COAT_STOP_ITERS=N: stop a from-scratch run at step N on the unchanged 17,242-step WSD schedule (the BF16
 # noise-floor replicates of 2026-10-08: 5 seeds x 3,000 steps). No archive, no final-model copy.
 full_iters=${COAT_STOP_ITERS:-17242}
@@ -59,12 +60,13 @@ if [[ -n ${STAGE3_MOE_MUON_PRESET:-} ]]; then
   # The preset is part of the run's identity: stage dir, log dir, W&B id and archive names.
   arm_id=$arm_id-$STAGE3_MOE_MUON_PRESET
 fi
+arm_id=${COAT_ARM_ID_PREFIX:-}$arm_id
 
-stage=/tmp/hmoe-coat/$arm_id
-export STAGE3_MOE_CKPT_ROOT=$stage/ckpt
-export STAGE3_MOE_LOG_ROOT=$campaign/runs-${COAT_ROUND:-r2}/$arm_id
-export STAGE3_MOE_DATA_CACHE_PATH=$stage/data-cache
-export STAGE3_MOE_RUN_SUFFIX=c1002-$arm_id
+stage=${COAT_STAGE_ROOT:-/tmp/hmoe-coat}/$arm_id
+export STAGE3_MOE_CKPT_ROOT=${STAGE3_MOE_CKPT_ROOT:-$stage/ckpt}
+export STAGE3_MOE_LOG_ROOT=${STAGE3_MOE_LOG_ROOT:-$campaign/runs-${COAT_ROUND:-r2}/$arm_id}
+export STAGE3_MOE_DATA_CACHE_PATH=${STAGE3_MOE_DATA_CACHE_PATH:-$stage/data-cache}
+export STAGE3_MOE_RUN_SUFFIX=$run_tag-$arm_id
 export STAGE3_MOE_MICRO_BATCH=${STAGE3_MOE_MICRO_BATCH:-13}
 export STAGE3_MOE_NPROC=${STAGE3_MOE_NPROC:-4}
 export STAGE3_MOE_EP=1
@@ -75,7 +77,7 @@ export STAGE3_MOE_PROPAGATE_EXIT=1
 export HF_HOME=$stage/hf-cache
 export WANDB_MODE=offline
 export NVTE_FP8_BLOCK_SCALING_FP32_SCALES=1
-export WANDB_RUN_ID=stage3-$arm-full-$STAGE3_MOE_RUN_SUFFIX
+export WANDB_RUN_ID=${WANDB_RUN_ID:-stage3-$arm-full-$STAGE3_MOE_RUN_SUFFIX}
 unset PYTHONNOUSERSITE
 mkdir -p "$stage" "$STAGE3_MOE_LOG_ROOT"
 
@@ -89,7 +91,7 @@ fi
 [[ -n ${STAGE3_MOE_DATA_ROOT:-} ]] || { echo "COAT_ARM_ABORT=no_corpus"; exit 2; }
 
 if [[ ${COAT_ARM_MODE:-full} == bench ]]; then
-  export STAGE3_MOE_RUN_SUFFIX=c1002-bench-$arm_id-${COAT_BENCH_TAG:-0} STAGE3_MOE_BENCH_WARMUP=${COAT_BENCH_WARMUP:-20} STAGE3_MOE_BENCH_MEASURE=${COAT_BENCH_MEASURE:-40}
+  export STAGE3_MOE_RUN_SUFFIX=$run_tag-bench-$arm_id-${COAT_BENCH_TAG:-0} STAGE3_MOE_BENCH_WARMUP=${COAT_BENCH_WARMUP:-20} STAGE3_MOE_BENCH_MEASURE=${COAT_BENCH_MEASURE:-40}
   "$root/scripts/run_stage3_moe_pretrain.sh" "$arm" bench > "$stage/bench.log" 2>&1
   code=$?
   python - "$STAGE3_MOE_LOG_ROOT/stage3-$arm-bench-$STAGE3_MOE_RUN_SUFFIX/results.jsonl" "$arm_id" "$code" <<'PY'
@@ -116,7 +118,7 @@ fi
 if [[ ${COAT_ARM_MODE:-full} == screen ]]; then
   # SOW Stage 4 screen: a complete 1.2B-token WSD run from scratch (launcher mode lr-sweep: 2,818 steps, decay over the
   # last 564, nothing saved), so schedules that act in the decay are seen. Real success is COAT_ARM_SCREEN ... reached=2818.
-  export STAGE3_MOE_RUN_SUFFIX=c1002-screen-$arm_id
+  export STAGE3_MOE_RUN_SUFFIX=$run_tag-screen-$arm_id
   "$root/scripts/run_stage3_moe_pretrain.sh" "$arm" lr-sweep > "$stage/screen.log" 2>&1
   code=$?
   train_log=$(grep -oP '^TRAIN_LOG=\K.*' "$stage/screen.log")
@@ -147,7 +149,7 @@ fi
 
 if [[ ${COAT_ARM_MODE:-full} == smoke ]]; then
   # Save at 10 and 20, then resume from 20 in a fresh process and run to 40.
-  export STAGE3_MOE_CKPT_ROOT=$stage/smoke-ckpt STAGE3_MOE_KEEP_SMOKE_CKPT=1 STAGE3_MOE_RUN_SUFFIX=c1002-smoke-$arm_id STAGE3_MOE_LOG_INTERVAL=1
+  export STAGE3_MOE_CKPT_ROOT=$STAGE3_MOE_CKPT_ROOT/smoke-$arm_id STAGE3_MOE_KEEP_SMOKE_CKPT=1 STAGE3_MOE_RUN_SUFFIX=$run_tag-smoke-$arm_id STAGE3_MOE_LOG_INTERVAL=1
   rm -rf "$STAGE3_MOE_CKPT_ROOT"
   for iters in 20 40; do
     STAGE3_MOE_SMOKE_ITERS=$iters "$root/scripts/run_stage3_moe_pretrain.sh" "$arm" smoke > "$stage/smoke-$iters.log" 2>&1
@@ -217,7 +219,7 @@ touch "$done_flag"
 # volume that still has room; the shared volumes are nearly full, so a volume with less than 6 GiB free is skipped.
 if [[ -z ${COAT_STOP_ITERS:-} && $reached == "$full_iters" && -f $tracker && ! -f $archived ]]; then
   python - "$STAGE3_MOE_CKPT_ROOT/1c/$arm/iter_$(printf '%07d' "$(cat "$tracker")")/mp_rank_00/model_optim_rng.pt" "$arm_id" \
-    "$campaign/final-models" /workspace-SR006.nfs2/hmoe-cloud/coat-20261002-final-models <<'PY'
+    "$campaign/final-models" "${COAT_FINAL_MODEL_FALLBACK_ROOT:-/workspace-SR006.nfs2/hmoe-cloud/coat-20261002-final-models}" <<'PY'
 import hashlib, pathlib, shutil, sys, torch
 source, arm_id, *roots = sys.argv[1:]
 try:

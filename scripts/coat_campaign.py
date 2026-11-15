@@ -3,6 +3,7 @@
   worker ARM_ID...   claim arms (four GPUs each) atomically on NFS and run them concurrently
   test               GPU tests of the COAT ports
   inspect            read-only progress of every arm of the series
+  preflight          bounded environment/storage/artifact checks; no training
 """
 import datetime
 import json
@@ -932,6 +933,8 @@ def main():
         result = subprocess.run([sys.executable, str(root / 'scripts/coat_archive.py'), 'probe'], capture_output=True, text=True)
         print((result.stdout + result.stderr)[-1500:], flush=True)
         return 0
+    if mode == 'preflight':
+        return subprocess.call([sys.executable, str(root / 'scripts/lionmoe_preflight.py')], cwd=root)
     if mode == 'disk':
         # Free space on every persistent volume and what the series keeps there.
         subprocess.run(['df', '-h', '/home/jovyan', '/workspace-SR006.nfs2', '/workspace-SR006.nfs3', '/tmp'], check=False)
