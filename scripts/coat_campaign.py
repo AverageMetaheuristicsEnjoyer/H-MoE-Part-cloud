@@ -113,6 +113,54 @@ def inspect():
     return 0
 
 
+def preflight():
+    output = Path(os.environ['HMOE_PREFLIGHT_ROOT'])
+    output.mkdir(parents=True, exist_ok=True)
+    progress_path = output / 'payload-progress.jsonl'
+    started = time.monotonic()
+
+    def progress(state, **fields):
+        record = {'state': state, 'utc': utc(), 'elapsed_seconds': round(time.monotonic() - started, 3), **fields}
+        with progress_path.open('a') as stream:
+            stream.write(json.dumps(record, sort_keys=True) + '\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+
+    progress('started', hard_timeout_seconds=600, kill_after_seconds=5)
+    stdout_path = output / 'payload.stdout.log'
+    stderr_path = output / 'payload.stderr.log'
+    code = 125
+    try:
+        with stdout_path.open('w') as stdout, stderr_path.open('w') as stderr:
+            try:
+                result = subprocess.run(['timeout', '-k', '5s', '600s', sys.executable,
+                                         str(root / 'scripts/lionmoe_preflight.py')],
+                                        cwd=root, stdout=stdout, stderr=stderr)
+                code = result.returncode
+            except Exception as error:
+                stderr.write(f'PREFLIGHT_PARENT_ERROR {error!r}\n')
+                stderr.flush()
+                os.fsync(stderr.fileno())
+    finally:
+        elapsed = time.monotonic() - started
+        timeout = code in (124, 137)
+        progress('finished', exit=code, timeout=timeout,
+                 timeout_class='payload_hard_timeout_600s' if timeout else None)
+        exit_record = {'exit': code, 'elapsed_seconds': round(elapsed, 3),
+                       'timeout': timeout, 'hard_timeout_seconds': 600, 'kill_after_seconds': 5}
+        with (output / 'payload-exit.json').open('w') as stream:
+            stream.write(json.dumps(exit_record, sort_keys=True) + '\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+    print(f'PREFLIGHT_PAYLOAD_EXIT={code} PREFLIGHT_PAYLOAD_SECONDS={elapsed:.3f} TIMEOUT={code in (124, 137)}', flush=True)
+    for label, path in (('STDOUT', stdout_path), ('STDERR', stderr_path)):
+        print(f'PREFLIGHT_{label}_PATH={path}', flush=True)
+        print(f'PREFLIGHT_{label}_BEGIN', flush=True)
+        print(path.read_text(errors='replace') if path.exists() else 'missing', flush=True)
+        print(f'PREFLIGHT_{label}_END', flush=True)
+    return code
+
+
 STEP_RE = re.compile(r"iteration\s+(\d+)/\s*\d+ \|.*?elapsed time per iteration \(ms\): ([0-9.]+).*?lm loss: ([0-9.eE+-]+).*?grad norm: ([0-9.eE+-]+)"
                      r".*?skipped iterations:\s+(\d+).*?nan iterations:\s+(\d+)")
 EVAL_RE = re.compile(r"loss at iteration\s+(\d+)(?: on (validation|test) set)?\s*\| lm loss value: ([0-9.eE+-]+)")
@@ -934,7 +982,7 @@ def main():
         print((result.stdout + result.stderr)[-1500:], flush=True)
         return 0
     if mode == 'preflight':
-        return subprocess.call([sys.executable, str(root / 'scripts/lionmoe_preflight.py')], cwd=root)
+        return preflight()
     if mode == 'disk':
         # Free space on every persistent volume and what the series keeps there.
         subprocess.run(['df', '-h', '/home/jovyan', '/workspace-SR006.nfs2', '/workspace-SR006.nfs3', '/tmp'], check=False)

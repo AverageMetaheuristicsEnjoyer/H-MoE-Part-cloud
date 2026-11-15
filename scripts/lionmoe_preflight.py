@@ -14,7 +14,7 @@ output_root = Path(os.environ["HMOE_PREFLIGHT_ROOT"])
 output_root.mkdir(parents=True, exist_ok=True)
 started = datetime.datetime.now(datetime.timezone.utc)
 report = {
-    "schema": "hmoe-lionmoe-preflight-001-v1",
+    "schema": "hmoe-lionmoe-environment-002-v2",
     "started_at": started.isoformat(),
     "training_invoked": False,
     "identity": {
@@ -90,6 +90,8 @@ report["environment"] = {
         "--format=csv,noheader",
     ]),
 }
+if report["environment"]["nvidia_smi"].get("exit") != 0 or not report["environment"]["nvidia_smi"].get("stdout"):
+    report["blockers"].append("nvidia_smi_failed")
 for package in (
     "torch",
     "transformer-engine",
@@ -106,7 +108,7 @@ for package in (
         report["environment"]["packages"][package] = None
 try:
     torch = importlib.import_module("torch")
-    report["environment"]["torch"] = {
+    torch_state = {
         "version": torch.__version__,
         "cuda_version": torch.version.cuda,
         "cuda_available": torch.cuda.is_available(),
@@ -122,6 +124,11 @@ try:
             for index in range(torch.cuda.device_count())
         ],
     }
+    report["environment"]["torch"] = torch_state
+    if not torch_state["cuda_available"]:
+        report["blockers"].append("cuda_unavailable")
+    if torch_state["device_count"] != 1:
+        report["blockers"].append("gpu_count_not_one")
 except Exception as error:
     report["environment"]["torch_error"] = safe_error(error)
     report["blockers"].append("torch_or_cuda_unavailable")
@@ -140,7 +147,63 @@ try:
 except Exception as error:
     report["environment"]["logger_imports"] = False
     report["environment"]["logger_error"] = safe_error(error)
-    report["blockers"].append("logging_dependencies_missing")
+
+
+def logging_artifacts(directory):
+    return [
+        {"path": str(path), "bytes": path.stat().st_size, "sha256": sha256(path)}
+        for path in sorted(directory.rglob("*"))
+        if path.is_file()
+    ]
+
+
+report["logging"] = {"online_tokens_used": False}
+os.environ["WANDB_MODE"] = "offline"
+os.environ.pop("WANDB_API_KEY", None)
+try:
+    wandb = importlib.import_module("wandb")
+    wandb_root = output_root / "logging" / "wandb"
+    wandb_root.mkdir(parents=True, exist_ok=True)
+    wandb_run = wandb.init(
+        project="hmoe-lionmoe-environment",
+        name="environment-002",
+        id="hmoe-lionmoe-20261116-environment-002",
+        dir=str(wandb_root),
+        reinit=True,
+    )
+    wandb_run.log({"environment_probe": 1})
+    wandb_run.finish()
+    offline_runs = [path for path in wandb_root.rglob("offline-run-*") if path.is_dir()]
+    files = logging_artifacts(wandb_root)
+    report["logging"]["wandb"] = {
+        "mode": "offline",
+        "offline_runs": [str(path) for path in offline_runs],
+        "files": files,
+        "verified": bool(offline_runs and files),
+    }
+    if not offline_runs or not files:
+        report["blockers"].append("wandb_offline_files_missing")
+except Exception as error:
+    report["logging"]["wandb"] = {"verified": False, "error": safe_error(error)}
+    report["blockers"].append("wandb_offline_unverified")
+try:
+    tensorboard = importlib.import_module("torch.utils.tensorboard")
+    tensorboard_root = output_root / "logging" / "tensorboard"
+    writer = tensorboard.SummaryWriter(log_dir=str(tensorboard_root))
+    writer.add_scalar("environment/probe", 1, 0)
+    writer.flush()
+    writer.close()
+    files = logging_artifacts(tensorboard_root)
+    report["logging"]["tensorboard"] = {"root": str(tensorboard_root), "files": files, "verified": bool(files)}
+    if not files:
+        report["blockers"].append("tensorboard_files_missing")
+except Exception as error:
+    report["logging"]["tensorboard"] = {"verified": False, "error": safe_error(error)}
+    report["blockers"].append("tensorboard_unverified")
+report["logging"]["offline_gate_passed"] = bool(
+    report["logging"].get("wandb", {}).get("verified")
+    and report["logging"].get("tensorboard", {}).get("verified")
+)
 
 report["storage"] = {"volumes": []}
 for candidate in ("/home/jovyan", "/workspace-SR006.nfs2", "/workspace-SR006.nfs3"):
@@ -155,15 +218,20 @@ for candidate in ("/home/jovyan", "/workspace-SR006.nfs2", "/workspace-SR006.nfs
         })
     report["storage"]["volumes"].append(item)
 probe_path = output_root / "nfs-roundtrip.bin"
-probe_payload = b"hmoe-lionmoe-20261116-preflight-001\n" + started.isoformat().encode() + b"\n"
+probe_payload = b"hmoe-lionmoe-20261116-environment-002\n" + started.isoformat().encode() + b"\n"
 try:
-    probe_path.write_bytes(probe_payload)
+    with probe_path.open("wb") as stream:
+        stream.write(probe_payload)
+        stream.flush()
+        os.fsync(stream.fileno())
     restored = probe_path.read_bytes()
     report["storage"]["tiny_round_trip"] = {
         "path": str(probe_path),
         "bytes": len(probe_payload),
         "sha256": hashlib.sha256(probe_payload).hexdigest(),
+        "fsync_completed": True,
         "readback_equal": restored == probe_payload,
+        "persistence_scope": "fsync and readback in the same process/pod only; cross-pod recovery is unverified",
     }
     if restored != probe_payload:
         report["blockers"].append("nfs_readback_mismatch")
@@ -232,6 +300,12 @@ elif not selected["manifest"]["exists"]:
     report["blockers"].append("corpus_manifest_missing")
 elif not selected["manifest"].get("matches_historical", False):
     report["blockers"].append("corpus_manifest_mismatch")
+report["corpus"]["manifest_gate_passed"] = bool(
+    selected
+    and all(item["exists"] for item in selected["files"].values())
+    and selected["manifest"].get("matches_historical", False)
+)
+report["corpus"]["training_admission"] = "allowed_only_if_manifest_gate_passed"
 
 checkpoint_name = "stage4/muon-ctrl-lm5-iter0017242-model.pt"
 checkpoint_sha = "3cf8ec64542f262b05ecabdeac7a6f530a76a5907d80d117247f2ff49b4584b1"
@@ -282,10 +356,10 @@ if report["transfer"]["credentials_supplied"]:
     import coat_archive
 
     transfer_path = output_root / "cloud-brainlab-roundtrip.bin"
-    transfer_payload = b"hmoe-lionmoe-transfer-preflight-001\n" + started.isoformat().encode() + b"\n"
+    transfer_payload = b"hmoe-lionmoe-transfer-environment-002\n" + started.isoformat().encode() + b"\n"
     transfer_path.write_bytes(transfer_payload)
     transfer_sha = hashlib.sha256(transfer_payload).hexdigest()
-    transfer_name = f"hmoe-lionmoe-20261116-preflight-{int(started.timestamp())}.bin"
+    transfer_name = f"hmoe-lionmoe-20261116-environment-002-{int(started.timestamp())}.bin"
     report["transfer"].update({"attempted": True, "name": transfer_name, "bytes": len(transfer_payload), "sha256": transfer_sha})
     try:
         with coat_archive.connection() as connection:
@@ -318,9 +392,22 @@ else:
     report["blockers"].append("transfer_credentials_not_supplied")
 
 report["status"] = "completed_with_blockers" if report["blockers"] else "passed"
-report["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+finished = datetime.datetime.now(datetime.timezone.utc)
+report["finished_at"] = finished.isoformat()
+report["duration_seconds"] = round((finished - started).total_seconds(), 3)
+report["gates"] = {
+    "environment_passed": not report["blockers"],
+    "offline_logging": report["logging"]["offline_gate_passed"],
+    "corpus_manifest": report["corpus"]["manifest_gate_passed"],
+    "cross_pod_persistence": False,
+    "transport": bool(report["transfer"].get("round_trip_verified")),
+    "training_admitted": False,
+}
 report_path = output_root / "preflight-report.json"
-report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+with report_path.open("w") as stream:
+    stream.write(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    stream.flush()
+    os.fsync(stream.fileno())
 print("PREFLIGHT_JSON " + json.dumps(report, sort_keys=True), flush=True)
 print(f"PREFLIGHT_REPORT={report_path}", flush=True)
 print(f"PREFLIGHT_STATUS={report['status']} blockers={','.join(report['blockers']) or 'none'}", flush=True)
