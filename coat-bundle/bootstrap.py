@@ -16,27 +16,25 @@ if os.environ.get('OMPI_COMM_WORLD_RANK', '0') != '0':
     print('BUNDLE_IDLE_RANK=' + os.environ['OMPI_COMM_WORLD_RANK'], flush=True)
     raise SystemExit(0)
 role = os.environ.get('BUNDLE_ROLE', '')
-wait = float(os.environ.get('BUNDLE_WAIT_SECONDS', '0'))
 here = Path(__file__).resolve().parent
 repo = here.parent
-branch = subprocess.run(['git', '-C', str(repo), 'rev-parse', '--abbrev-ref', 'HEAD'],
-                        capture_output=True, text=True, check=True).stdout.strip()
 started = time.time()
-while True:
-    # Late binding: always run the newest payload the branch carries, once its role is released.
-    fetched = subprocess.run(['git', '-C', str(repo), 'fetch', '-q', '--depth', '1', 'origin', branch],
-                             capture_output=True, text=True)
-    if fetched.returncode == 0:
-        subprocess.run(['git', '-C', str(repo), 'checkout', '-q', 'FETCH_HEAD', '--', here.name], check=True)
-    public_manifest = json.loads((here / 'manifest.json').read_text())
-    if not role or role in public_manifest.get('ready', []):
-        break
-    if time.time() - started > wait:
-        print('BUNDLE_ROLE_NOT_READY=' + role, flush=True)
-        raise SystemExit(0)
-    time.sleep(120)
+expected_carrier_commit = os.environ['EXPECTED_CARRIER_COMMIT']
+actual_carrier_commit = subprocess.run(['git', '-C', str(repo), 'rev-parse', 'HEAD'],
+                                       capture_output=True, text=True, check=True).stdout.strip()
+if actual_carrier_commit != expected_carrier_commit:
+    raise RuntimeError(f'Carrier commit mismatch: {actual_carrier_commit} != {expected_carrier_commit}')
+public_manifest = json.loads((here / 'manifest.json').read_text())
+if role and role not in public_manifest.get('ready', []):
+    print('BUNDLE_ROLE_NOT_READY=' + role, flush=True)
+    raise SystemExit(0)
+if public_manifest['bundle_id'] != os.environ['EXPECTED_BUNDLE_ID']:
+    raise RuntimeError('Public bundle id does not match the expected id')
+if public_manifest['payload_sha256'] != os.environ['EXPECTED_PAYLOAD_SHA256']:
+    raise RuntimeError('Public payload hash does not match the expected hash')
 payload = (here / 'payload.fernet').read_bytes()
-if hashlib.sha256(payload).hexdigest() != public_manifest['payload_sha256']:
+actual_payload_sha256 = hashlib.sha256(payload).hexdigest()
+if actual_payload_sha256 != public_manifest['payload_sha256']:
     raise RuntimeError('Encrypted payload checksum mismatch')
 with tempfile.TemporaryDirectory(prefix='encrypted-job-', dir='/tmp') as directory:
     destination = Path(directory)
@@ -56,8 +54,18 @@ with tempfile.TemporaryDirectory(prefix='encrypted-job-', dir='/tmp') as directo
     manifest = json.loads((source / 'bundle_manifest.json').read_text())
     if manifest['bundle_id'] != public_manifest['bundle_id']:
         raise RuntimeError('Bundle id mismatch')
+    if manifest['source_base'] != os.environ['EXPECTED_SOURCE_COMMIT'] or manifest['source_dirty']:
+        raise RuntimeError('Source commit mismatch or dirty source manifest')
+    archived_files = {path.relative_to(source).as_posix() for path in source.rglob('*') if path.is_file()}
+    if archived_files != set(manifest['sha256']) | {'bundle_manifest.json'}:
+        raise RuntimeError('Archived file set differs from the source manifest')
+    for relative, expected in manifest['sha256'].items():
+        if hashlib.sha256((source / relative).read_bytes()).hexdigest() != expected:
+            raise RuntimeError(f'Source file checksum mismatch: {relative}')
     print('BUNDLE_AUTHENTICATED=' + manifest['bundle_id'] + ' ROLE=' + role
           + ' WAITED_SECONDS=' + str(int(time.time() - started)), flush=True)
+    print('CARRIER_COMMIT=' + actual_carrier_commit + ' SOURCE_COMMIT=' + manifest['source_base']
+          + ' PAYLOAD_SHA256=' + actual_payload_sha256 + ' SOURCE_FILES_VERIFIED=' + str(len(manifest['sha256'])), flush=True)
     if sys.argv[1:] != ['--verify-only']:
         os.environ['BUNDLE_ID'] = manifest['bundle_id']
         raise SystemExit(subprocess.call(manifest['entry'] + sys.argv[1:], cwd=source))

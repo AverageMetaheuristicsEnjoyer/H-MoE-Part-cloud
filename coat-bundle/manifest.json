@@ -1,11 +1,7 @@
 {
-  "bundle_id": "coat-20261002-v123",
-  "payload_sha256": "a46144aa24cb47d23d802bfee285229a47fcacd7ed5f66b1cd2c6e146b97500e",
+  "bundle_id": "hmoe-lionmoe-20261116-v001",
+  "payload_sha256": "d4ce67d9ec34985e5b6b28c712184b224eec5fc40244164b50c5d44e4faaf3c1",
   "ready": [
-    "ctrl",
-    "test",
-    "coat",
-    "diag",
-    "rep"
+    "test"
   ]
 }
