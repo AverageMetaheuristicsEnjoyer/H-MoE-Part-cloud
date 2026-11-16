@@ -161,7 +161,7 @@ def parse_training_log(path):
     text = Path(path).read_text(errors="replace")
     iterations = [int(value) for value in re.findall(r"iteration\s+(\d+)/", text)]
     losses = [float(value) for value in re.findall(r"lm loss:\s*([0-9.eE+-]+)", text)]
-    validation_matches = re.findall(r"validation loss at iteration\s+(\d+) on validation set \| lm loss value: ([0-9.eE+-]+)", text)
+    validation_matches = re.findall(r"validation loss at iteration\s+(\d+)(?: on validation set)? \| lm loss value: ([0-9.eE+-]+)", text)
     scheduled = {}
     for iteration, value in validation_matches:
         scheduled.setdefault(int(iteration), float(value))
