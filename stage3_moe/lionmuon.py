@@ -52,6 +52,11 @@ megatron.core.optimizer.emerging_optimizers.TensorParallelMuon), selected with S
   factored second moment of the gradient before Newton-Schulz; the factors are updated on every step, Lion steps
   included, and seeded from M * M like muon2f's.  Sign steps are unchanged.
 
+* EnergyCal (arXiv 2610.37062v1, sections 3.2--3.3): STAGE3_MOE_LIONMUON_ENERGYCAL=1 attenuates only routed-expert
+  spectral updates by q=clamp((rho/rho_ref)^exponent,qmin,1), with rho=||raw_NS||^2/min(shape), reconstructed from the
+  existing scaled update in FP32. FC1 gate/up are separate. Defaults: rho_ref=.8, exponent=1, qmin=0. The configuration
+  is stored in optimizer param groups and checked on resume; sign steps, LR and weight decay are unchanged.
+
 * Power steps (colleague's proposal 2026-10-19, "Frankenstein"): STAGE3_MOE_LIONMUON_POWER = a(x), piecewise linear.
   With a > 0 the spectral step is U diag(s)^a V^T of the LionMuon direction (SVD in FP32; a = 0 is Muon's U V^T) and
   the coordinate step sign(G) |G|^a (a = 0 is Lion's sign).  Our normalisation, so that the LR means the same at every
@@ -152,6 +157,49 @@ class LionMuonMixin:
     lion_lr_ratio = _env_float("STAGE3_MOE_LIONMUON_LR_RATIO", "100")
     lion_period_experts = (parse_schedule(os.environ["STAGE3_MOE_LIONMUON_PERIOD_EXPERTS"], int)
                            if os.environ.get("STAGE3_MOE_LIONMUON_PERIOD_EXPERTS") else None)
+    lion_energycal = os.environ.get("STAGE3_MOE_LIONMUON_ENERGYCAL", "0") == "1"
+    lion_energycal_rho_ref = _env_float("STAGE3_MOE_LIONMUON_ENERGYCAL_RHO_REF", "0.8")
+    lion_energycal_exponent = _env_float("STAGE3_MOE_LIONMUON_ENERGYCAL_EXPONENT", "1")
+    lion_energycal_qmin = _env_float("STAGE3_MOE_LIONMUON_ENERGYCAL_QMIN", "0")
+    lion_energycal_diagnostics = os.environ.get("STAGE3_MOE_LIONMUON_ENERGYCAL_DIAGNOSTICS", "0") == "1"
+
+    def _lion_energycal_config(self):
+        if self.lion_energycal_rho_ref <= 0 or self.lion_energycal_exponent <= 0 or not 0 <= self.lion_energycal_qmin <= 1:
+            raise ValueError("Invalid LionMuon EnergyCal configuration")
+        return {"enabled": self.lion_energycal, "scope": "routed_expert_spectral",
+                "rho_ref": self.lion_energycal_rho_ref, "exponent": self.lion_energycal_exponent,
+                "qmin": self.lion_energycal_qmin}
+
+    def _lion_energycal_group(self, group):
+        config = self._lion_energycal_config()
+        saved = group.get("lionmuon_energycal")
+        if saved is not None and saved != config:
+            raise ValueError(f"LionMuon EnergyCal checkpoint mismatch: {saved} != {config}")
+        group["lionmuon_energycal"] = config
+
+    def load_state_dict(self, state_dict):
+        config = self._lion_energycal_config()
+        for group in state_dict["param_groups"]:
+            saved = group.get("lionmuon_energycal")
+            if saved is None and config["enabled"]:
+                raise ValueError("EnergyCal resume from a baseline checkpoint without calibration metadata requires an explicit switch")
+            if saved is not None and saved != config:
+                raise ValueError(f"LionMuon EnergyCal checkpoint mismatch: {saved} != {config}")
+        return super().load_state_dict(state_dict)
+
+    def _lion_energycal_apply(self, update, split_fc1):
+        blocks = update.chunk(2, dim=0) if split_fc1 else (update,)
+        diagnostics = []
+        for index, block in enumerate(blocks):
+            scale = get_muon_scale_factor(block.size(-2), block.size(-1), mode=self._soft_scale_mode) * self._soft_extra_scale
+            rho = block.float().square().sum() / (scale * scale * min(block.shape))
+            q = (rho / self.lion_energycal_rho_ref).pow(self.lion_energycal_exponent).clamp(self.lion_energycal_qmin, 1)
+            block.mul_(q)
+            if self.lion_energycal_diagnostics:
+                diagnostics.append({"split": index, "shape": list(block.shape), "rho": float(rho), "q": float(q)})
+        if self.lion_energycal_diagnostics:
+            self._lion_energycal_last.extend(diagnostics)
+        return update
 
     @staticmethod
     def _period_rule(points, count, x):
@@ -204,7 +252,10 @@ class LionMuonMixin:
         loss = closure() if closure is not None else None
         default_muon, t, value, power = self._lionmuon_choice()
         self._lionmuon_muon = getattr(self, "_lionmuon_muon", 0) + int(default_muon)
+        if self.lion_energycal_diagnostics:
+            self._lion_energycal_last = []
         for group in self.param_groups:
+            self._lion_energycal_group(group)
             self._init_group(group)
             group_kwargs = {k: v for k, v in group.items() if k != "params"}
             split_fc1 = group_kwargs.get("stage3_split_swiglu_fc1", False)
@@ -232,6 +283,8 @@ class LionMuonMixin:
                     update.mul_(math.sqrt(update.numel()) / update.norm().clamp_min(1e-30))
                 else:
                     update = update.sign_()
+                if is_muon_step and power == 0 and self.lion_energycal and group_kwargs.get("stage3_routed_expert", False):
+                    update = self._lion_energycal_apply(update, split_fc1)
                 momentum.mul_(self.lion_beta2).add_(grad, alpha=1 - self.lion_beta2)
                 self._apply_weight_decay_inplace(p, grad, lr, group["weight_decay"])
                 self.pre_weight_update_fn_inplace(p, update)
@@ -243,7 +296,9 @@ class LionMuonMixin:
             experts = f" experts_period={piecewise_constant(self.lion_period_experts, self._lion_x)}" if self.lion_period_experts and self.lion_prob is None else ""
             print(f"LIONMUON step={t} fraction={t / self.lion_total:.4f} muon_step={default_muon} {rule}{experts} power={power:.4g} "
                   f"muon_fraction_this_process={self._lionmuon_muon / steps:.4f} "
-                  f"beta1={self.lion_beta1} beta2={self.lion_beta2} lr_ratio={self.lion_lr_ratio}", flush=True)
+                  f"beta1={self.lion_beta1} beta2={self.lion_beta2} lr_ratio={self.lion_lr_ratio} "
+                  f"energycal={int(self.lion_energycal)} energycal_scope=routed_spectral "
+                  f"rho_ref={self.lion_energycal_rho_ref} exponent={self.lion_energycal_exponent} qmin={self.lion_energycal_qmin}", flush=True)
         return loss
 
 

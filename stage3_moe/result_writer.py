@@ -553,6 +553,19 @@ def _environment():
     }
 
 
+def _optimizer_calibration():
+    return {
+        "lionmuon_energycal": {
+            "enabled": os.environ.get("STAGE3_MOE_LIONMUON_ENERGYCAL", "0") == "1",
+            "scope": "routed_expert_spectral",
+            "rho_ref": float(os.environ.get("STAGE3_MOE_LIONMUON_ENERGYCAL_RHO_REF", "0.8")),
+            "exponent": float(os.environ.get("STAGE3_MOE_LIONMUON_ENERGYCAL_EXPONENT", "1")),
+            "qmin": float(os.environ.get("STAGE3_MOE_LIONMUON_ENERGYCAL_QMIN", "0")),
+            "diagnostics": os.environ.get("STAGE3_MOE_LIONMUON_ENERGYCAL_DIAGNOSTICS", "0") == "1",
+        }
+    }
+
+
 def _provenance(argv):
     root = Path(__file__).resolve().parents[1]
     commit = subprocess.check_output(
@@ -873,6 +886,7 @@ class Probe:
                 "provenance": _provenance(self.argv),
                 "environment": _environment(),
                 "parameter_groups": parameter_groups,
+                "optimizer_calibration": _optimizer_calibration(),
                 "optimizer_state": (
                     UNSTEPPED_OPTIMIZER_STATE
                     if self.protocol_kind == "evaluation"

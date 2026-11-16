@@ -4,6 +4,7 @@
   test               GPU tests of the COAT ports
   inspect            read-only progress of every arm of the series
   preflight          bounded environment/storage/artifact checks; no training
+  contract003        tiny EnergyCal optimizer fixtures and artifact checks; no training
 """
 import datetime
 import json
@@ -113,8 +114,8 @@ def inspect():
     return 0
 
 
-def preflight():
-    output = Path(os.environ['HMOE_PREFLIGHT_ROOT'])
+def bounded_payload(script_name, root_variable, marker):
+    output = Path(os.environ[root_variable])
     output.mkdir(parents=True, exist_ok=True)
     progress_path = output / 'payload-progress.jsonl'
     started = time.monotonic()
@@ -134,7 +135,7 @@ def preflight():
         with stdout_path.open('w') as stdout, stderr_path.open('w') as stderr:
             try:
                 result = subprocess.run(['timeout', '-k', '5s', '600s', sys.executable,
-                                         str(root / 'scripts/lionmoe_preflight.py')],
+                                         str(root / 'scripts' / script_name)],
                                         cwd=root, stdout=stdout, stderr=stderr)
                 code = result.returncode
             except Exception as error:
@@ -152,13 +153,21 @@ def preflight():
             stream.write(json.dumps(exit_record, sort_keys=True) + '\n')
             stream.flush()
             os.fsync(stream.fileno())
-    print(f'PREFLIGHT_PAYLOAD_EXIT={code} PREFLIGHT_PAYLOAD_SECONDS={elapsed:.3f} TIMEOUT={code in (124, 137)}', flush=True)
+    print(f'{marker}_PAYLOAD_EXIT={code} {marker}_PAYLOAD_SECONDS={elapsed:.3f} TIMEOUT={code in (124, 137)}', flush=True)
     for label, path in (('STDOUT', stdout_path), ('STDERR', stderr_path)):
-        print(f'PREFLIGHT_{label}_PATH={path}', flush=True)
-        print(f'PREFLIGHT_{label}_BEGIN', flush=True)
+        print(f'{marker}_{label}_PATH={path}', flush=True)
+        print(f'{marker}_{label}_BEGIN', flush=True)
         print(path.read_text(errors='replace') if path.exists() else 'missing', flush=True)
-        print(f'PREFLIGHT_{label}_END', flush=True)
+        print(f'{marker}_{label}_END', flush=True)
     return code
+
+
+def preflight():
+    return bounded_payload('lionmoe_preflight.py', 'HMOE_PREFLIGHT_ROOT', 'PREFLIGHT')
+
+
+def contract003():
+    return bounded_payload('lionmoe_contract_003.py', 'HMOE_CONTRACT_ROOT', 'CONTRACT003')
 
 
 STEP_RE = re.compile(r"iteration\s+(\d+)/\s*\d+ \|.*?elapsed time per iteration \(ms\): ([0-9.]+).*?lm loss: ([0-9.eE+-]+).*?grad norm: ([0-9.eE+-]+)"
@@ -983,6 +992,8 @@ def main():
         return 0
     if mode == 'preflight':
         return preflight()
+    if mode == 'contract003':
+        return contract003()
     if mode == 'disk':
         # Free space on every persistent volume and what the series keeps there.
         subprocess.run(['df', '-h', '/home/jovyan', '/workspace-SR006.nfs2', '/workspace-SR006.nfs3', '/tmp'], check=False)

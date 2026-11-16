@@ -91,7 +91,8 @@ def install_muon_contract(*, fp8_states: bool) -> None:
             )
         )
     ] = {SPLIT_SWIGLU_FC1: True}
-    if os.environ.get("STAGE3_MOE_NORMUON_SCOPE", "all") != "all" or os.environ.get("STAGE3_MOE_LIONMUON_PERIOD_EXPERTS"):
+    if (os.environ.get("STAGE3_MOE_NORMUON_SCOPE", "all") != "all" or os.environ.get("STAGE3_MOE_LIONMUON_PERIOD_EXPERTS")
+            or os.environ.get("STAGE3_MOE_LIONMUON_ENERGYCAL") == "1"):
         # NorMuon diagnosis (2026-10-22): mark the routed experts' matrices so NorMuon can be limited to or kept off them.
         overrides[
             ParamKey(
