@@ -30,7 +30,7 @@ def check_variant(enabled, output):
     plain = make_optimizer([("expert", plain_parameter, False, True)], enabled=enabled)
     callback_by_step = {}
     for iteration in (180, 181, 186, 191, 196, 200, 201, 221):
-        CLOCK["iteration"] = iteration
+        CLOCK["iteration"] = iteration - 1
         observed_parameter.grad = torch.full_like(observed_parameter, 0.1)
         plain_parameter.grad = torch.full_like(plain_parameter, 0.1)
         observed.step()
@@ -67,12 +67,12 @@ def check_dense_control_identity(output):
     optimizer.lion_energycal_diagnostics = False
     observer = EnergyCalObserver({id(p): name}, output)
     optimizer._lionmuon_measurement_observer = observer
-    CLOCK["iteration"] = 181
+    CLOCK["iteration"] = 180
     p.grad = torch.full_like(p, 0.1)
     optimizer.step()
     labels = [record["fc_type"] for record in observer.records]
     assert labels == ["dense_fc1_gate", "dense_fc1_up"] and len(set(labels)) == 2
-    CLOCK["iteration"] = 200
+    CLOCK["iteration"] = 199
     p.grad = torch.full_like(p, 0.1)
     optimizer.step()
     summary = json.loads(observer.summary_path.read_text())
