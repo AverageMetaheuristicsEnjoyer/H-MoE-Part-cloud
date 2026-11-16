@@ -15,6 +15,7 @@
   analysis010        recovered saved JSON analysis with full inventory; no training
   analysis011        autonomous saved JSON analysis; no model/CUDA/training
   postwarmup012      two checkpoint-free 270-step arms; no save/load/eval
+  overnight013       checkpoint-free600-step development-validation stages; no test
 """
 import datetime
 import json
@@ -218,6 +219,14 @@ def analysis011():
 
 def postwarmup012():
     return bounded_payload('lionmoe_postwarmup_012.py', 'HMOE_CONTRACT_ROOT', 'POSTWARMUP012', 6600)
+
+
+def overnight013():
+    deadline = datetime.datetime(2026, 11, 17, 5, 50, tzinfo=datetime.timezone.utc)
+    remaining = int((deadline - datetime.datetime.now(datetime.timezone.utc)).total_seconds())
+    if remaining <= 0:
+        raise RuntimeError('Overnight training deadline has passed')
+    return bounded_payload('lionmoe_overnight_013.py', 'HMOE_CONTRACT_ROOT', 'OVERNIGHT013', min(23400, remaining))
 
 
 STEP_RE = re.compile(r"iteration\s+(\d+)/\s*\d+ \|.*?elapsed time per iteration \(ms\): ([0-9.]+).*?lm loss: ([0-9.eE+-]+).*?grad norm: ([0-9.eE+-]+)"
@@ -1064,6 +1073,8 @@ def main():
         return analysis011()
     if mode == 'postwarmup012':
         return postwarmup012()
+    if mode == 'overnight013':
+        return overnight013()
     if mode == 'disk':
         # Free space on every persistent volume and what the series keeps there.
         subprocess.run(['df', '-h', '/home/jovyan', '/workspace-SR006.nfs2', '/workspace-SR006.nfs3', '/tmp'], check=False)

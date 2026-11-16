@@ -161,14 +161,19 @@ class LionMuonMixin:
     lion_energycal_rho_ref = _env_float("STAGE3_MOE_LIONMUON_ENERGYCAL_RHO_REF", "0.8")
     lion_energycal_exponent = _env_float("STAGE3_MOE_LIONMUON_ENERGYCAL_EXPONENT", "1")
     lion_energycal_qmin = _env_float("STAGE3_MOE_LIONMUON_ENERGYCAL_QMIN", "0")
+    lion_fixed_routed_alpha = _env_float("STAGE3_MOE_LIONMUON_FIXED_ROUTED_ALPHA", "1")
     lion_energycal_diagnostics = os.environ.get("STAGE3_MOE_LIONMUON_ENERGYCAL_DIAGNOSTICS", "0") == "1"
 
     def _lion_energycal_config(self):
         if self.lion_energycal_rho_ref <= 0 or self.lion_energycal_exponent <= 0 or not 0 <= self.lion_energycal_qmin <= 1:
             raise ValueError("Invalid LionMuon EnergyCal configuration")
+        if not 0 < self.lion_fixed_routed_alpha <= 1:
+            raise ValueError("Fixed routed alpha must be in(0,1]")
+        if self.lion_energycal and self.lion_fixed_routed_alpha != 1:
+            raise ValueError("Adaptive EnergyCal and fixed routed alpha are mutually exclusive")
         return {"enabled": self.lion_energycal, "scope": "routed_expert_spectral",
                 "rho_ref": self.lion_energycal_rho_ref, "exponent": self.lion_energycal_exponent,
-                "qmin": self.lion_energycal_qmin}
+                "qmin": self.lion_energycal_qmin, "fixed_routed_alpha": self.lion_fixed_routed_alpha}
 
     def _lion_energycal_group(self, group):
         config = self._lion_energycal_config()
@@ -199,6 +204,12 @@ class LionMuonMixin:
                 diagnostics.append({"split": index, "shape": list(block.shape), "rho": float(rho), "q": float(q)})
         if self.lion_energycal_diagnostics:
             self._lion_energycal_last.extend(diagnostics)
+        return update
+
+    def _lion_fixed_alpha_apply(self, update, split_fc1):
+        blocks = update.chunk(2, dim=0) if split_fc1 else (update,)
+        for block in blocks:
+            block.mul_(self.lion_fixed_routed_alpha)
         return update
 
     @staticmethod
@@ -291,6 +302,8 @@ class LionMuonMixin:
                     measurement_observer.before_calibration(self, p, update, group_kwargs, t)
                 if is_muon_step and power == 0 and self.lion_energycal and group_kwargs.get("stage3_routed_expert", False):
                     update = self._lion_energycal_apply(update, split_fc1)
+                elif is_muon_step and power == 0 and self.lion_fixed_routed_alpha != 1 and group_kwargs.get("stage3_routed_expert", False):
+                    update = self._lion_fixed_alpha_apply(update, split_fc1)
                 if measure and is_muon_step:
                     measurement_observer.after_calibration(self, p, update, group_kwargs, t)
                 momentum.mul_(self.lion_beta2).add_(grad, alpha=1 - self.lion_beta2)
@@ -306,7 +319,8 @@ class LionMuonMixin:
                   f"muon_fraction_this_process={self._lionmuon_muon / steps:.4f} "
                   f"beta1={self.lion_beta1} beta2={self.lion_beta2} lr_ratio={self.lion_lr_ratio} "
                   f"energycal={int(self.lion_energycal)} energycal_scope=routed_spectral "
-                  f"rho_ref={self.lion_energycal_rho_ref} exponent={self.lion_energycal_exponent} qmin={self.lion_energycal_qmin}", flush=True)
+                  f"rho_ref={self.lion_energycal_rho_ref} exponent={self.lion_energycal_exponent} qmin={self.lion_energycal_qmin} "
+                  f"fixed_routed_alpha={self.lion_fixed_routed_alpha}", flush=True)
         if measure:
             measurement_observer.end_step(self, t)
         return loss

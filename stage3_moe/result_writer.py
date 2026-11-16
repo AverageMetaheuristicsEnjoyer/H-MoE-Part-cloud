@@ -64,6 +64,10 @@ def _role(raw):
 TOKEN_TALLY = "stage3_tokens_per_expert"
 
 
+def skip_test_evaluation(prefix):
+    return os.environ.get("STAGE3_MOE_DISABLE_TEST_EVAL", "0") == "1" and "on test set" in str(prefix)
+
+
 def routing_balance_summary(counts):
     counts = counts.detach().to(device="cpu", dtype=torch.float64)
     if counts.ndim != 2 or bool((counts.sum(dim=1) <= 0).any()):
@@ -621,6 +625,7 @@ class Probe:
         self.previous_load_distribution = None
         self.previous_bias_update_sign = None
         self.routing_diagnostic_start = None
+        self.skipped_test_evaluation_calls = 0
 
     def capture_router_update(self, counts, expert_bias, updated_expert_bias):
         counts = counts.detach().to(device="cpu", dtype=torch.float64)
@@ -922,6 +927,7 @@ class Probe:
                 "environment": _environment(),
                 "parameter_groups": parameter_groups,
                 "optimizer_calibration": _optimizer_calibration(),
+                "evaluation": {"skipped_test_calls": self.skipped_test_evaluation_calls},
                 "optimizer_state": (
                     UNSTEPPED_OPTIMIZER_STATE
                     if self.protocol_kind == "evaluation"
@@ -1032,6 +1038,10 @@ def install_probe(*, arm, result_path, warmup_steps, measured_steps, program_sta
         return result
 
     def capturing_report(prefix, *args, **kwargs):
+        if skip_test_evaluation(prefix):
+            probe.skipped_test_evaluation_calls += 1
+            print(f"STAGE3_TEST_EVALUATION_SKIPPED {prefix}", flush=True)
+            return None
         value = original_report(prefix, *args, **kwargs)
         loss = (last_evaluation.get("losses") or {}).get("lm loss")
         if loss is not None and "validation set" in str(prefix):
