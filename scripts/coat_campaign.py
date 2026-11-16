@@ -5,6 +5,7 @@
   inspect            read-only progress of every arm of the series
   preflight          bounded environment/storage/artifact checks; no training
   contract003        tiny EnergyCal optimizer fixtures and artifact checks; no training
+  contract004        pinned-original/real-NS/MCore tiny contracts; no training
 """
 import datetime
 import json
@@ -168,6 +169,10 @@ def preflight():
 
 def contract003():
     return bounded_payload('lionmoe_contract_003.py', 'HMOE_CONTRACT_ROOT', 'CONTRACT003')
+
+
+def contract004():
+    return bounded_payload('lionmoe_contract_004.py', 'HMOE_CONTRACT_ROOT', 'CONTRACT004')
 
 
 STEP_RE = re.compile(r"iteration\s+(\d+)/\s*\d+ \|.*?elapsed time per iteration \(ms\): ([0-9.]+).*?lm loss: ([0-9.eE+-]+).*?grad norm: ([0-9.eE+-]+)"
@@ -994,6 +999,8 @@ def main():
         return preflight()
     if mode == 'contract003':
         return contract003()
+    if mode == 'contract004':
+        return contract004()
     if mode == 'disk':
         # Free space on every persistent volume and what the series keeps there.
         subprocess.run(['df', '-h', '/home/jovyan', '/workspace-SR006.nfs2', '/workspace-SR006.nfs3', '/tmp'], check=False)

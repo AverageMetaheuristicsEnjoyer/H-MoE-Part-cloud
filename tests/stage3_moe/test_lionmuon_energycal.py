@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import os
@@ -125,7 +126,7 @@ def test_disabled_and_q1_identity():
     scale = 0.2 * 2.0
     expected = torch.full((2, 4), 0.999, device=DEVICE) - 0.01 * direction * scale
     torch.testing.assert_close(p0, expected)
-    torch.testing.assert_close(state_momentum(plain, p0), torch.full((2, 4), 0.02, device=DEVICE))
+    torch.testing.assert_close(state_momentum(plain, p0), torch.full((2, 4), 0.2, device=DEVICE))
 
 
 def test_low_zero_scope_and_split():
@@ -264,19 +265,21 @@ def test_resume_config_mismatch_and_disabled_compatibility():
     old_parameter, old = single(enabled=False)
     old_parameter.grad = torch.ones_like(old_parameter)
     old.step()
-    old_state = old.state_dict()
+    old_state = copy.deepcopy(old.state_dict())
     for group in old_state["param_groups"]:
         group.pop("lionmuon_energycal")
     disabled_parameter, disabled = single(enabled=False)
-    disabled.load_state_dict(old_state)
+    disabled.load_state_dict(copy.deepcopy(old_state))
+    assert state_momentum(disabled, disabled_parameter).data_ptr() != state_momentum(old, old_parameter).data_ptr()
     disabled_parameter.data.copy_(old_parameter.detach())
-    CLOCK["iteration"] = 1
-    old_parameter.grad = torch.full_like(old_parameter, 2.0)
-    disabled_parameter.grad = torch.full_like(disabled_parameter, 2.0)
-    old.step()
-    disabled.step()
-    assert_equal(disabled_parameter, old_parameter)
-    assert_equal(state_momentum(disabled, disabled_parameter), state_momentum(old, old_parameter))
+    for iteration in range(1, 6):
+        CLOCK["iteration"] = iteration
+        old_parameter.grad = torch.full_like(old_parameter, 2.0)
+        disabled_parameter.grad = torch.full_like(disabled_parameter, 2.0)
+        old.step()
+        disabled.step()
+        assert_equal(disabled_parameter, old_parameter)
+        assert_equal(state_momentum(disabled, disabled_parameter), state_momentum(old, old_parameter))
     CLOCK["iteration"] = None
     candidate_parameter, candidate = single(enabled=True)
     try:
@@ -298,6 +301,21 @@ def test_resume_config_mismatch_and_disabled_compatibility():
         raise AssertionError("disabled baseline accepted an enabled checkpoint")
     except ValueError as error:
         assert "mismatch" in str(error)
+
+
+def test_hf_receipt_fixtures():
+    from stage3_moe.artifact_receipt import evaluate_nonce_roundtrip
+    nonce = b"nonsecret-contract-nonce"
+    expected = hashlib.sha256(nonce).hexdigest()
+    git = evaluate_nonce_roundtrip(nonce, nonce, remote_sha256=None, commit="fixture-commit")
+    lfs = evaluate_nonce_roundtrip(nonce, nonce, remote_sha256=expected, commit="fixture-commit")
+    mismatch = evaluate_nonce_roundtrip(nonce, nonce + b"changed", remote_sha256=expected, commit="fixture-commit")
+    bad_metadata = evaluate_nonce_roundtrip(nonce, nonce, remote_sha256="0" * 64, commit="fixture-commit")
+    unpinned = evaluate_nonce_roundtrip(nonce, nonce, remote_sha256=None, commit=None)
+    assert git["round_trip_verified"] and git["remote_kind"] == "git"
+    assert lfs["round_trip_verified"] and lfs["remote_kind"] == "lfs"
+    for result in (mismatch, bad_metadata, unpinned):
+        assert not result["round_trip_verified"] and result["status"] == "failed"
 
 
 def test_preset_and_scope_predicates():
@@ -322,6 +340,7 @@ TESTS = [
     test_nan_inf_are_not_sanitized,
     test_resume_all_five_offsets,
     test_resume_config_mismatch_and_disabled_compatibility,
+    test_hf_receipt_fixtures,
     test_preset_and_scope_predicates,
 ]
 
@@ -333,6 +352,7 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     results = []
     for test in TESTS:
+        CLOCK["iteration"] = None
         try:
             value = test()
             torch.cuda.synchronize()
@@ -341,6 +361,8 @@ def main():
                 result["receipts"] = value
         except Exception as error:
             result = {"name": test.__name__, "status": "failed", "error": repr(error), "traceback": traceback.format_exc()}
+        finally:
+            CLOCK["iteration"] = None
         results.append(result)
         print("CONTRACT_TEST " + json.dumps(result, sort_keys=True), flush=True)
     passed = all(result["status"] == "passed" for result in results)

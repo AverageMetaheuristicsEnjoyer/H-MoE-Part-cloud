@@ -140,13 +140,13 @@ if token:
                                    repo_id=hf_report["repo"], commit_message="contract003 tiny nonce roundtrip")
         info = api.get_paths_info(hf_report["repo"], [remote], expand=True)[0]
         remote_hash = info.lfs.sha256 if info.lfs else None
-        restored = Path(hf_hub_download(hf_report["repo"], remote, token=token,
+        commit = getattr(uploaded, "oid", None)
+        restored = Path(hf_hub_download(hf_report["repo"], remote, token=token, revision=commit,
                                         local_dir=str(OUTPUT / "hf-nonce-download")))
-        restored_hash = sha256_bytes(restored.read_bytes())
-        hf_report.update({"status": "verified", "commit": getattr(uploaded, "oid", None),
-                          "commit_url": getattr(uploaded, "commit_url", None), "remote_sha256": remote_hash,
-                          "restored_sha256": restored_hash,
-                          "round_trip_verified": remote_hash == restored_hash == nonce_hash and restored.stat().st_size == len(nonce)})
+        from stage3_moe.artifact_receipt import evaluate_nonce_roundtrip
+        verification = evaluate_nonce_roundtrip(nonce, restored.read_bytes(), remote_hash, commit)
+        hf_report.update(verification)
+        hf_report.update({"commit": commit, "commit_url": getattr(uploaded, "commit_url", None)})
     except Exception as error:
         hf_report.update({"status": "unavailable_or_failed", "error": bounded_error(error)})
 write_json(OUTPUT / "hf-nonce-receipt.json", hf_report)
@@ -178,7 +178,7 @@ if test_exit != 0 or not test_report or test_report["passed"] != test_report["te
     blockers.append("synthetic_contract_failed")
 if not crosspod["all_bytes_and_hashes_match"]:
     blockers.append("crosspod_mismatch")
-if hf_report.get("status") != "verified":
+if hf_report.get("round_trip_verified") is not True:
     blockers.append("hf_small_artifact_channel_unavailable")
 finished = datetime.datetime.now(datetime.timezone.utc)
 result = {"schema": "hmoe-lionmoe-contract003-result-v1",
