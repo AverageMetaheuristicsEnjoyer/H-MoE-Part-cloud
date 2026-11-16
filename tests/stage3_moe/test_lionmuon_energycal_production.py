@@ -188,14 +188,11 @@ def test_real_ns_forced_q1_identity():
 
 def test_real_ns_energy_precision_and_split():
     global NS_OWNER
-    specs = real_specs(rank_one=True, include_zero=True)
-    candidate = real_optimizer(LionMuonMixin, specs)
-    NS_CAPTURE.clear()
-    scaled_inputs = []
-    original_apply = candidate._lion_energycal_apply
     evidence_path = Path(os.environ["HMOE_CONTRACT_ROOT"]) / "precision-evidence.json"
-    evidence = {"schema": "hmoe-lionmoe-precision-evidence-v1",
-                "rtol": FP32_RECONSTRUCTION_RTOL, "atol": FP32_RECONSTRUCTION_ATOL, "blocks": []}
+    evidence = {"schema": "hmoe-lionmoe-precision-evidence-v1", "phase": "created", "status": "running",
+                "rtol": FP32_RECONSTRUCTION_RTOL, "atol": FP32_RECONSTRUCTION_ATOL,
+                "expected_blocks": ["rank_one_fc1_gate", "zero_fc1_up", "rank_one_fc2", "zero_fc2"],
+                "blocks": []}
 
     def persist():
         with evidence_path.open("w") as stream:
@@ -203,72 +200,99 @@ def test_real_ns_energy_precision_and_split():
             stream.flush()
             os.fsync(stream.fileno())
 
-    def capture_scaled(update, split):
-        scaled_inputs.append(update.detach().clone())
-        return original_apply(update, split)
-
-    candidate._lion_energycal_apply = capture_scaled
-    zero_parameter = next(p for label, p, _, _ in specs if label.startswith("zero"))
-    zero_before = zero_parameter.detach().clone()
-    assert torch.count_nonzero(zero_before)
-    rank_one_grads(specs)
-    assert not torch.count_nonzero(zero_parameter.grad)
-    assert not torch.count_nonzero(candidate.state[zero_parameter]["momentum_buffer"])
+    persist()
     try:
+        specs = real_specs(rank_one=True, include_zero=True)
+        candidate = real_optimizer(LionMuonMixin, specs)
+        NS_CAPTURE.clear()
+        scaled_inputs = []
+        original_apply = candidate._lion_energycal_apply
+
+        def capture_scaled(update, split):
+            scaled_inputs.append(update.detach().clone())
+            return original_apply(update, split)
+
+        candidate._lion_energycal_apply = capture_scaled
+        zero_parameter = next(p for label, p, _, _ in specs if label.startswith("zero"))
+        zero_before = zero_parameter.detach().clone()
+        assert torch.count_nonzero(zero_before)
+        rank_one_grads(specs)
+        zero_state = candidate.state.get(zero_parameter)
+        assert not zero_state
+        evidence["phase"] = "preconditions"
+        evidence["preconditions"] = {"initial_parameter_nonzero": True, "zero_gradient": True,
+                                     "old_momentum_state": "absent_or_empty_implicit_zero_on_first_step"}
+        persist()
+        evidence["phase"] = "before_step"
+        persist()
         NS_OWNER = "candidate"
         candidate.step()
+        evidence["phase"] = "after_step"
+        persist()
+        assert len(NS_CAPTURE) == 4
+        assert all(item["ns_steps"] == 5 for item in NS_CAPTURE)
+        assert len(scaled_inputs) == 3
+        diagnostics = candidate._lion_energycal_last
+        assert len(diagnostics) == 4
+        scaled_blocks = list(scaled_inputs[0].chunk(2, dim=0)) + scaled_inputs[1:]
+        for index, (capture, scaled, diagnostic) in enumerate(zip(NS_CAPTURE, scaled_blocks, diagnostics)):
+            raw = capture["raw"]
+            scale = 0.2 * (max(raw.shape) ** 0.5)
+            raw_rho = raw.float().square().sum() / min(raw.shape)
+            reconstructed = scaled.float().square().sum() / (scale * scale * min(raw.shape))
+            absolute_error = abs(reconstructed - raw_rho)
+            evidence["phase"] = "block_evidence"
+            evidence["blocks"].append({"block": index, "fixture": evidence["expected_blocks"][index],
+                                       "shape": list(raw.shape), "raw_dtype": str(raw.dtype),
+                                       "ns_steps": capture["ns_steps"], "ns_kwargs": capture["kwargs"],
+                                       "raw_rho": float(raw_rho), "reconstructed_rho": float(reconstructed),
+                                       "absolute_error": float(absolute_error),
+                                       "relative_error": float(absolute_error / raw_rho.clamp_min(1e-30)),
+                                       "q": diagnostic["q"], "raw_norm": float(raw.norm()),
+                                       "scaled_norm": float(scaled.norm())})
+            persist()
+            torch.testing.assert_close(reconstructed, raw_rho, rtol=FP32_RECONSTRUCTION_RTOL,
+                                       atol=FP32_RECONSTRUCTION_ATOL)
+            expected_q = (raw_rho / 0.8).clamp(0, 1)
+            torch.testing.assert_close(torch.tensor(diagnostic["q"], device=DEVICE), expected_q,
+                                       rtol=FP32_RECONSTRUCTION_RTOL, atol=FP32_RECONSTRUCTION_ATOL)
+            assert diagnostic["q"] < 1.0
+        assert all(torch.count_nonzero(p) for label, p, _, _ in specs if not label.startswith("zero"))
+        zero_raw = NS_CAPTURE[3]["raw"]
+        zero_momentum = candidate.state[zero_parameter]["momentum_buffer"]
+        evidence["phase"] = "zero_fixture_evidence"
+        evidence["zero_direction"] = {"initial_parameter_nonzero": bool(torch.count_nonzero(zero_before)),
+                                      "gradient_norm": float(zero_parameter.grad.norm()),
+                                      "old_momentum_state": "absent_or_empty_implicit_zero_on_first_step",
+                                      "raw_norm": float(zero_raw.norm()),
+                                      "scaled_norm": float(scaled_blocks[3].norm()),
+                                      "q": diagnostics[3]["q"],
+                                      "new_momentum_norm": float(zero_momentum.norm()),
+                                      "wd_factor": 1 - 0.01 * 0.1,
+                                      "parameter_norm_before": float(zero_before.norm()),
+                                      "parameter_norm_after": float(zero_parameter.norm())}
+        persist()
+        assert not torch.count_nonzero(zero_raw)
+        assert not torch.count_nonzero(scaled_blocks[3])
+        assert diagnostics[3]["q"] == 0.0
+        assert not torch.count_nonzero(zero_momentum)
+        assert torch.count_nonzero(zero_parameter)
+        torch.testing.assert_close(zero_parameter, zero_before * (1 - 0.01 * 0.1))
+        evidence["phase"] = "complete"
+        evidence["status"] = "passed"
+        persist()
+        return {"precision_contract": "captured FP32 raw NS output; BF16 NS rounding is inside that reference",
+                "evidence_path": str(evidence_path), "blocks": evidence["blocks"],
+                "zero_direction": evidence["zero_direction"]}
+    except Exception as error:
+        evidence["status"] = "failed"
+        evidence["error"] = repr(error)
+        evidence["traceback"] = traceback.format_exc()
+        persist()
+        raise
     finally:
         NS_OWNER = None
         CLOCK["iteration"] = None
-    assert len(NS_CAPTURE) == 4
-    assert all(item["ns_steps"] == 5 for item in NS_CAPTURE)
-    assert len(scaled_inputs) == 3
-    diagnostics = candidate._lion_energycal_last
-    assert len(diagnostics) == 4
-    scaled_blocks = list(scaled_inputs[0].chunk(2, dim=0)) + scaled_inputs[1:]
-    for index, (capture, scaled, diagnostic) in enumerate(zip(NS_CAPTURE, scaled_blocks, diagnostics)):
-        raw = capture["raw"]
-        scale = 0.2 * (max(raw.shape) ** 0.5)
-        raw_rho = raw.float().square().sum() / min(raw.shape)
-        reconstructed = scaled.float().square().sum() / (scale * scale * min(raw.shape))
-        absolute_error = abs(reconstructed - raw_rho)
-        evidence["blocks"].append({"block": index, "kind": "zero" if index == 3 else "rank_one",
-                                   "shape": list(raw.shape), "raw_dtype": str(raw.dtype),
-                                   "ns_steps": capture["ns_steps"], "ns_kwargs": capture["kwargs"],
-                                   "raw_rho": float(raw_rho), "reconstructed_rho": float(reconstructed),
-                                   "absolute_error": float(absolute_error),
-                                   "relative_error": float(absolute_error / raw_rho.clamp_min(1e-30)),
-                                   "q": diagnostic["q"], "raw_norm": float(raw.norm()),
-                                   "scaled_norm": float(scaled.norm())})
-        persist()
-        torch.testing.assert_close(reconstructed, raw_rho, rtol=FP32_RECONSTRUCTION_RTOL,
-                                   atol=FP32_RECONSTRUCTION_ATOL)
-        expected_q = (raw_rho / 0.8).clamp(0, 1)
-        torch.testing.assert_close(torch.tensor(diagnostic["q"], device=DEVICE), expected_q,
-                                   rtol=FP32_RECONSTRUCTION_RTOL, atol=FP32_RECONSTRUCTION_ATOL)
-        assert diagnostic["q"] < 1.0
-    assert all(torch.count_nonzero(p) for label, p, _, _ in specs if not label.startswith("zero"))
-    zero_raw = NS_CAPTURE[3]["raw"]
-    evidence["zero_direction"] = {"initial_parameter_nonzero": bool(torch.count_nonzero(zero_before)),
-                                  "gradient_norm": float(zero_parameter.grad.norm()),
-                                  "old_momentum_norm": 0.0,
-                                  "raw_norm": float(zero_raw.norm()),
-                                  "scaled_norm": float(scaled_blocks[3].norm()),
-                                  "q": diagnostics[3]["q"],
-                                  "new_momentum_norm": float(candidate.state[zero_parameter]["momentum_buffer"].norm()),
-                                  "wd_factor": 1 - 0.01 * 0.1,
-                                  "parameter_norm_before": float(zero_before.norm()),
-                                  "parameter_norm_after": float(zero_parameter.norm())}
-    persist()
-    assert not torch.count_nonzero(zero_raw)
-    assert not torch.count_nonzero(scaled_blocks[3])
-    assert diagnostics[3]["q"] == 0.0
-    assert not torch.count_nonzero(candidate.state[zero_parameter]["momentum_buffer"])
-    assert torch.count_nonzero(zero_parameter)
-    torch.testing.assert_close(zero_parameter, zero_before * (1 - 0.01 * 0.1))
-    return {"precision_contract": "captured FP32 raw NS output; BF16 NS rounding is inside that reference",
-            "evidence_path": str(evidence_path), "blocks": evidence["blocks"],
-            "zero_direction": evidence["zero_direction"]}
 
 
 class TinyNamedModule(torch.nn.Module):
