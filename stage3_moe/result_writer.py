@@ -976,6 +976,10 @@ def install_probe(*, arm, result_path, warmup_steps, measured_steps, program_sta
                 probe.parameter_names[id(parameter)] = stable_name
                 if hasattr(parameter, "main_param"):
                     probe.parameter_names[id(parameter.main_param)] = stable_name
+        from stage3_moe.energycal_diagnostics import install_measurement_observer
+        probe.energycal_observer = install_measurement_observer(
+            optimizer, probe.parameter_names, probe.result_path.parent
+        )
         return model, optimizer, scheduler
 
     training.setup_model_and_optimizer = named_setup

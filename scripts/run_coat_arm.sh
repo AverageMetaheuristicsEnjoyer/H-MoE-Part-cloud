@@ -112,6 +112,7 @@ print("COAT_BENCH " + json.dumps({"arm_id": arm_id, "exit": int(code),
       "train_loss": m["loss"]["training"]}), flush=True)
 PY
   grep -E 'Traceback|Error' "$stage/bench.log" | head -3
+  if [[ ${COAT_BENCH_PROPAGATE_EXIT:-0} == 1 ]]; then exit "$code"; fi
   exit 0
 fi
 

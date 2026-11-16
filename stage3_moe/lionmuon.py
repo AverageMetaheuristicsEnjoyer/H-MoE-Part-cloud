@@ -254,6 +254,10 @@ class LionMuonMixin:
         self._lionmuon_muon = getattr(self, "_lionmuon_muon", 0) + int(default_muon)
         if self.lion_energycal_diagnostics:
             self._lion_energycal_last = []
+        measurement_observer = getattr(self, "_lionmuon_measurement_observer", None)
+        measure = measurement_observer is not None and measurement_observer.enabled(t)
+        if measure:
+            measurement_observer.start_step(self, t)
         for group in self.param_groups:
             self._lion_energycal_group(group)
             self._init_group(group)
@@ -283,8 +287,12 @@ class LionMuonMixin:
                     update.mul_(math.sqrt(update.numel()) / update.norm().clamp_min(1e-30))
                 else:
                     update = update.sign_()
+                if measure and is_muon_step:
+                    measurement_observer.before_calibration(self, p, update, group_kwargs, t)
                 if is_muon_step and power == 0 and self.lion_energycal and group_kwargs.get("stage3_routed_expert", False):
                     update = self._lion_energycal_apply(update, split_fc1)
+                if measure and is_muon_step:
+                    measurement_observer.after_calibration(self, p, update, group_kwargs, t)
                 momentum.mul_(self.lion_beta2).add_(grad, alpha=1 - self.lion_beta2)
                 self._apply_weight_decay_inplace(p, grad, lr, group["weight_decay"])
                 self.pre_weight_update_fn_inplace(p, update)
@@ -299,6 +307,8 @@ class LionMuonMixin:
                   f"beta1={self.lion_beta1} beta2={self.lion_beta2} lr_ratio={self.lion_lr_ratio} "
                   f"energycal={int(self.lion_energycal)} energycal_scope=routed_spectral "
                   f"rho_ref={self.lion_energycal_rho_ref} exponent={self.lion_energycal_exponent} qmin={self.lion_energycal_qmin}", flush=True)
+        if measure:
+            measurement_observer.end_step(self, t)
         return loss
 
 

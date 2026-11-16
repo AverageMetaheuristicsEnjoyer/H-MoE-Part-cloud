@@ -9,6 +9,7 @@
   contract005        reviewed real-NS/MCore tiny contracts; no training
   contract006        zero-direction/precision-evidence tiny contracts; no training
   contract007        lazy-state/zero-uphalf tiny contracts; no training
+  measurement008     checkpoint-free matched 90-step pilot; no weights saved
 """
 import datetime
 import json
@@ -118,7 +119,7 @@ def inspect():
     return 0
 
 
-def bounded_payload(script_name, root_variable, marker):
+def bounded_payload(script_name, root_variable, marker, timeout_seconds=600):
     output = Path(os.environ[root_variable])
     output.mkdir(parents=True, exist_ok=True)
     progress_path = output / 'payload-progress.jsonl'
@@ -131,14 +132,14 @@ def bounded_payload(script_name, root_variable, marker):
             stream.flush()
             os.fsync(stream.fileno())
 
-    progress('started', hard_timeout_seconds=600, kill_after_seconds=5)
+    progress('started', hard_timeout_seconds=timeout_seconds, kill_after_seconds=5)
     stdout_path = output / 'payload.stdout.log'
     stderr_path = output / 'payload.stderr.log'
     code = 125
     try:
         with stdout_path.open('w') as stdout, stderr_path.open('w') as stderr:
             try:
-                result = subprocess.run(['timeout', '-k', '5s', '600s', sys.executable,
+                result = subprocess.run(['timeout', '-k', '5s', f'{timeout_seconds}s', sys.executable,
                                          str(root / 'scripts' / script_name)],
                                         cwd=root, stdout=stdout, stderr=stderr)
                 code = result.returncode
@@ -152,7 +153,7 @@ def bounded_payload(script_name, root_variable, marker):
         progress('finished', exit=code, timeout=timeout,
                  timeout_class='payload_hard_timeout_600s' if timeout else None)
         exit_record = {'exit': code, 'elapsed_seconds': round(elapsed, 3),
-                       'timeout': timeout, 'hard_timeout_seconds': 600, 'kill_after_seconds': 5}
+                       'timeout': timeout, 'hard_timeout_seconds': timeout_seconds, 'kill_after_seconds': 5}
         with (output / 'payload-exit.json').open('w') as stream:
             stream.write(json.dumps(exit_record, sort_keys=True) + '\n')
             stream.flush()
@@ -188,6 +189,10 @@ def contract006():
 
 def contract007():
     return bounded_payload('lionmoe_contract_007.py', 'HMOE_CONTRACT_ROOT', 'CONTRACT007')
+
+
+def measurement008():
+    return bounded_payload('lionmoe_measurement_008.py', 'HMOE_CONTRACT_ROOT', 'MEASUREMENT008', 3600)
 
 
 STEP_RE = re.compile(r"iteration\s+(\d+)/\s*\d+ \|.*?elapsed time per iteration \(ms\): ([0-9.]+).*?lm loss: ([0-9.eE+-]+).*?grad norm: ([0-9.eE+-]+)"
@@ -1022,6 +1027,8 @@ def main():
         return contract006()
     if mode == 'contract007':
         return contract007()
+    if mode == 'measurement008':
+        return measurement008()
     if mode == 'disk':
         # Free space on every persistent volume and what the series keeps there.
         subprocess.run(['df', '-h', '/home/jovyan', '/workspace-SR006.nfs2', '/workspace-SR006.nfs3', '/tmp'], check=False)
