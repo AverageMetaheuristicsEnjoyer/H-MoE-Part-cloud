@@ -281,9 +281,10 @@ def arm_analysis(preset, result_path, bench_log, train_log, init_receipt, arm_ro
     training = parse_training_log(train_log)
     argv = result["provenance"]["argv"]
     assert "--save" not in argv and "--load" not in argv
-    assert argv[argv.index("--eval-iters") + 1] == "0"
     assert argv[argv.index("--train-iters") + 1] == "600"
     assert argv[argv.index("--eval-iters") + 1] == "32"
+    assert argv[argv.index("--eval-interval") + 1] == "300"
+    assert argv[argv.index("--seed") + 1] == str(SEED)
     assert argv[argv.index("--lr-decay-iters") + 1] == "17242"
     assert argv[argv.index("--lr-warmup-iters") + 1] == "173"
     assert argv[argv.index("--lr-wsd-decay-iters") + 1] == "3448"
@@ -363,7 +364,7 @@ def arm_analysis(preset, result_path, bench_log, train_log, init_receipt, arm_ro
             "train_exit": 0, "reached": 600, "measured_steps": 40, "probe_e2e_steps": 590,
             "duration_seconds": duration, "result_path": str(result_path),
             "init_receipt": init, "data_fingerprint": {"manifest_sha256": init["data_manifest_sha256"],
-                                                       "seed": 1234, "data_order": "same seed/order contract; batch content not separately hashed"},
+                                                       "seed": SEED, "data_order": "same seed/order contract; batch content not separately hashed"},
             "timing": {"full_step_samples_seconds": full, "optimizer_step_samples_seconds": optimizer,
                        "full_step_sum_seconds": sum(full), "full_step_mean_seconds": statistics.mean(full),
                        "full_step_median_seconds": statistics.median(full),
@@ -394,6 +395,38 @@ def arm_analysis(preset, result_path, bench_log, train_log, init_receipt, arm_ro
                             "timing_note": "observer windows include normal optimizer work; no incremental overhead claim"},
             "diagnostic_routing": diagnostic_routing,
             "artifact_receipts_path": str(arm_root / "artifact-receipts.json")}, [artifact(path) for path in artifact_paths]
+
+
+def recover_v020_plain():
+    source_root = Path("/workspace-SR006.nfs3/hmoe-lionmoe-20261116/overnight-013-v020")
+    if os.environ.get("HMOE_RECOVER_V020_PLAIN") != "1":
+        return None
+    if MODE != "primary":
+        raise RuntimeError("v020 plain recovery is primary-only")
+    preset = "lm5r50"
+    unique = f"hmoe-lionmoe-20261116-overnight-013-v020-{preset}-seed1234"
+    arm_root = source_root / "arms" / preset
+    arm_id = f"{unique}-muon-ctrl-{preset}"
+    bench_log = source_root / "stage" / arm_id / "bench.log"
+    run_id = f"stage3-muon_bf16_state_fp32-bench-{unique}-bench-{arm_id}-{preset}"
+    result_path = arm_root / "logs" / run_id / "results.jsonl"
+    wrapper_path = arm_root / "wrapper.stdout.log"
+    wrapper_text = wrapper_path.read_text(errors="replace")
+    wrapper_matches = re.findall(r"^COAT_BENCH (\{.*\})$", wrapper_text, re.MULTILINE)
+    if len(wrapper_matches) != 1:
+        raise RuntimeError("v020 plain recovery requires exactly one COAT_BENCH result")
+    wrapper_result = json.loads(wrapper_matches[0])
+    bench_text = bench_log.read_text(errors="replace")
+    train_exits = re.findall(r"^TRAIN_EXIT=(\d+)$", bench_text, re.MULTILINE)
+    train_logs = re.findall(r"^TRAIN_LOG=(.*)$", bench_text, re.MULTILINE)
+    if train_exits != ["0"] or len(train_logs) != 1 or wrapper_result.get("exit") != 0:
+        raise RuntimeError(f"v020 plain recovery exits invalid: train={train_exits}, wrapper={wrapper_result.get('exit')}")
+    analysis, receipts = arm_analysis(preset, result_path, bench_log, train_logs[0],
+                                      arm_root / "init-receipt.json", arm_root, 0, None)
+    analysis["recovery"] = {"source_root": str(source_root), "source_job": "lm-mpi-job-a6c2e8eb-900e-40db-bd79-1444653d4572",
+                            "training_repeated": False, "train_exit": 0, "wrapper_exit": 0,
+                            "timing_scope": "cross-allocation quality comparison; do not claim paired speed"}
+    return analysis, receipts
 
 
 def main_checked():
@@ -430,10 +463,23 @@ def main_checked():
     arms = []
     all_receipts = []
     failed = None
+    recovered = recover_v020_plain()
+    remaining_training_arms = len(specs) - (1 if recovered else 0)
     initial_remaining = (TRAINING_DEADLINE - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
-    if initial_remaining < len(specs) * 7200:
+    if initial_remaining < remaining_training_arms * 7200:
         raise RuntimeError(f"Insufficient time for full matched stage: {initial_remaining:.1f}s")
+    if recovered:
+        analysis, receipts = recovered
+        recovered_root = OUTPUT / "arms" / analysis["preset"]
+        write_json(recovered_root / "analysis.json", analysis)
+        write_json(recovered_root / "artifact-receipts.json", receipts)
+        analysis["artifact_receipts_path"] = str(recovered_root / "artifact-receipts.json")
+        arms.append(analysis)
+        all_receipts.extend(receipts)
+        mark_stage("arm_lm5r50_valid_recovered")
     for preset, energycal, fixed_alpha in specs:
+        if recovered and preset == "lm5r50":
+            continue
         arm_root = OUTPUT / "arms" / preset
         arm_root.mkdir(parents=True, exist_ok=True)
         arm_env = dict(env)
@@ -498,10 +544,13 @@ def main_checked():
     cost = {}
     if passed:
         by_name = {arm["preset"]: arm for arm in arms}
-        candidate = by_name["lm5r50ec"]["timing"]["primary_tokens_per_second"]
+        modified = next(name for name in by_name if name != "lm5r50")
+        candidate = by_name[modified]["timing"]["primary_tokens_per_second"]
         base = by_name["lm5r50"]["timing"]["primary_tokens_per_second"]
-        cost["lm5r50"] = {"candidate_over_baseline_throughput": candidate / base,
-                          "candidate_time_overhead": base / candidate - 1}
+        cost[modified] = {"candidate_over_baseline_throughput": candidate / base,
+                          "candidate_time_overhead": base / candidate - 1,
+                          "cross_allocation_recovery": recovered is not None,
+                          "speed_claim": "ordered probe only; not ABBA or paired speed acceptance"}
         recommendation = {"activity": "see per-step/layer/FC actual q; no single q90 verdict",
                           "cost": "ordered post-warmup probe only; inspect phase and chronological drift",
                           "next": "review only; no automatic quality/longer run or scalar sweep"}
@@ -535,6 +584,7 @@ def main_checked():
               "transparency_exit": transparency_code, "runtime_gates": "passed",
               "arms_completed": len(arms), "arms": arms, "failed": failed, "passed": passed,
               "cost_vs_plain": cost, "ordered_allocation_not_abba": True,
+              "recovered_v020_plain_without_retraining": recovered is not None,
               "recommendation": recommendation,
               "fresh_init_and_data_manifest_equal": passed,
               "quality_speed_memory_benefit_established": False,
@@ -549,6 +599,10 @@ def main_checked():
         compact["timing"] = {key: value for key, value in arm["timing"].items()
                              if key not in ("full_step_samples_seconds", "optimizer_step_samples_seconds")}
         compact["diagnostics"] = {key: value for key, value in arm["diagnostics"].items() if key != "summary"}
+        compact["diagnostics"]["per_step"] = [item for item in compact["diagnostics"]["per_step"]
+                                              if item["group"] == "all_routed" or item["iteration"] == 196]
+        compact["diagnostics"]["relay_per_step_scope"] = "all_routed at four spectral steps; all groups at196; full records remain on NFS"
+        compact["artifact_receipts_file"] = artifact(arm["artifact_receipts_path"])
         compact_arms.append(compact)
     relay_result = {key: value for key, value in result.items() if key not in ("arms", "raw_artifact_receipts")}
     relay_result["arms"] = compact_arms
