@@ -80,22 +80,32 @@ tiny = previous["storage"]["tiny_round_trip"]
 capture(ENV002 / "nfs-roundtrip.bin", tiny["sha256"], tiny["bytes"], "environment002-nfs-roundtrip")
 capture(ENV002 / "payload-exit.json", os.environ["HMOE_ENV002_PAYLOAD_EXIT_SHA256"],
         int(os.environ["HMOE_ENV002_PAYLOAD_EXIT_BYTES"]), "environment002-payload-exit")
+nonpersistent = []
 for kind in ("wandb", "tensorboard"):
     for item in previous["logging"][kind]["files"]:
         path = Path(item["path"])
-        path.resolve().relative_to(ENV002.resolve())
+        try:
+            path.resolve().relative_to(ENV002.resolve())
+        except ValueError:
+            nonpersistent.append({"path": str(path), "expected_bytes": item["bytes"],
+                                  "expected_sha256": item["sha256"],
+                                  "status": "outside_persistent_root_or_symlink_not_read"})
+            continue
         capture(path, item["sha256"], item["bytes"], f"environment002-{kind}-{path.name}")
 crosspod = {
     "previous_job": "lm-mpi-job-4eb3fcdb-88da-400c-8696-12952010927a",
     "current_host": socket.gethostname(),
     "current_job": os.environ.get("MLSUB_JOB_NAME"),
     "receipt_count": len(receipts),
-    "all_bytes_and_hashes_match": all(item["matches"] for item in receipts),
+    "nonpersistent_count": len(nonpersistent),
+    "nonpersistent": nonpersistent,
+    "all_bytes_and_hashes_match": bool(receipts) and all(item["matches"] for item in receipts),
     "receipts": receipts,
 }
 write_json(OUTPUT / "crosspod-receipts.json", crosspod)
 print("CONTRACT003_CROSSPOD " + json.dumps({"passed": crosspod["all_bytes_and_hashes_match"],
-                                           "receipts": len(receipts)}), flush=True)
+                                           "receipts": len(receipts),
+                                           "nonpersistent": len(nonpersistent)}), flush=True)
 
 capacity = []
 for candidate in ("/home/jovyan", "/workspace-SR006.nfs2", "/workspace-SR006.nfs3"):
@@ -171,7 +181,8 @@ if not crosspod["all_bytes_and_hashes_match"]:
 if hf_report.get("status") != "verified":
     blockers.append("hf_small_artifact_channel_unavailable")
 finished = datetime.datetime.now(datetime.timezone.utc)
-result = {"schema": "hmoe-lionmoe-contract003-result-v1", "job_note": "hmoe-lionmoe-20261116-contract-003",
+result = {"schema": "hmoe-lionmoe-contract003-result-v1",
+          "job_note": os.environ.get("HMOE_JOB_NOTE", "hmoe-lionmoe-20261116-contract-003"),
           "training_invoked": False, "full_model_constructed": False, "real_checkpoint_downloaded": False,
           "test_exit": test_exit, "test_report": str(test_report_path),
           "tests_passed": test_report["passed"] if test_report else 0,

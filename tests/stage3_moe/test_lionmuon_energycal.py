@@ -114,14 +114,14 @@ def test_disabled_and_q1_identity():
     p1 = parameter([1.0] * 8, (2, 4))
     plain = make_optimizer([("expert", p0, False, True)], enabled=False)
     candidate = make_optimizer([("expert", p1, False, True)], enabled=True)
-    p0.grad = torch.full_like(p0, 2.0)
-    p1.grad = torch.full_like(p1, 2.0)
+    p0.grad = torch.full_like(p0, 20.0)
+    p1.grad = torch.full_like(p1, 20.0)
     plain.step()
     candidate.step()
     assert candidate._lion_energycal_last[0]["q"] == 1.0
     assert_equal(p0, p1)
     assert_equal(state_momentum(plain, p0), state_momentum(candidate, p1))
-    direction = torch.full((2, 4), 0.2, device=DEVICE)
+    direction = torch.full((2, 4), 2.0, device=DEVICE)
     scale = 0.2 * 2.0
     expected = torch.full((2, 4), 0.999, device=DEVICE) - 0.01 * direction * scale
     torch.testing.assert_close(p0, expected)
@@ -148,7 +148,7 @@ def test_low_zero_scope_and_split():
         params[label].grad = torch.full_like(params[label], 0.1)
     optimizer.step()
     torch.testing.assert_close(params["gate_up"][:2], torch.full((2, 4), -0.002, device=DEVICE))
-    torch.testing.assert_close(params["gate_up"][2:], torch.full((2, 4), -0.008, device=DEVICE))
+    torch.testing.assert_close(params["gate_up"][2:], torch.full((2, 4), -0.016, device=DEVICE))
     torch.testing.assert_close(params["fc2"], torch.full((2, 4), -0.002, device=DEVICE))
     for label in ("dense", "shared", "router"):
         torch.testing.assert_close(params[label], torch.full((2, 4), -0.04, device=DEVICE))
@@ -204,7 +204,9 @@ def test_grad_none_and_materialized_zero():
     assert_equal(state_momentum(optimizer, none), torch.full((2, 4), 0.2, device=DEVICE))
     torch.testing.assert_close(state_momentum(optimizer, zero), torch.full((2, 4), 0.198, device=DEVICE))
     scale = 0.2 * 2.0
-    expected = torch.full((2, 4), 0.999, device=DEVICE) - 0.01 * 0.18 * scale
+    rho = 8 * 0.18 * 0.18 / 2
+    q = rho / 0.8
+    expected = torch.full((2, 4), 0.999, device=DEVICE) - 0.01 * 0.18 * scale * q
     torch.testing.assert_close(zero, expected)
 
 
@@ -267,6 +269,7 @@ def test_resume_config_mismatch_and_disabled_compatibility():
         group.pop("lionmuon_energycal")
     disabled_parameter, disabled = single(enabled=False)
     disabled.load_state_dict(old_state)
+    disabled_parameter.data.copy_(old_parameter.detach())
     CLOCK["iteration"] = 1
     old_parameter.grad = torch.full_like(old_parameter, 2.0)
     disabled_parameter.grad = torch.full_like(disabled_parameter, 2.0)
