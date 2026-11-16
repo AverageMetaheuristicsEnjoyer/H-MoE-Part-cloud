@@ -13,6 +13,7 @@
   measurement008fix  analysis-only phase-summary correction; no training
   analysis009        saved JSON block/timing analysis; no model/CUDA/training
   analysis010        recovered saved JSON analysis with full inventory; no training
+  analysis011        autonomous saved JSON analysis; no model/CUDA/training
 """
 import datetime
 import json
@@ -208,6 +209,10 @@ def analysis009():
 
 def analysis010():
     return bounded_payload('lionmoe_analysis_010.py', 'HMOE_CONTRACT_ROOT', 'ANALYSIS010', 300)
+
+
+def analysis011():
+    return bounded_payload('lionmoe_analysis_011.py', 'HMOE_CONTRACT_ROOT', 'ANALYSIS011', 300)
 
 
 STEP_RE = re.compile(r"iteration\s+(\d+)/\s*\d+ \|.*?elapsed time per iteration \(ms\): ([0-9.]+).*?lm loss: ([0-9.eE+-]+).*?grad norm: ([0-9.eE+-]+)"
@@ -1050,6 +1055,8 @@ def main():
         return analysis009()
     if mode == 'analysis010':
         return analysis010()
+    if mode == 'analysis011':
+        return analysis011()
     if mode == 'disk':
         # Free space on every persistent volume and what the series keeps there.
         subprocess.run(['df', '-h', '/home/jovyan', '/workspace-SR006.nfs2', '/workspace-SR006.nfs3', '/tmp'], check=False)
