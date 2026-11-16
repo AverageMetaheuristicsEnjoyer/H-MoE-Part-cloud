@@ -300,7 +300,9 @@ def arm_analysis(preset, result_path, bench_log, train_log, init_receipt, arm_ro
     assert training["all_losses_finite"] and not training["nan_nonzero_lines"] and not training["skipped_nonzero_lines"]
     assert training["skipped_test_evaluation_calls"] == 1
     assert result["evaluation"]["skipped_test_calls"] in (0, 1)
-    assert "on test set" not in Path(train_log).read_text(errors="replace")
+    test_output = [line for line in Path(train_log).read_text(errors="replace").splitlines()
+                   if "on test set" in line and "STAGE3_TEST_EVALUATION_SKIPPED" not in line]
+    assert not test_output, f"Unexpected real test output: {test_output[-3:]}"
     if set(training["scheduled_validation"]) != {300, 600}:
         raise RuntimeError(f"Missing scheduled development endpoints: {training['scheduled_validation']}")
     if not all(math.isfinite(value) for value in training["scheduled_validation"].values()):
