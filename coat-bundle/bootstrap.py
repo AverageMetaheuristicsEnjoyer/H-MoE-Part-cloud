@@ -39,15 +39,28 @@ if actual_payload_sha256 != public_manifest['payload_sha256']:
 with tempfile.TemporaryDirectory(prefix='encrypted-job-', dir='/tmp') as directory:
     destination = Path(directory)
     deps = destination / 'dependencies'
+    wheel_root = here / 'public-wheels'
+    wheel_manifest = json.loads((wheel_root / 'provenance.json').read_text())
+    wheels = []
+    for package in wheel_manifest['packages']:
+        wheel = wheel_root / package['filename']
+        data = wheel.read_bytes()
+        if len(data) != package['size'] or hashlib.sha256(data).hexdigest() != package['sha256']:
+            raise RuntimeError(f'Public wheel checksum mismatch: {wheel.name}')
+        wheels.append(str(wheel))
     pip_started = time.monotonic()
     pip_result = subprocess.run(['timeout', '-k', '5s', '120s', sys.executable, '-m', 'pip',
-                                 'install', '-q', '--disable-pip-version-check', '--no-cache-dir',
-                                 '--only-binary=:all:', '--target', str(deps), 'cryptography==46.0.5'])
+                                 'install', '-q', '--disable-pip-version-check', '--no-cache-dir', '--no-index', '--no-deps',
+                                 '--only-binary=:all:', '--target', str(deps), *wheels],
+                                capture_output=True, text=True)
     pip_seconds = time.monotonic() - pip_started
     print(f'BOOTSTRAP_DEPENDENCY_EXIT={pip_result.returncode} BOOTSTRAP_DEPENDENCY_SECONDS={pip_seconds:.3f} '
-          'BOOTSTRAP_DEPENDENCY_TIMEOUT=120 BOOTSTRAP_DEPENDENCY_TARGET=job_tmp', flush=True)
+          f'BOOTSTRAP_DEPENDENCY_TIMEOUT=120 BOOTSTRAP_DEPENDENCY_TARGET=job_tmp '
+          f'BOOTSTRAP_DEPENDENCY_MODE=offline_public_wheels BOOTSTRAP_DEPENDENCY_COUNT={len(wheels)}', flush=True)
     if pip_result.returncode:
-        raise RuntimeError(f'Isolated bootstrap dependency installation failed: {pip_result.returncode}')
+        print('BOOTSTRAP_DEPENDENCY_STDOUT=' + pip_result.stdout[-4000:], flush=True)
+        print('BOOTSTRAP_DEPENDENCY_STDERR=' + pip_result.stderr[-4000:], flush=True)
+        raise RuntimeError(f'Isolated offline bootstrap dependency installation failed: {pip_result.returncode}')
     sys.path.insert(0, str(deps))
     from cryptography.fernet import Fernet
     plaintext = Fernet(key.encode()).decrypt(payload)
