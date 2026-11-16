@@ -11,6 +11,7 @@
   contract007        lazy-state/zero-uphalf tiny contracts; no training
   measurement008     checkpoint-free matched 90-step pilot; no weights saved
   measurement008fix  analysis-only phase-summary correction; no training
+  analysis009        saved JSON block/timing analysis; no model/CUDA/training
 """
 import datetime
 import json
@@ -198,6 +199,10 @@ def measurement008():
 
 def measurement008fix():
     return bounded_payload('lionmoe_measurement_008_fix.py', 'HMOE_CONTRACT_ROOT', 'MEASUREMENT008FIX', 3600)
+
+
+def analysis009():
+    return bounded_payload('lionmoe_analysis_009.py', 'HMOE_CONTRACT_ROOT', 'ANALYSIS009', 300)
 
 
 STEP_RE = re.compile(r"iteration\s+(\d+)/\s*\d+ \|.*?elapsed time per iteration \(ms\): ([0-9.]+).*?lm loss: ([0-9.eE+-]+).*?grad norm: ([0-9.eE+-]+)"
@@ -1036,6 +1041,8 @@ def main():
         return measurement008()
     if mode == 'measurement008fix':
         return measurement008fix()
+    if mode == 'analysis009':
+        return analysis009()
     if mode == 'disk':
         # Free space on every persistent volume and what the series keeps there.
         subprocess.run(['df', '-h', '/home/jovyan', '/workspace-SR006.nfs2', '/workspace-SR006.nfs3', '/tmp'], check=False)
