@@ -40,7 +40,8 @@ def check_variant(enabled, output):
         callback_by_step[str(iteration)] = observer.callback_seconds
     assert not observer.enabled(180) and observer.enabled(181) and observer.enabled(200)
     assert not observer.enabled(201) and not observer.enabled(221)
-    assert callback_by_step["180"] == 0
+    assert callback_by_step["180"] == 0, {"window": [observer.window_start, observer.window_end],
+                                           "callback_by_step": callback_by_step}
     assert callback_by_step["201"] == callback_by_step["200"] == callback_by_step["221"]
     assert observer.records == [] and observer.current == {} and observer.started is None
     block_path = observer.blocks_path
