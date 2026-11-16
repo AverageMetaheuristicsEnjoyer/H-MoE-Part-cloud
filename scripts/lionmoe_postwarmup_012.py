@@ -17,13 +17,13 @@ OUTPUT = Path(os.environ["HMOE_CONTRACT_ROOT"])
 OUTPUT.mkdir(parents=True, exist_ok=True)
 STARTED = datetime.datetime.now(datetime.timezone.utc)
 STAGES = []
-EXPECTED_NOTE = "hmoe-lionmoe-20261116-postwarmup-012-v018"
-EXPECTED_ROOT = "/workspace-SR006.nfs3/hmoe-lionmoe-20261116/postwarmup-012-v018"
-EXPECTED_BUNDLE = "hmoe-lionmoe-20261116-v018"
+EXPECTED_NOTE = "hmoe-lionmoe-20261116-postwarmup-012-v019"
+EXPECTED_ROOT = "/workspace-SR006.nfs3/hmoe-lionmoe-20261116/postwarmup-012-v019"
+EXPECTED_BUNDLE = "hmoe-lionmoe-20261116-v019"
 if os.environ.get("HMOE_JOB_NOTE") != EXPECTED_NOTE:
-    raise RuntimeError("HMOE_JOB_NOTE does not match postwarmup012/v018")
+    raise RuntimeError("HMOE_JOB_NOTE does not match postwarmup012/v019")
 if os.environ.get("HMOE_CONTRACT_ROOT") != EXPECTED_ROOT:
-    raise RuntimeError("HMOE_CONTRACT_ROOT does not match postwarmup012/v018")
+    raise RuntimeError("HMOE_CONTRACT_ROOT does not match postwarmup012/v019")
 if os.environ.get("EXPECTED_BUNDLE_ID") != EXPECTED_BUNDLE:
     raise RuntimeError("Unexpected bundle for postwarmup012")
 for key, length in (("EXPECTED_SOURCE_COMMIT", 40), ("EXPECTED_CARRIER_COMMIT", 40), ("EXPECTED_PAYLOAD_SHA256", 64)):
@@ -370,12 +370,12 @@ def main_checked():
         for key in ("STAGE3_MOE_LIONMUON_PERIOD_EXPERTS", "STAGE3_MOE_LIONMUON_PROB", "STAGE3_MOE_LIONMUON_POWER",
                     "STAGE3_MOE_FP8_COMPUTE_ARGS", "STAGE3_MOE_FP8_STATE_DTYPES", "STAGE3_MOE_DEQUANT_ON_LOAD"):
             arm_env.pop(key, None)
-        unique = f"hmoe-lionmoe-20261116-postwarmup-012-v018-{preset}"
+        unique = f"hmoe-lionmoe-20261116-postwarmup-012-v019-{preset}"
         arm_env.update({
             "COAT_ARM_MODE": "bench", "COAT_BENCH_PROPAGATE_EXIT": "1",
             "COAT_BENCH_WARMUP": "220", "COAT_BENCH_MEASURE": "40", "COAT_BENCH_TAG": preset,
             "COAT_CAMPAIGN_ROOT": str(OUTPUT / "campaign"), "COAT_STAGE_ROOT": str(OUTPUT / "stage"),
-            "COAT_RUN_TAG": unique, "COAT_ARM_ID_PREFIX": unique + "-", "COAT_ROUND": "postwarmup012v018",
+            "COAT_RUN_TAG": unique, "COAT_ARM_ID_PREFIX": unique + "-", "COAT_ROUND": "postwarmup012v019",
             "STAGE3_MOE_LOG_ROOT": str(arm_root / "logs"), "STAGE3_MOE_CKPT_ROOT": str(arm_root / "no-checkpoints"),
             "STAGE3_MOE_DATA_CACHE_PATH": str(arm_root / "data-cache"),
             "STAGE3_MOE_COLDSTART_RECEIPT": str(arm_root / "init-receipt.json"),
