@@ -18,7 +18,10 @@ class EnergyCalObserver:
         self.path = self.output_dir / "energycal_diagnostics.jsonl"
         self.blocks_path = self.output_dir / "energycal_blocks.jsonl"
         self.summary_path = self.output_dir / "energycal_summary.json"
+        self.window_start = int(os.environ.get("STAGE3_MOE_ENERGYCAL_DIAGNOSTICS_START", "1"))
         self.window_end = int(os.environ.get("STAGE3_MOE_ENERGYCAL_DIAGNOSTICS_END", "20"))
+        if self.window_start < 1 or self.window_end < self.window_start:
+            raise ValueError("Invalid EnergyCal observer window")
         self.current = {}
         self.current_step = None
         self.records = []
@@ -36,7 +39,7 @@ class EnergyCalObserver:
         }
 
     def enabled(self, iteration):
-        return 1 <= iteration <= self.window_end
+        return self.window_start <= iteration <= self.window_end
 
     def start_step(self, optimizer, iteration):
         self.current_step = iteration
@@ -126,7 +129,8 @@ class EnergyCalObserver:
             applied = bool(optimizer.lion_energycal and routed)
             record = {
                 "iteration": iteration, "layer": layer, "expert": expert,
-                "fc_type": fc_type if fc_type != "fc1" else ("fc1_gate" if index == 0 else "fc1_up"),
+                "fc_type": ({"fc1": ("fc1_gate", "fc1_up"), "dense_control": ("dense_fc1_gate", "dense_fc1_up")}
+                            .get(fc_type, (fc_type, fc_type)))[index],
                 "routed": routed, "applied": applied,
                 "rho": None if fc_type == "attention_control" else row["rho"],
                 "hypothetical_q": None if fc_type == "attention_control" else row["q"],
@@ -212,8 +216,9 @@ class EnergyCalObserver:
             key = f"layer_{record['layer']:02d}/{record['fc_type']}"
             groups.setdefault(key, []).append(record)
             groups.setdefault("all_routed" if record["routed"] else "all_controls", []).append(record)
-        summary = {"schema": "hmoe-lionmoe-energycal-measurement-summary-v1",
-                   "window": [1, self.window_end], "spectral_steps": [1, 6, 11, 16],
+        summary = {"schema": "hmoe-lionmoe-energycal-measurement-summary-v2",
+                   "window": [self.window_start, self.window_end],
+                   "spectral_steps": sorted({record["iteration"] for record in self.records}),
                    "coverage": self.coverage, "groups": {key: self.summary_group(value) for key, value in sorted(groups.items())}}
         with self.summary_path.open("w") as stream:
             stream.write(json.dumps(summary, indent=2, sort_keys=True) + "\n")

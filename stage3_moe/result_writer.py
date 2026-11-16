@@ -620,6 +620,7 @@ class Probe:
         self.pending_routing = None
         self.previous_load_distribution = None
         self.previous_bias_update_sign = None
+        self.routing_diagnostic_start = None
 
     def capture_router_update(self, counts, expert_bias, updated_expert_bias):
         counts = counts.detach().to(device="cpu", dtype=torch.float64)
@@ -828,6 +829,39 @@ class Probe:
             "dropped_tokens": 0 if capacity_factor is None else None,
         }
 
+    def capture_diagnostic_routing(self):
+        observer = getattr(self, "energycal_observer", None)
+        if observer is None or os.environ.get("STAGE3_MOE_ROUTING_DIAGNOSTICS", "0") != "1":
+            return
+        start, end = observer.window_start, observer.window_end
+        if self.step not in (start - 1, end):
+            return
+        names, rows = [], []
+        for name, module in _moe_routers(self.model_chunks):
+            tallied = getattr(module, TOKEN_TALLY, None)
+            if tallied is not None:
+                names.append(name)
+                rows.append(tallied.detach().to(device="cpu", dtype=torch.float64))
+        if not rows:
+            raise RuntimeError("Diagnostic routing tally is unavailable")
+        matrix = torch.stack(rows)
+        if self.step == start - 1:
+            self.routing_diagnostic_start = matrix
+            return
+        if self.routing_diagnostic_start is None:
+            raise RuntimeError("Missing routing snapshot at observer window start")
+        matrix = matrix - self.routing_diagnostic_start
+        if bool((matrix < 0).any()):
+            raise RuntimeError("Negative diagnostic routing delta")
+        path = self.result_path.parent / f"routing_diagnostics_{start}_{end}.json"
+        with path.open("w") as stream:
+            json.dump({"scope": "global_unpadded", "window": [start, end], "layers": names,
+                       "tokens_per_expert": matrix.to(torch.int64).tolist()}, stream, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        self.routing_diagnostic_start = None
+
     def after_step(self, elapsed, result, iteration=None):
         self.step += 1
         if self.step > self.warmup_steps:
@@ -838,6 +872,7 @@ class Probe:
         self.write_routing_telemetry(
             self.step if iteration is None else int(iteration) + 1
         )
+        self.capture_diagnostic_routing()
 
     def write(self, status="completed"):
         if self.written or self.optimizer is None:
