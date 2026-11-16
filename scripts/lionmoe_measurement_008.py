@@ -123,8 +123,8 @@ def parse_training_log(path):
             "skipped_nonzero_lines": len(re.findall(r"skipped iterations:\s+[1-9]", text))}
 
 
-def phase_summary(values, phase):
-    selected = [value for value, phase_name in zip(values, phase)]
+def phase_summary(values, phases, wanted):
+    selected = [value for value, phase_name in zip(values, phases) if phase_name == wanted]
     return {"count": len(selected), "sum_seconds": sum(selected),
             "mean_seconds": statistics.mean(selected) if selected else None,
             "median_seconds": statistics.median(selected) if selected else None,
@@ -196,8 +196,8 @@ def arm_analysis(preset, result_path, bench_log, train_log, init_receipt, arm_ro
                        "primary_tokens_per_second": throughput,
                        "probe_tokens_per_second_median_derived": timing["tokens_per_second"],
                        "probe_e2e_wct_seconds": timing["e2e_wct_seconds"],
-                       "phase_full_step": {name: phase_summary(full, spectral) for name in ("spectral", "sign")},
-                       "phase_optimizer_step": {name: phase_summary(optimizer, spectral) for name in ("spectral", "sign")},
+                       "phase_full_step": {name: phase_summary(full, spectral, name) for name in ("spectral", "sign")},
+                       "phase_optimizer_step": {name: phase_summary(optimizer, spectral, name) for name in ("spectral", "sign")},
                        "phase_counts": {"spectral": 8, "sign": 32},
                        "external_window_wallclock": None,
                        "wallclock_scope": "sum(train_step) is not total wall clock; Probe e2e reported separately"},
