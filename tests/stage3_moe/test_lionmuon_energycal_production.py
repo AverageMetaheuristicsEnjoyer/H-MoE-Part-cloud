@@ -4,8 +4,25 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import traceback
+
+REQUIRED_ENV = {
+    "STAGE3_MOE_MUON_VARIANT": "lionmuon",
+    "STAGE3_MOE_MUON_PRESET": "lm5r50ec",
+    "STAGE3_MOE_LIONMUON_PERIOD": "5",
+    "STAGE3_MOE_LIONMUON_LR_RATIO": "50",
+    "STAGE3_MOE_LIONMUON_ENERGYCAL": "1",
+    "STAGE3_MOE_LIONMUON_ENERGYCAL_RHO_REF": "0.8",
+    "STAGE3_MOE_LIONMUON_ENERGYCAL_EXPONENT": "1",
+    "STAGE3_MOE_LIONMUON_ENERGYCAL_QMIN": "0",
+}
+for key, expected in REQUIRED_ENV.items():
+    if os.environ.get(key) != expected:
+        raise RuntimeError(f"Unresolved contract environment: {key}={os.environ.get(key)!r}, expected {expected!r}")
+if os.environ.get("STAGE3_MOE_LIONMUON_PERIOD_EXPERTS"):
+    raise RuntimeError("PERIOD_EXPERTS must be unset for this contract")
 
 import torch
 
@@ -79,13 +96,15 @@ def real_matrix(rows, cols, rank_one=False):
     return torch.nn.Parameter(value)
 
 
-def real_specs(rank_one=False, include_nonrouted=False):
+def real_specs(rank_one=False, include_nonrouted=False, include_zero=False):
     fc1 = real_matrix(512, 1024, rank_one)
     fc2 = real_matrix(1024, 256, rank_one)
     specs = [("routed_fc1", fc1, True, True), ("routed_fc2", fc2, False, True)]
     if include_nonrouted:
         specs += [("dense", real_matrix(512, 1024), False, False),
                   ("shared", real_matrix(1024, 256), False, False)]
+    if include_zero:
+        specs += [("zero_fc2", real_matrix(1024, 256), False, True)]
     return specs
 
 
@@ -95,9 +114,10 @@ def real_grads(specs, iteration):
 
 
 def rank_one_grads(specs):
-    for _, parameter, _, _ in specs:
+    for label, parameter, _, _ in specs:
         parameter.grad = torch.zeros_like(parameter)
-        parameter.grad[0, 0] = 1.0
+        if not label.startswith("zero"):
+            parameter.grad[0, 0] = 1.0
 
 
 def test_real_ns_pinned_original_cycles():
@@ -105,7 +125,7 @@ def test_real_ns_pinned_original_cycles():
     reference_specs = real_specs(include_nonrouted=True)
     candidate_specs = real_specs(include_nonrouted=True)
     reference = real_optimizer(ORIGINAL.LionMuonMixin, reference_specs)
-    candidate = real_optimizer(LionMuonMixin, candidate_specs)
+    candidate = real_optimizer(LionMuonMixin, candidate_specs, enabled=False)
     NS_CAPTURE.clear()
     counts = {"original": [], "candidate": []}
     try:
@@ -123,20 +143,52 @@ def test_real_ns_pinned_original_cycles():
                 assert torch.equal(left, right)
                 assert torch.equal(reference.state[left]["momentum_buffer"],
                                    candidate.state[right]["momentum_buffer"])
-            assert candidate._lion_energycal_last or iteration % 5
+            assert not candidate._lion_energycal_last
     finally:
         NS_OWNER = None
         CLOCK["iteration"] = None
-    assert counts["original"] == counts["candidate"] == [4, 0, 0, 0, 0, 4, 0, 0, 0, 0]
+    assert counts["original"] == counts["candidate"] == [5, 0, 0, 0, 0, 5, 0, 0, 0, 0]
+    assert all(item["ns_steps"] == 5 for item in NS_CAPTURE)
     assert reference.wd_calls == candidate.wd_calls
     assert all(item["raw_dtype"] == "torch.float32" for item in NS_CAPTURE)
     return {"cycles": 2, "ns_calls_per_path": len(NS_CAPTURE) // 2,
             "raw_dtypes": sorted(set(item["raw_dtype"] for item in NS_CAPTURE))}
 
 
+def test_real_ns_forced_q1_identity():
+    global NS_OWNER
+    reference_specs = real_specs(include_nonrouted=True)
+    candidate_specs = real_specs(include_nonrouted=True)
+    reference = real_optimizer(ORIGINAL.LionMuonMixin, reference_specs)
+    candidate = real_optimizer(LionMuonMixin, candidate_specs, enabled=True)
+    candidate.lion_energycal_qmin = 1.0
+    NS_CAPTURE.clear()
+    observed_q = []
+    try:
+        for iteration in range(2):
+            CLOCK["iteration"] = iteration
+            for owner, optimizer, specs in (("original", reference, reference_specs),
+                                            ("candidate", candidate, candidate_specs)):
+                NS_OWNER = owner
+                real_grads(specs, iteration)
+                optimizer.step()
+            observed_q.extend(item["q"] for item in candidate._lion_energycal_last)
+            for (_, left, _, _), (_, right, _, _) in zip(reference_specs, candidate_specs):
+                assert torch.equal(left, right)
+                assert torch.equal(reference.state[left]["momentum_buffer"],
+                                   candidate.state[right]["momentum_buffer"])
+    finally:
+        NS_OWNER = None
+        CLOCK["iteration"] = None
+    assert observed_q and all(q == 1.0 for q in observed_q)
+    assert len(NS_CAPTURE) == 10
+    assert all(item["ns_steps"] == 5 for item in NS_CAPTURE)
+    return {"test_only_override": "qmin=1", "q1_values": observed_q, "ns_calls_total": len(NS_CAPTURE)}
+
+
 def test_real_ns_energy_precision_and_split():
     global NS_OWNER
-    specs = real_specs(rank_one=True)
+    specs = real_specs(rank_one=True, include_zero=True)
     candidate = real_optimizer(LionMuonMixin, specs)
     NS_CAPTURE.clear()
     scaled_inputs = []
@@ -154,11 +206,12 @@ def test_real_ns_energy_precision_and_split():
     finally:
         NS_OWNER = None
         CLOCK["iteration"] = None
-    assert len(NS_CAPTURE) == 3
-    assert len(scaled_inputs) == 2
+    assert len(NS_CAPTURE) == 4
+    assert all(item["ns_steps"] == 5 for item in NS_CAPTURE)
+    assert len(scaled_inputs) == 3
     diagnostics = candidate._lion_energycal_last
-    assert len(diagnostics) == 3
-    scaled_blocks = list(scaled_inputs[0].chunk(2, dim=0)) + [scaled_inputs[1]]
+    assert len(diagnostics) == 4
+    scaled_blocks = list(scaled_inputs[0].chunk(2, dim=0)) + scaled_inputs[1:]
     errors = []
     for index, (capture, scaled, diagnostic) in enumerate(zip(NS_CAPTURE, scaled_blocks, diagnostics)):
         raw = capture["raw"]
@@ -177,7 +230,9 @@ def test_real_ns_energy_precision_and_split():
                        "relative_error": float(abs(reconstructed - raw_rho) / raw_rho.clamp_min(1e-30)),
                        "q": diagnostic["q"], "rtol": FP32_RECONSTRUCTION_RTOL,
                        "atol": FP32_RECONSTRUCTION_ATOL})
-    assert all(torch.count_nonzero(p) for _, p, _, _ in specs)
+    assert all(torch.count_nonzero(p) for label, p, _, _ in specs if not label.startswith("zero"))
+    zero_parameter = next(p for label, p, _, _ in specs if label.startswith("zero"))
+    assert not torch.count_nonzero(zero_parameter)
     return {"precision_contract": "captured FP32 raw NS output; BF16 NS rounding is inside that reference",
             "blocks": errors}
 
@@ -268,13 +323,37 @@ def test_actual_mcore_grouping():
         assert not item["routed"] and "Lionmuon" in item["mro"][0]
     router = next(value for name, value in assignments.items() if name.endswith("router.weight"))
     assert not router["routed"] and "Lionmuon" not in router["mro"][0]
+    raw_candidates = [raw for raw in raw_parts(chained) if isinstance(raw, LionMuonMixin)]
+    assert raw_candidates
+    for raw in raw_candidates:
+        assert raw.lion_period == [(0.0, 5)]
+        assert raw.lion_lr_ratio == 50
+        assert raw.lion_period_experts is None
+        assert raw.lion_energycal is True
+        assert raw.lion_energycal_rho_ref == 0.8
+        assert raw.lion_energycal_exponent == 1.0
+        assert raw.lion_energycal_qmin == 0.0
     return {"class": type(chained).__name__, "wrapped_classes": [type(item).__name__ for item in chained.chained_optimizers],
+            "resolved_env": {key: os.environ[key] for key in REQUIRED_ENV},
             "assignments": assignments}
 
 
 def set_mcore_grads(model, iteration):
     for parameter in model.parameters():
         parameter.grad = torch.full_like(parameter, 0.01 * (iteration + 1))
+
+
+def step_checked(chained, model):
+    before = [parameter.detach().clone() for parameter in model.parameters()]
+    result = chained.step()
+    assert result[0]
+    after = [parameter.detach() for parameter in model.parameters()]
+    assert any(not torch.equal(left, right) for left, right in zip(before, after))
+    return result
+
+
+def master_parameters(model):
+    return [parameter.main_param for parameter in model.parameters() if hasattr(parameter, "main_param")]
 
 
 def optimizer_tensors(chained):
@@ -316,7 +395,7 @@ def test_mcore_wrapper_resume_and_config():
         for iteration in range(offset):
             CLOCK["iteration"] = iteration
             set_mcore_grads(model, iteration)
-            reference.step()
+            step_checked(reference, model)
         for raw in raw_parts(reference):
             if hasattr(raw, "_lion_energycal_group"):
                 for group in raw.param_groups:
@@ -326,14 +405,21 @@ def test_mcore_wrapper_resume_and_config():
         torch.save(checkpoint, path)
         CLOCK["iteration"] = offset
         set_mcore_grads(model, offset)
-        reference.step()
+        step_checked(reference, model)
         restored_model, restored = mcore_candidate()
         restored_model.load_state_dict(torch.load(path, weights_only=False)["model"])
         restored.load_state_dict(torch.load(path, weights_only=False)["optimizer"])
         set_mcore_grads(restored_model, offset)
-        restored.step()
+        step_checked(restored, restored_model)
         for (_, left), (_, right) in zip(model.state_dict().items(), restored_model.state_dict().items()):
             assert torch.equal(left, right)
+        reference_master = master_parameters(model)
+        restored_master = master_parameters(restored_model)
+        assert reference_master and len(reference_master) == len(restored_master)
+        for left, right in zip(reference_master, restored_master):
+            assert left.dtype == torch.float32 and right.dtype == torch.float32
+            assert torch.equal(left, right)
+            assert left.data_ptr() != right.data_ptr()
         assert_optimizer_equal(reference, restored)
         reference_momentum = optimizer_tensors(reference)
         restored_momentum = optimizer_tensors(restored)
@@ -365,7 +451,7 @@ def test_mcore_wrapper_resume_and_config():
             raw.lion_energycal = False
     CLOCK["iteration"] = 0
     set_mcore_grads(disabled_model, 0)
-    disabled.step()
+    step_checked(disabled, disabled_model)
     disabled_saved = copy.deepcopy({"model": disabled_model.state_dict(), "optimizer": disabled.state_dict()})
     remove_calibration_metadata(disabled_saved["optimizer"])
     restored_disabled_model, restored_disabled = mcore_candidate()
@@ -377,17 +463,21 @@ def test_mcore_wrapper_resume_and_config():
     CLOCK["iteration"] = 1
     set_mcore_grads(disabled_model, 1)
     set_mcore_grads(restored_disabled_model, 1)
-    disabled.step()
-    restored_disabled.step()
+    step_checked(disabled, disabled_model)
+    step_checked(restored_disabled, restored_disabled_model)
     assert_optimizer_equal(disabled, restored_disabled)
+    for left, right in zip(master_parameters(disabled_model), master_parameters(restored_disabled_model)):
+        assert torch.equal(left, right) and left.data_ptr() != right.data_ptr()
     CLOCK["iteration"] = None
     return {"offsets": receipts, "wrapper": "actual ChainedOptimizer with BF16 Float16OptimizerWithFloat16Params",
+            "model_dtype": "torch.bfloat16", "master_dtype": "torch.float32",
             "mismatch_rejected": True, "missing_metadata_rejected": True,
             "disabled_baseline_compatible": True}
 
 
-TESTS = [test_real_ns_pinned_original_cycles, test_real_ns_energy_precision_and_split,
-         test_actual_mcore_grouping, test_mcore_wrapper_resume_and_config]
+TESTS = [test_real_ns_pinned_original_cycles, test_real_ns_forced_q1_identity,
+         test_real_ns_energy_precision_and_split, test_actual_mcore_grouping,
+         test_mcore_wrapper_resume_and_config]
 
 
 def main():
@@ -407,7 +497,8 @@ def main():
         def capture_ns(*args, **kwargs):
             raw = original_ns(*args, **kwargs)
             NS_CAPTURE.append({"owner": NS_OWNER, "raw": raw.detach().clone(), "raw_dtype": str(raw.dtype),
-                               "shape": list(raw.shape), "kwargs": {key: repr(value) for key, value in kwargs.items()}})
+                               "shape": list(raw.shape), "ns_steps": kwargs.get("steps"),
+                               "kwargs": {key: repr(value) for key, value in kwargs.items()}})
             return raw
 
         production.newton_schulz_tp = capture_ns
