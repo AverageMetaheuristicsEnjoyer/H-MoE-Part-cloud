@@ -399,14 +399,9 @@ def arm_analysis(preset, result_path, bench_log, train_log, init_receipt, arm_ro
             "artifact_receipts_path": str(arm_root / "artifact-receipts.json")}, [artifact(path) for path in artifact_paths]
 
 
-def recover_v020_plain():
-    source_root = Path("/workspace-SR006.nfs3/hmoe-lionmoe-20261116/overnight-013-v020")
-    if os.environ.get("HMOE_RECOVER_V020_PLAIN") != "1":
-        return None
-    if MODE != "primary":
-        raise RuntimeError("v020 plain recovery is primary-only")
-    preset = "lm5r50"
-    unique = f"hmoe-lionmoe-20261116-overnight-013-v020-{preset}-seed1234"
+def recover_completed_arm(version, preset):
+    source_root = Path(f"/workspace-SR006.nfs3/hmoe-lionmoe-20261116/overnight-013-v{version}")
+    unique = f"hmoe-lionmoe-20261116-overnight-013-v{version}-{preset}-seed1234"
     arm_root = source_root / "arms" / preset
     arm_id = f"{unique}-muon-ctrl-{preset}"
     bench_log = source_root / "stage" / arm_id / "bench.log"
@@ -416,19 +411,37 @@ def recover_v020_plain():
     wrapper_text = wrapper_path.read_text(errors="replace")
     wrapper_matches = re.findall(r"^COAT_BENCH (\{.*\})$", wrapper_text, re.MULTILINE)
     if len(wrapper_matches) != 1:
-        raise RuntimeError("v020 plain recovery requires exactly one COAT_BENCH result")
+        raise RuntimeError(f"v{version} {preset} recovery requires exactly one COAT_BENCH result")
     wrapper_result = json.loads(wrapper_matches[0])
     bench_text = bench_log.read_text(errors="replace")
     train_exits = re.findall(r"^TRAIN_EXIT=(\d+)$", bench_text, re.MULTILINE)
     train_logs = re.findall(r"^TRAIN_LOG=(.*)$", bench_text, re.MULTILINE)
     if train_exits != ["0"] or len(train_logs) != 1 or wrapper_result.get("exit") != 0:
-        raise RuntimeError(f"v020 plain recovery exits invalid: train={train_exits}, wrapper={wrapper_result.get('exit')}")
+        raise RuntimeError(f"v{version} {preset} recovery exits invalid: train={train_exits}, wrapper={wrapper_result.get('exit')}")
     analysis, receipts = arm_analysis(preset, result_path, bench_log, train_logs[0],
                                       arm_root / "init-receipt.json", arm_root, 0, None)
-    analysis["recovery"] = {"source_root": str(source_root), "source_job": "lm-mpi-job-a6c2e8eb-900e-40db-bd79-1444653d4572",
+    jobs = {"020": "lm-mpi-job-a6c2e8eb-900e-40db-bd79-1444653d4572",
+            "023": "lm-mpi-job-f52ee651-71e4-48e6-85b6-c52a05b077b7"}
+    analysis["recovery"] = {"source_root": str(source_root), "source_job": jobs[version],
                             "training_repeated": False, "train_exit": 0, "wrapper_exit": 0,
                             "timing_scope": "cross-allocation quality comparison; do not claim paired speed"}
     return analysis, receipts
+
+
+def recover_v020_plain():
+    if os.environ.get("HMOE_RECOVER_V020_PLAIN") != "1":
+        return None
+    if MODE != "primary":
+        raise RuntimeError("v020 plain recovery is primary-only")
+    return recover_completed_arm("020", "lm5r50")
+
+
+def recover_v023_energycal():
+    if os.environ.get("HMOE_RECOVER_V023_ENERGYCAL") != "1":
+        return None
+    if MODE != "primary":
+        raise RuntimeError("v023 EnergyCal recovery is primary-only")
+    return recover_completed_arm("023", "lm5r50ec")
 
 
 def main_checked():
@@ -466,21 +479,23 @@ def main_checked():
     all_receipts = []
     failed = None
     recovered = recover_v020_plain()
-    remaining_training_arms = len(specs) - (1 if recovered else 0)
+    recovered_ec = recover_v023_energycal()
+    recoveries = [item for item in (recovered, recovered_ec) if item]
+    recovered_presets = {item[0]["preset"] for item in recoveries}
+    remaining_training_arms = len(specs) - len(recoveries)
     initial_remaining = (TRAINING_DEADLINE - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
     if initial_remaining < remaining_training_arms * 7200:
         raise RuntimeError(f"Insufficient time for full matched stage: {initial_remaining:.1f}s")
-    if recovered:
-        analysis, receipts = recovered
+    for analysis, receipts in recoveries:
         recovered_root = OUTPUT / "arms" / analysis["preset"]
         write_json(recovered_root / "analysis.json", analysis)
         write_json(recovered_root / "artifact-receipts.json", receipts)
         analysis["artifact_receipts_path"] = str(recovered_root / "artifact-receipts.json")
         arms.append(analysis)
         all_receipts.extend(receipts)
-        mark_stage("arm_lm5r50_valid_recovered")
+        mark_stage(f"arm_{analysis['preset']}_valid_recovered")
     for preset, energycal, fixed_alpha in specs:
-        if recovered and preset == "lm5r50":
+        if preset in recovered_presets:
             continue
         arm_root = OUTPUT / "arms" / preset
         arm_root.mkdir(parents=True, exist_ok=True)
@@ -587,6 +602,7 @@ def main_checked():
               "arms_completed": len(arms), "arms": arms, "failed": failed, "passed": passed,
               "cost_vs_plain": cost, "ordered_allocation_not_abba": True,
               "recovered_v020_plain_without_retraining": recovered is not None,
+              "recovered_v023_energycal_without_retraining": recovered_ec is not None,
               "recommendation": recommendation,
               "fresh_init_and_data_manifest_equal": passed,
               "quality_speed_memory_benefit_established": False,
