@@ -276,8 +276,8 @@ def main_checked():
     capacity_path = OUTPUT / "capacity-report.json"
     data_path = OUTPUT / "data-identity.json"
     write_json(capacity_path, capacity())
-    telemetry = run_telemetry()
     write_json(data_path, data_identity())
+    telemetry = run_telemetry()
     capacity_result = json.loads(capacity_path.read_text())
     summary = {
         "schema": "hmoe-fullrun014-admission-audit-v1", "audit_completed": True,
@@ -306,7 +306,15 @@ def main():
                    "traceback": traceback.format_exc()[-8000:]}
         path = OUTPUT / "partial-error.json"
         write_json(path, partial)
-        seal(partial, [("partial-error", path)])
+        available = []
+        for label, candidate in (("capacity-report", OUTPUT / "capacity-report.json"),
+                                 ("data-identity", OUTPUT / "data-identity.json"),
+                                 ("telemetry-contracts", OUTPUT / "telemetry-contracts.json")):
+            if candidate.is_file():
+                available.append((label, candidate))
+        partial["available_artifacts"] = [artifact(candidate) for _, candidate in available]
+        write_json(path, partial)
+        seal(partial, [("partial-error", path), *available])
         return 1
 
 

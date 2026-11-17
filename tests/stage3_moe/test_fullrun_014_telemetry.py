@@ -24,6 +24,9 @@ def config():
         moe_router_topk=8,
         moe_router_enable_expert_bias=True,
         moe_router_load_balancing_type="none",
+        moe_router_score_function="sigmoid",
+        moe_router_pre_softmax=True,
+        moe_router_dtype="fp32",
         bf16=True,
     )
 
