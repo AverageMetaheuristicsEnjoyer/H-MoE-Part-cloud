@@ -90,7 +90,7 @@ def capacity():
     specs = [
         ("/workspace-SR006.nfs3", "durable_cloud_nfs_candidate"),
         ("/workspace-SR006.nfs2", "durable_cloud_nfs_candidate"),
-        ("/home/jovyan", "container_home_unless_mount_proves_durable"),
+        ("/home/jovyan", "durable_cloud_nfs_home_candidate"),
         ("/tmp", "ephemeral_job_local"),
         ("/dev/shm", "ephemeral_shared_memory"),
     ]
@@ -143,10 +143,11 @@ def capacity():
     candidates = []
     for row in rows:
         mount = row.get("mount") or {}
-        durable = row["classification"] == "durable_cloud_nfs_candidate" and "nfs" in mount.get("filesystem", "").lower()
+        durable = row["classification"].startswith("durable_cloud_nfs") and "nfs" in mount.get("filesystem", "").lower()
         available = row.get("available_bytes", 0)
         candidates.append({"path": row["path"], "durable_candidate": durable, "available_bytes": available,
                            "estimated_study_peak_deficit_bytes": max(0, study_peak - available),
+                           "estimated_inode_deficit": max(0, 300000 - row.get("available_inodes", 0)),
                            "estimated_capacity_sufficient": durable and available >= study_peak and row.get("available_inodes", 0) >= 300000,
                            "not_an_admission": "actual serialized full-state save/new-allocation restore still required"})
     return {
