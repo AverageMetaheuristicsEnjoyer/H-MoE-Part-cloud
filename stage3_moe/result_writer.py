@@ -108,21 +108,24 @@ def install_router_tallies(model_chunks):
 
     `reset_model_temporary_tensors` zeroes `local_tokens_per_expert` inside each
     training step once the expert bias has been updated, so the buffer is empty by
-    the time results are written. Wrapping `_apply_expert_bias` and taking the delta
-    it produces keeps MCore's own counting - including the padding mask and the
-    grad-enabled guard - while surviving the reset.
+    the time results are written. Wrapping `_apply_expert_bias` keeps MCore's own
+    grad-enabled and padding-mask semantics. The observer independently reduces the
+    routing map into INT64: the production floating buffer may be BF16 after
+    Float16Module wrapping, so its rounded delta is not an exact assignment count.
     """
     for _, module in _moe_routers(model_chunks):
         if hasattr(module, TOKEN_TALLY):
             continue
-        setattr(module, TOKEN_TALLY, torch.zeros_like(module.local_tokens_per_expert))
+        setattr(module, TOKEN_TALLY, torch.zeros_like(module.local_tokens_per_expert, dtype=torch.int64))
         original = module._apply_expert_bias
 
         def tally(routing_map, padding_mask=None, _module=module, _original=original):
-            before = _module.local_tokens_per_expert.detach().clone()
             result = _original(routing_map, padding_mask=padding_mask)
-            tallied = getattr(_module, TOKEN_TALLY)
-            tallied += _module.local_tokens_per_expert.detach() - before
+            if _module.enable_expert_bias and torch.is_grad_enabled():
+                if padding_mask is not None:
+                    routing_map = routing_map & (~padding_mask)
+                tallied = getattr(_module, TOKEN_TALLY)
+                tallied.add_(routing_map.sum(dim=0, dtype=torch.int64))
             return result
 
         module._apply_expert_bias = tally
