@@ -1,6 +1,6 @@
 {
-  "bundle_id": "structure-analysis-20261119-v025",
-  "payload_sha256": "d361153cbdf9b05a9f3c9a0a394792c6c269026fde970504e1ecdd390d5c8062",
+  "bundle_id": "structure-analysis-20261119-v026",
+  "payload_sha256": "cf294e9290d09144a3aa5833021dd6838fbcaaf79ce3ef07d442437b574006d8",
   "ready": [
     "pilot"
   ]
