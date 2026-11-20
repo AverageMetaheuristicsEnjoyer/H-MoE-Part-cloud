@@ -1,6 +1,6 @@
 {
-  "bundle_id": "training-free-looped-moe-20261120-ppaper-v065",
-  "payload_sha256": "4f8c8ec75b1156d63a98f5fc4e43971ff7f3deb79e3116803b8c2e8856dccf55",
+  "bundle_id": "training-free-looped-moe-20261120-router-multi-v066",
+  "payload_sha256": "95565a986b91e1b3580efb0b631dadd914279f4d86566cf4beb3aaea99ea21a8",
   "ready": [
     "run"
   ]
