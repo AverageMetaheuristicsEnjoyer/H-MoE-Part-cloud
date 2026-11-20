@@ -1,6 +1,6 @@
 {
-  "bundle_id": "training-free-looped-moe-20261120-router-multi-v070",
-  "payload_sha256": "508eb8c875787dfc8aa23dff972b29d39854d4ed07fb4bb56861400258c160a5",
+  "bundle_id": "training-free-looped-moe-20261120-router-multi-v071",
+  "payload_sha256": "07e1a826169c2bdf78f0997b391626d43f841869e1cfd3cc662615395fd21d6d",
   "ready": [
     "run"
   ]
