@@ -574,17 +574,21 @@ def run_to_endpoint(api, start_iteration):
             raise RuntimeError(f"segment {seg_tag} nonfinite/nan/skip")
         dev_curve.update(parsed["scheduled_validation"])
         reached = parsed["reached"]
-        if reached <= current:
-            raise RuntimeError(f"segment {seg_tag} made no progress ({current}->{reached})")
         new_saves = [it for it, _ in iter_dirs() if it > current]
         verified_latest = current
         for it in new_saves:
             receipt, _ = upload_save(api, it, "full-state")
             uploads.append({"iteration": it, "receipt": receipt["prefix"]})
             verified_latest = it
+        # The trainer logs every LOG_INTERVAL (10) iterations, so the last logged step can lag the
+        # exit-interval save: 726 is not a multiple of 10, and the log ends at 720. Progress is the
+        # save iteration when it is ahead of the log, otherwise the logged iteration.
+        current_after = max(reached, verified_latest)
+        if current_after <= current:
+            raise RuntimeError(f"segment {seg_tag} made no progress ({current}->{reached}, save={verified_latest})")
         keep = {PRE_DECAY, verified_latest}
         rotations.extend(rotate_local(verified_latest, keep))
-        current = reached
+        current = current_after
         mark_stage(f"segment_{seg_tag}_uploaded")
         identity = data_identity_snapshot(seg_tag, current * 208)
         write_json(ARM_NFS / f"data-identity-{seg_tag}.json", identity)
