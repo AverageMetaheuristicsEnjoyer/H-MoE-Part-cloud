@@ -53,8 +53,8 @@ MONO_START = time.monotonic()
 STAGES = []
 VERSION = os.environ.get("HMOE_FULLRUN016_VERSION", "031")
 MODE = os.environ.get("HMOE_FULLRUN016_MODE", "")
-if MODE not in ("gate-save", "gate-restore", "continue", "arm-lmlinrev"):
-    raise RuntimeError("HMOE_FULLRUN016_MODE must be gate-save|gate-restore|continue|arm-lmlinrev")
+if MODE not in ("gate-save", "gate-restore", "continue", "arm-lmlinrev", "gate-diagnose"):
+    raise RuntimeError("HMOE_FULLRUN016_MODE must be gate-save|gate-restore|continue|arm-lmlinrev|gate-diagnose")
 ARM = "lmlinrevr50" if MODE == "arm-lmlinrev" else os.environ.get("HMOE_FULLRUN016_ARM", "lm5r50ec")
 if ARM not in ("lm5r50ec", "lmlinrevr50"):
     raise RuntimeError("Unsupported fullrun016 arm")
@@ -769,12 +769,48 @@ def continue_arm(api, from_scratch):
     return 0 if summary["passed"] else 1
 
 
+def gate_diagnose():
+    # Read-only comparison of the PERSISTENT save-dump (expected) vs gate-restore loaded
+    # manifest (actual) to expose the exact pre-update mismatch fields (the /tmp verification
+    # report is ephemeral). No HF/download/training; relays scalar values + hash-field names.
+    from stage3_moe.fullrun_state_verify import _compare
+    expected_path = DUMP_DIR / "iter_0000050" / "state-manifest.json"
+    actual_path = ARM_NFS / "gate-restore-loaded-manifest.json"
+    if not expected_path.is_file() or not actual_path.is_file():
+        raise RuntimeError(f"gate-diagnose manifests missing: expected={expected_path.is_file()} actual={actual_path.is_file()}")
+    expected = json.loads(expected_path.read_text())
+    actual = json.loads(actual_path.read_text())
+    mismatches = _compare(expected, actual)
+    compact = []
+    for m in mismatches:
+        fld = m.get("field", "")
+        if fld in ("model_param_hashes", "fp32_master_hashes", "optimizer_state_hashes") or fld.endswith(".names"):
+            compact.append({k: v for k, v in m.items() if k not in ("expected_sha256", "actual_sha256")})
+        else:
+            compact.append(m)
+    report = {"mismatch_count": len(mismatches), "mismatches": compact,
+              "expected_iteration": expected.get("iteration"), "actual_iteration": actual.get("iteration"),
+              "expected_consumed": expected.get("consumed_train_samples"), "actual_consumed": actual.get("consumed_train_samples"),
+              "expected_phase": expected.get("next_step_phase"), "actual_phase": actual.get("next_step_phase"),
+              "expected_scheduler": expected.get("scheduler_state"), "actual_scheduler": actual.get("scheduler_state"),
+              "expected_rng": expected.get("rng"), "actual_rng": actual.get("rng"),
+              "expected_num_flops": expected.get("num_floating_point_operations_so_far"),
+              "actual_num_flops": actual.get("num_floating_point_operations_so_far")}
+    write_json(OUTPUT / "gate-diagnose.json", report)
+    seal_envelope("small-artifacts.json", "hmoe-fullrun016-gate-diagnose-v1",
+                  [("gate-diagnose", OUTPUT / "gate-diagnose.json")])
+    print("FULLRUN016_RESULT " + json.dumps(report, sort_keys=True), flush=True)
+    return 0
+
+
 def main_checked():
     ARM_NFS.mkdir(parents=True, exist_ok=True)
     DUMP_DIR.mkdir(parents=True, exist_ok=True)
     runtime = runtime_gates()
     write_json(OUTPUT / "runtime-gates.json", runtime)
     mark_stage("runtime")
+    if MODE == "gate-diagnose":
+        return gate_diagnose()
     api = hf_setup()
     if MODE == "gate-save":
         return gate_save(api)
