@@ -394,12 +394,22 @@ def launch_segment(segment_tag, save_interval, exit_interval, timeout, verify_ma
     load_return_fallback = "load_return:" in log_text
     success = re.search(r"successfully loaded checkpoint.*at iteration (\d+)", log_text)
     loaded_iteration = int(success.group(1)) if success else None
-    schedule_check = check_realized_schedule(log_text, ARM) if train_log else None
+    # Relay segment wrapper log tails for diagnosability (the underlying launcher/MCore error is
+    # otherwise only on NFS). The realized-schedule gate applies only to SUCCESSFUL training; on a
+    # wrapper failure the exit/reached gates surface the real error instead of masking it with
+    # "no telemetry lines" (gate-save attempt1 failed opaque this way).
+    training_ok = (code == 0 and train_exits == ["0"])
+    seg_stdout_tail = redact(text[-16000:])
+    seg_stderr_tail = redact(stderr.read_text(errors="replace")[-8000:]) if stderr.is_file() else ""
+    (OUTPUT / f"segment-{segment_tag}.stdout.tail").write_text(seg_stdout_tail)
+    (OUTPUT / f"segment-{segment_tag}.stderr.tail").write_text(seg_stderr_tail)
+    schedule_check = check_realized_schedule(log_text, ARM) if (train_log and training_ok) else None
     return {"segment": segment_tag, "wrapper_exit": code, "train_exit": train_exits,
             "train_log": train_log, "duration_seconds": round(duration, 3),
             "removed_inherited_keys": removed, "parsed": parsed, "stdout": str(stdout),
             "load_return_fallback": load_return_fallback, "loaded_iteration": loaded_iteration,
-            "schedule_check": schedule_check}
+            "training_ok": training_ok, "schedule_check": schedule_check,
+            "segment_stdout_tail": seg_stdout_tail, "segment_stderr_tail": seg_stderr_tail}
 
 
 def assert_strict_load(result, expected_iteration):
@@ -780,10 +790,15 @@ def main():
                       OUTPUT / "gate-save-summary.json", OUTPUT / "gate-restore-summary.json",
                       OUTPUT / "continue-summary.json", ARM_NFS / "continue-progress.json", OUTPUT / "progress.json")
                      if path.is_file()]
+        segment_tails = {}
+        for tail in sorted(OUTPUT.glob("segment-*.tail")):
+            segment_tails[tail.name] = tail.read_text(errors="replace")[-16000:]
+            available.append(artifact(tail))
         partial = {"schema": "hmoe-fullrun016-error-v1", "passed": False, "safe_stop": stopped,
                    "mode": MODE, "arm": ARM, "job_note": os.environ.get("HMOE_JOB_NOTE"),
                    "completed_stages": STAGES, "error_type": type(error).__name__, "error": redact(str(error)),
                    "traceback": redact(traceback.format_exc())[-4000:], "available_artifacts": available,
+                   "segment_log_tails": segment_tails,
                    "last_good_checkpoint": read_tracker(),
                    "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
         write_json(OUTPUT / "partial-error.json", partial)
@@ -792,6 +807,8 @@ def main():
                             ("continue-progress", ARM_NFS / "continue-progress.json")):
             if path.is_file():
                 labeled.append((label, path))
+        for tail in sorted(OUTPUT.glob("segment-*.tail")):
+            labeled.append((tail.stem, tail))
         seal_envelope("small-artifacts.json", "hmoe-fullrun016-error-v1", labeled)
         print("FULLRUN016_RESULT " + json.dumps({"passed": False, "safe_stop": stopped, "mode": MODE,
                                                  "completed_stages": STAGES, "last_good_checkpoint": read_tracker()}, sort_keys=True), flush=True)
