@@ -82,7 +82,8 @@ def build_manifest(local_dir, iteration, arm, kind):
             "total_bytes": sum(item["bytes"] for item in files)}
 
 
-def verify_remote(api, repo, prefix, manifest):
+def verify_remote(api, repo, prefix, manifest, local_dir):
+    import hashlib
     entries = remote_entries(api, repo, prefix)
     receipts = []
     for item in manifest["files"]:
@@ -93,12 +94,21 @@ def verify_remote(api, repo, prefix, manifest):
         lfs = getattr(entry, "lfs", None)
         server_sha = getattr(lfs, "sha256", None) if lfs is not None else None
         server_size = getattr(entry, "size", None)
-        # Small non-LFS files (manifests) may not carry an LFS sha256; verify size for those.
-        sha_ok = (server_sha == item["sha256"]) if server_sha is not None else (item["bytes"] < 5 * 2**20)
+        if server_sha is not None:
+            sha_ok = server_sha == item["sha256"]
+            verify_kind = "lfs_sha256"
+        else:
+            # Small non-LFS files (manifests): verify the exact git blob id
+            # (sha1 of "blob <size>\0" + content), not size alone (skeptic v031 M2).
+            content = (Path(local_dir) / item["relative_path"]).read_bytes()
+            expected_blob = hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest()
+            blob_id = getattr(entry, "blob_id", None)
+            sha_ok = blob_id is not None and blob_id == expected_blob
+            verify_kind = "git_blob_sha1"
         if not sha_ok or server_size != item["bytes"]:
-            raise RuntimeError(f"HF post-upload identity mismatch for {remote}: sha={server_sha} size={server_size}")
+            raise RuntimeError(f"HF post-upload identity mismatch for {remote}: sha={server_sha} size={server_size} kind={verify_kind}")
         receipts.append({"remote": remote, "bytes": server_size, "lfs_sha256": server_sha,
-                         "local_sha256": item["sha256"], "verified": True})
+                         "local_sha256": item["sha256"], "verify_kind": verify_kind, "verified": True})
     return receipts
 
 
@@ -111,7 +121,7 @@ def upload_directory(api, repo, local_dir, prefix, manifest, log=print):
         api.upload_file(path_or_fileobj=str(local), path_in_repo=remote, repo_id=repo,
                         commit_message=f"fullrun-016 {manifest['arm']} iter{manifest['iteration']} {item['relative_path']}")
         log(f"HF_UPLOAD {remote} bytes={item['bytes']}", flush=True)
-    receipts = verify_remote(api, repo, prefix, manifest)
+    receipts = verify_remote(api, repo, prefix, manifest, local_dir)
     return {"prefix": prefix, "files": receipts, "upload_seconds": round(time.monotonic() - started, 3),
             "verified_before_local_deletion": True}
 

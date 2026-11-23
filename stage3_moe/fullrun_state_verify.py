@@ -52,6 +52,10 @@ def collect_state(model, optimizer, scheduler):
     for chunk_index, chunk in enumerate(model):
         for name, parameter in chunk.named_parameters():
             model_records.append(_tensor_record(f"model_chunk{chunk_index}.{name}", parameter))
+        # Buffers (e.g. router expert_bias) are part of the saved model state; hash them too
+        # so pre-update verify covers router bias, not only parameters (skeptic v031 M3).
+        for name, buffer in chunk.named_buffers():
+            model_records.append(_tensor_record(f"model_chunk{chunk_index}.buffer.{name}", buffer))
     master_records = []
     state_records = []
     group_structure = []

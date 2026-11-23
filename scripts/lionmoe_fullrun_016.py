@@ -203,7 +203,8 @@ CLEANUP_KEYS = ("STAGE3_MOE_LR_SCALE", "STAGE3_MOE_LR_CONSTANT", "STAGE3_MOE_COL
                 "STAGE3_MOE_BF16_FUSED_EXPERTS", "STAGE3_MOE_COAT_STRICT", "STAGE3_MOE_COAT_FUSED_EXPERTS",
                 "STAGE3_MOE_HESSIAN_PATH", "STAGE3_MOE_DIAGNOSTIC_PATH", "STAGE3_MOE_REPLAY_PATH",
                 "STAGE3_MOE_M2_TRACE_PATH", "STAGE3_MOE_ACTIVATION_STATS_PATH", "STAGE3_MOE_COLDSTART_RECEIPT",
-                "STAGE3_MOE_FULL_DEV_EVAL", "STAGE3_MOE_FULL_DEV_CAPTURE_PATH")
+                "STAGE3_MOE_FULL_DEV_EVAL", "STAGE3_MOE_FULL_DEV_CAPTURE_PATH",
+                "STAGE3_MOE_LIONMUON_ENERGYCAL_DIAGNOSTICS", "STAGE3_MOE_LIONMUON_PERIOD")
 
 
 def base_arm_env(unique):
@@ -236,8 +237,16 @@ def base_arm_env(unique):
         env.update({"STAGE3_MOE_LIONMUON_PERIOD": "5", "STAGE3_MOE_LIONMUON_ENERGYCAL": "1",
                     "STAGE3_MOE_LIONMUON_ENERGYCAL_RHO_REF": "0.8", "STAGE3_MOE_LIONMUON_ENERGYCAL_EXPONENT": "1",
                     "STAGE3_MOE_LIONMUON_ENERGYCAL_QMIN": "0"})
+    elif ARM == "lmlinrevr50":
+        # The direct launcher path (run_stage3_moe_pretrain.sh full-lean) never sources
+        # muon_presets.sh — only run_coat_arm.sh does. The PROB schedule MUST be set here
+        # explicitly; otherwise lionmuon falls back to default PERIOD=2 and the arm silently
+        # trains the wrong schedule (skeptic v031 blocker B1). Commas are fine in process env
+        # (this is not an mlsub --env value).
+        env.update({"STAGE3_MOE_LIONMUON_ENERGYCAL": "0",
+                    "STAGE3_MOE_LIONMUON_PROB": "0:0.35,1:0.05"})
     else:
-        env.update({"STAGE3_MOE_LIONMUON_ENERGYCAL": "0"})  # PROB comes from preset lmlinrevr50
+        raise RuntimeError(f"Unknown fullrun arm: {ARM}")
     return env, removed
 
 
@@ -304,6 +313,55 @@ def parse_train_log(path):
             "skipped_test_markers": len(re.findall(r"STAGE3_TEST_EVALUATION_SKIPPED", text))}
 
 
+def check_realized_schedule(log_text, arm):
+    """Per-step gate: the realized optimizer schedule must match the declared arm semantics.
+
+    Catches wrong-schedule runs that would otherwise pass every other gate silently
+    (skeptic v031 blocker B1). Uses the production schedule/draw functions; t is the global
+    iteration (continues across resume segments), optimizer_steps/muon_steps are per-process
+    counters (restart at 0 on resume), so coverage is checked as a contiguous t-range.
+    """
+    import random
+    rows = re.findall(r"^LIONMUON_STEP t=(\d+) muon=(\d+) muon_steps=(\d+) optimizer_steps=(\d+) "
+                      r"rule=(\w+) value=([0-9.eE+-]+) power=([0-9.eE+-]+)$", log_text, re.MULTILINE)
+    if not rows:
+        raise RuntimeError("No LIONMUON_STEP telemetry lines; realized schedule unverifiable")
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(ROOT / "third_party" / "emerging-optimizers"))
+    from stage3_moe.lionmuon import parse_schedule, piecewise_linear
+    points = parse_schedule("0:0.35,1:0.05", float)
+    seen = set()
+    local_steps = []
+    muon_total = 0
+    for t_s, muon_s, msteps_s, osteps_s, rule, value_s, _power_s in rows:
+        t = int(t_s)
+        muon = int(muon_s)
+        if t in seen:
+            raise RuntimeError(f"Duplicate schedule telemetry at t={t}")
+        seen.add(t)
+        local_steps.append(int(osteps_s))
+        value = float(value_s)
+        if arm == "lm5r50ec":
+            if rule != "period" or value != 5.0 or muon != int((t - 1) % 5 == 0):
+                raise RuntimeError(f"EnergyCal arm realized schedule deviates from P5 at t={t}")
+        elif arm == "lmlinrevr50":
+            p = piecewise_linear(points, t / FULL_ITERS)
+            expected = int(random.Random(f"lionmuon-{SEED}-{t}").random() < p)
+            if rule != "prob" or not math.isclose(value, p, rel_tol=1e-5, abs_tol=1e-6) or muon != expected:
+                raise RuntimeError(f"lmlinrev arm realized schedule deviates from PROB semantics at t={t}")
+        else:
+            raise RuntimeError(f"Unknown arm for schedule gate: {arm}")
+        muon_total = int(msteps_s)
+    if sorted(seen) != list(range(min(seen), max(seen) + 1)):
+        raise RuntimeError("Schedule telemetry t-coverage incomplete")
+    if local_steps != list(range(1, len(local_steps) + 1)):
+        raise RuntimeError("Per-process optimizer_steps coverage incomplete")
+    return {"telemetry_steps": len(seen), "t_range": [min(seen), max(seen)],
+            "realized_muon_steps_this_segment": muon_total,
+            "rule": "period5" if arm == "lm5r50ec" else "prob_0.35_to_0.05",
+            "per_step_cross_check": "passed"}
+
+
 def launch_segment(segment_tag, save_interval, exit_interval, timeout, verify_manifest=None, loaded_manifest=None):
     unique = f"hmoe-lionmoe-20261123-fullrun-016-v{VERSION}-{ARM}-{segment_tag}"
     env, removed = base_arm_env(unique)
@@ -336,10 +394,12 @@ def launch_segment(segment_tag, save_interval, exit_interval, timeout, verify_ma
     load_return_fallback = "load_return:" in log_text
     success = re.search(r"successfully loaded checkpoint.*at iteration (\d+)", log_text)
     loaded_iteration = int(success.group(1)) if success else None
+    schedule_check = check_realized_schedule(log_text, ARM) if train_log else None
     return {"segment": segment_tag, "wrapper_exit": code, "train_exit": train_exits,
             "train_log": train_log, "duration_seconds": round(duration, 3),
             "removed_inherited_keys": removed, "parsed": parsed, "stdout": str(stdout),
-            "load_return_fallback": load_return_fallback, "loaded_iteration": loaded_iteration}
+            "load_return_fallback": load_return_fallback, "loaded_iteration": loaded_iteration,
+            "schedule_check": schedule_check}
 
 
 def assert_strict_load(result, expected_iteration):
