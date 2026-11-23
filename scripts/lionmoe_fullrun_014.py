@@ -15,17 +15,22 @@ VERSION = os.environ.get("HMOE_FULLRUN_VERSION", "026")
 EXPECTED_NOTE = f"hmoe-lionmoe-20261117-fullrun-014-v{VERSION}"
 EXPECTED_ROOT = f"/workspace-SR006.nfs3/hmoe-lionmoe-20261117/fullrun-014-v{VERSION}"
 EXPECTED_BUNDLE = f"hmoe-lionmoe-20261116-v{VERSION}"
-if os.environ.get("HMOE_JOB_NOTE") != EXPECTED_NOTE:
-    raise RuntimeError("Fullrun014 note mismatch")
-if os.environ.get("HMOE_CONTRACT_ROOT") != EXPECTED_ROOT:
-    raise RuntimeError("Fullrun014 root mismatch")
-if os.environ.get("EXPECTED_BUNDLE_ID") != EXPECTED_BUNDLE:
-    raise RuntimeError("Fullrun014 bundle mismatch")
-for key, length in (("EXPECTED_SOURCE_COMMIT", 40), ("EXPECTED_CARRIER_COMMIT", 40), ("EXPECTED_PAYLOAD_SHA256", 64)):
-    value = os.environ.get(key, "")
-    if len(value) != length or any(character not in "0123456789abcdef" for character in value):
-        raise RuntimeError(f"Missing/invalid runtime pin: {key}")
-OUTPUT.mkdir(parents=True, exist_ok=True)
+
+
+def validate_environment():
+    # A function (not import-time code) so screenb-015 can reuse capacity/data_identity/run_telemetry
+    # under its own note/root/bundle pins. Running this script directly behaves exactly as before.
+    if os.environ.get("HMOE_JOB_NOTE") != EXPECTED_NOTE:
+        raise RuntimeError("Fullrun014 note mismatch")
+    if os.environ.get("HMOE_CONTRACT_ROOT") != EXPECTED_ROOT:
+        raise RuntimeError("Fullrun014 root mismatch")
+    if os.environ.get("EXPECTED_BUNDLE_ID") != EXPECTED_BUNDLE:
+        raise RuntimeError("Fullrun014 bundle mismatch")
+    for key, length in (("EXPECTED_SOURCE_COMMIT", 40), ("EXPECTED_CARRIER_COMMIT", 40), ("EXPECTED_PAYLOAD_SHA256", 64)):
+        value = os.environ.get(key, "")
+        if len(value) != length or any(character not in "0123456789abcdef" for character in value):
+            raise RuntimeError(f"Missing/invalid runtime pin: {key}")
+    OUTPUT.mkdir(parents=True, exist_ok=True)
 
 
 def write_json(path, value):
@@ -85,7 +90,8 @@ def quota_evidence():
     return result
 
 
-def capacity():
+def capacity(probe_namespace="hmoe-lionmoe-20261117", probe_label="fullrun-014", probe_marker="fullrun014"):
+    # Defaults reproduce the fullrun014 probe paths/payloads byte for byte; screenb-015 passes its own namespace.
     mounts = mount_table()
     specs = [
         ("/workspace-SR006.nfs3", "durable_cloud_nfs_candidate"),
@@ -108,11 +114,11 @@ def capacity():
                        total_inodes=usage.f_files, free_inodes=usage.f_ffree,
                        available_inodes=usage.f_favail,
                        mount=matching_mount(path, mounts))
-            probe = root / "hmoe-lionmoe-20261117" / f"fullrun-014-v{VERSION}-capacity-probe"
+            probe = root / probe_namespace / f"{probe_label}-v{VERSION}-capacity-probe"
             try:
                 probe.mkdir(parents=True, exist_ok=True)
                 probe_file = probe / "fsync-roundtrip.bin"
-                payload = f"fullrun014-{VERSION}-{path}\n".encode()
+                payload = f"{probe_marker}-{VERSION}-{path}\n".encode()
                 with probe_file.open("wb") as stream:
                     stream.write(payload)
                     stream.flush()
@@ -274,6 +280,7 @@ def seal(result, paths):
 
 
 def main_checked():
+    validate_environment()
     capacity_path = OUTPUT / "capacity-report.json"
     data_path = OUTPUT / "data-identity.json"
     write_json(capacity_path, capacity())

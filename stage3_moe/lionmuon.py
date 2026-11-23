@@ -83,6 +83,10 @@ megatron.core.optimizer.emerging_optimizers.TensorParallelMuon), selected with S
 
 STAGE3_MOE_MUON_NS_STEPS overrides --muon-num-ns-steps for every variant, plain Muon included.
 
+STAGE3_MOE_LIONMUON_STEP_TELEMETRY=1 (screenb-015, default off) prints one passive ``LIONMUON_STEP`` line per
+optimizer step with the realized choice and the running ``_lionmuon_muon``/``_lionmuon_steps`` counters, so a
+PROB arm's realized Muon-step count is exact in the train log. Print only: no math, dtype, RNG or return change.
+
 All keep the series' Muon contract otherwise (param groups, split fc1, Adam fallback, optional COAT FP8
 momentum through FP8StateOptimizerMixin, whose ``_step_over`` calls ``super().step()`` -> the variant's step).
 """
@@ -163,6 +167,8 @@ class LionMuonMixin:
     lion_energycal_qmin = _env_float("STAGE3_MOE_LIONMUON_ENERGYCAL_QMIN", "0")
     lion_fixed_routed_alpha = _env_float("STAGE3_MOE_LIONMUON_FIXED_ROUTED_ALPHA", "1")
     lion_energycal_diagnostics = os.environ.get("STAGE3_MOE_LIONMUON_ENERGYCAL_DIAGNOSTICS", "0") == "1"
+    # Passive realized-choice telemetry (screenb-015): a print only, default off. No math/dtype/RNG/return change.
+    lion_step_telemetry = os.environ.get("STAGE3_MOE_LIONMUON_STEP_TELEMETRY", "0") == "1"
 
     def _lion_energycal_config(self):
         if self.lion_energycal_rho_ref <= 0 or self.lion_energycal_exponent <= 0 or not 0 <= self.lion_energycal_qmin <= 1:
@@ -263,6 +269,10 @@ class LionMuonMixin:
         loss = closure() if closure is not None else None
         default_muon, t, value, power = self._lionmuon_choice()
         self._lionmuon_muon = getattr(self, "_lionmuon_muon", 0) + int(default_muon)
+        if self.lion_step_telemetry:
+            print(f"LIONMUON_STEP t={t} muon={int(default_muon)} muon_steps={self._lionmuon_muon} "
+                  f"optimizer_steps={self._lionmuon_steps} rule={'prob' if self.lion_prob is not None else 'period'} "
+                  f"value={value:.6g} power={power:.4g}", flush=True)
         if self.lion_energycal_diagnostics:
             self._lion_energycal_last = []
         measurement_observer = getattr(self, "_lionmuon_measurement_observer", None)

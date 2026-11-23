@@ -10,6 +10,8 @@ muon_preset() {
     # A dense colleague's probability schedules of a Muon step (2026-10-19), over the training fraction, mean p = 0.2.
     lmlin) echo STAGE3_MOE_MUON_VARIANT=lionmuon STAGE3_MOE_LIONMUON_PROB=0:0.05,1:0.35 ;;
     lmlinrev) echo STAGE3_MOE_MUON_VARIANT=lionmuon STAGE3_MOE_LIONMUON_PROB=0:0.35,1:0.05 ;;
+    # Screenb-015 (2026-11-23): lmlinrev with the R50 sign-LR ratio, matched to lm5r50 over the full horizon.
+    lmlinrevr50) echo STAGE3_MOE_MUON_VARIANT=lionmuon STAGE3_MOE_LIONMUON_PROB=0:0.35,1:0.05 STAGE3_MOE_LIONMUON_LR_RATIO=50 ;;
     lmtail0) echo STAGE3_MOE_MUON_VARIANT=lionmuon STAGE3_MOE_LIONMUON_PROB=0:0.2222,0.9:0.2222,0.9:0 ;;
     lmtail8) echo STAGE3_MOE_MUON_VARIANT=lionmuon STAGE3_MOE_LIONMUON_PROB=0:0.1333,0.9:0.1333,0.9:0.8 ;;
     # Power steps (2026-10-19): a constant p = 0.2 of spectral steps, the power a rising from 0 (LionMuon) to 1 over all

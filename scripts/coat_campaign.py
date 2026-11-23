@@ -17,6 +17,7 @@
   postwarmup012      two checkpoint-free 270-step arms; no save/load/eval
   overnight013       checkpoint-free600-step development-validation stages; no test
   fullrun014         storage/telemetry/data admission audit; no training/checkpoint save
+  screenb015         fresh audit + matched600-step development screen B (lm5r50 vs lmlinrevr50); no test/checkpoints
 """
 import datetime
 import json
@@ -232,6 +233,12 @@ def overnight013():
 
 def fullrun014():
     return bounded_payload('lionmoe_fullrun_014.py', 'HMOE_CONTRACT_ROOT', 'FULLRUN014', 600)
+
+
+def screenb015():
+    # Hard payload cap is configurable; the leader sets ~16200s (2 arms x ~6500s + audit + reserve).
+    cap = int(os.environ.get('HMOE_SCREENB_PAYLOAD_CAP_SECONDS', '16200'))
+    return bounded_payload('lionmoe_screenb_015.py', 'HMOE_CONTRACT_ROOT', 'SCREENB015', cap)
 
 
 STEP_RE = re.compile(r"iteration\s+(\d+)/\s*\d+ \|.*?elapsed time per iteration \(ms\): ([0-9.]+).*?lm loss: ([0-9.eE+-]+).*?grad norm: ([0-9.eE+-]+)"
@@ -1082,6 +1089,8 @@ def main():
         return overnight013()
     if mode == 'fullrun014':
         return fullrun014()
+    if mode == 'screenb015':
+        return screenb015()
     if mode == 'disk':
         # Free space on every persistent volume and what the series keeps there.
         subprocess.run(['df', '-h', '/home/jovyan', '/workspace-SR006.nfs2', '/workspace-SR006.nfs3', '/tmp'], check=False)
