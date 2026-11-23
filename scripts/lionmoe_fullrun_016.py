@@ -69,6 +69,15 @@ SEGMENT_STEPS = int(os.environ.get("HMOE_FULLRUN016_SEGMENT_STEPS", "2178"))
 CAP_SECONDS = int(os.environ.get("HMOE_FULLRUN016_CAP_SECONDS", "3600"))
 SEAL_RESERVE = 300
 SEC_PER_STEP = float(os.environ.get("HMOE_FULLRUN016_SEC_PER_STEP", "8"))
+NPAR = None  # visible GPU count of the payload rank; 1 (dp1) or 2 (dp2)
+
+
+def npar():
+    global NPAR
+    if NPAR is None:
+        import torch as _torch
+        NPAR = _torch.cuda.device_count() if _torch.cuda.is_available() else 1
+    return NPAR
 HF_REPO = "AverageMetaheuristicsEnjoyer/hmoe-stage3-checkpoints"
 HF_PREFIX = f"fullrun-016/{ARM}"
 CORPUS_MANIFEST_SHA = "7a7cf91633081dd080f3cff96407bd61d4c237d88a5e926cffe36fc5b8cbfcc8"
@@ -219,7 +228,7 @@ def base_arm_env(unique):
         "STAGE3_MOE_DATA_ROOT": "/home/jovyan/data/fineweb-edu-gpt2-megatron/data",
         "STAGE3_MOE_RUN_SUFFIX": unique,
         "STAGE3_MOE_SEED": str(SEED), "STAGE3_MOE_LIONMUON_SEED": str(SEED),
-        "STAGE3_MOE_NPROC": "1", "STAGE3_MOE_MICRO_BATCH": "16", "STAGE3_MOE_EP": "1",
+        "STAGE3_MOE_NPROC": str(npar()), "STAGE3_MOE_MICRO_BATCH": "16" if npar() == 1 else "8", "STAGE3_MOE_EP": "1",
         "STAGE3_MOE_EVAL_ITERS": "32", "STAGE3_MOE_EVAL_INTERVAL": "1000", "STAGE3_MOE_LOG_INTERVAL": "10",
         "STAGE3_MOE_DISABLE_TEST_EVAL": "1", "STAGE3_MOE_ROUTING_TELEMETRY_INTERVAL": "10",
         "STAGE3_MOE_SCHEDULE_ITERS": str(FULL_ITERS),
@@ -278,9 +287,10 @@ def runtime_gates():
         raise RuntimeError("Corpus manifest hash mismatch")
     gpu = subprocess.run(["nvidia-smi", "--query-gpu=index,name,uuid,memory.total,driver_version",
                           "--format=csv,noheader"], capture_output=True, text=True, check=True).stdout.strip().splitlines()
-    if len(gpu) != 1 or not torch.cuda.is_available() or torch.cuda.device_count() != 1:
-        raise RuntimeError("fullrun016 requires exactly one visible GPU")
-    return {"volumes": volumes, "corpus_manifest_sha256": manifest_sha, "gpu": gpu,
+    count = npar()
+    if count not in (1, 2) or len(gpu) != count:
+        raise RuntimeError(f"fullrun016 requires 1 or 2 visible GPUs (smi={len(gpu)} torch={count})")
+    return {"volumes": volumes, "corpus_manifest_sha256": manifest_sha, "gpu": gpu, "npar": count,
             "torch": torch.__version__, "cuda": torch.version.cuda, "transformer_engine": te}
 
 
@@ -628,7 +638,8 @@ def eval_endpoint(weights_base, tag):
                 "STAGE3_MOE_MEASUREMENT_ENERGYCAL_DIAGNOSTICS", "STAGE3_MOE_LIONMUON_STEP_TELEMETRY"):
         env.pop(key, None)
     capture_path = ARM_NFS / f"final-full-dev-capture-{tag}.jsonl"
-    env.update({"STAGE3_MOE_EVAL_LOAD": str(eval_load), "STAGE3_MOE_FULL_DEV_EVAL": "1",
+    env.update({"STAGE3_MOE_NPROC": "1", "STAGE3_MOE_MICRO_BATCH": "16",
+                "STAGE3_MOE_EVAL_LOAD": str(eval_load), "STAGE3_MOE_FULL_DEV_EVAL": "1",
                 "STAGE3_MOE_FULL_DEV_CAPTURE_PATH": str(capture_path),
                 "STAGE3_MOE_EVAL_INTERVAL": "300", "STAGE3_MOE_LOG_INTERVAL": "1",
                 "STAGE3_MOE_CKPT_ROOT": str(TMP / f"eval-no-ckpt-{tag}")})
