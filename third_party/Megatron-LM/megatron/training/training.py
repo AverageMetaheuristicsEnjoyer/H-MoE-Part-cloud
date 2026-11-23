@@ -4038,7 +4038,12 @@ def evaluate_and_print_results(
 
         # with full validation we need to distribute eval_iters to all ranks
         if mpu.get_tensor_model_parallel_rank() == 0:
-            eval_iters = torch.tensor(args.eval_iters, dtype=torch.long, device='cuda')
+            # Single-validation-set full_validation sets args.eval_iters to a scalar int
+            # (build_train_valid_test_data_iterators .item()); wrap it so the broadcast tensor
+            # is 1-D and .tolist() yields a list (eval_iters[0] below). Multiple-set path already
+            # passes a list. Eval-loop plumbing fix only; no training/optimizer/router math change.
+            eval_iters = torch.tensor([args.eval_iters] if not args.multiple_validation_sets else args.eval_iters,
+                                      dtype=torch.long, device='cuda')
         else:
             eval_iters = torch.tensor([0] * len(eval_iters), dtype=torch.long, device='cuda')
         torch.distributed.broadcast(eval_iters, 0)
