@@ -1,0 +1,71 @@
+{
+  "network_required_at_job_bootstrap": false,
+  "packages": [
+    {
+      "compatibility": "CPython>=3.11 ABI3, including3.12; manylinux_2_28 x86_64",
+      "filename": "cryptography-46.0.5-cp311-abi3-manylinux_2_28_x86_64.whl",
+      "license_expression": "Apache-2.0 OR BSD-3-Clause",
+      "license_files": [
+        "cryptography-46.0.5.dist-info/licenses/",
+        "cryptography-46.0.5.dist-info/licenses/LICENSE",
+        "cryptography-46.0.5.dist-info/licenses/LICENSE.APACHE",
+        "cryptography-46.0.5.dist-info/licenses/LICENSE.BSD"
+      ],
+      "metadata_license_lines": [
+        "License-File: LICENSE",
+        "License-File: LICENSE.APACHE",
+        "License-File: LICENSE.BSD",
+        "License-Expression: Apache-2.0 OR BSD-3-Clause"
+      ],
+      "name": "cryptography",
+      "sha256": "3ee190460e2fbe447175cda91b88b84ae8322a104fc27766ad09428754a618ed",
+      "size": 4456855,
+      "url": "https://files.pythonhosted.org/packages/6b/e7/237155ae19a9023de7e30ec64e5d99a9431a567407ac21170a046d22a5a3/cryptography-46.0.5-cp311-abi3-manylinux_2_28_x86_64.whl",
+      "verified_bytes": 4456855,
+      "version": "46.0.5"
+    },
+    {
+      "compatibility": "CPython3.12 exact ABI; manylinux2014/2_17 x86_64",
+      "filename": "cffi-2.0.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "license_expression": "MIT",
+      "license_files": [
+        "cffi-2.0.0.dist-info/licenses/",
+        "cffi-2.0.0.dist-info/licenses/AUTHORS",
+        "cffi-2.0.0.dist-info/licenses/LICENSE"
+      ],
+      "metadata_license_lines": [
+        "License-Expression: MIT",
+        "License-File: LICENSE",
+        "License-File: AUTHORS"
+      ],
+      "name": "cffi",
+      "sha256": "3e17ed538242334bf70832644a32a7aae3d83b57567f9fd60a26257e992b79ba",
+      "size": 219572,
+      "url": "https://files.pythonhosted.org/packages/78/2d/7fa73dfa841b5ac06c7b8855cfc18622132e365f5b81d02230333ff26e9e/cffi-2.0.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "verified_bytes": 219572,
+      "version": "2.0.0"
+    },
+    {
+      "compatibility": "pure Python py3; requires>=3.8",
+      "filename": "pycparser-2.23-py3-none-any.whl",
+      "license_expression": "BSD-3-Clause",
+      "license_files": [
+        "pycparser-2.23.dist-info/LICENSE"
+      ],
+      "metadata_license_lines": [
+        "License: BSD-3-Clause",
+        "Classifier: License :: OSI Approved :: BSD License",
+        "License-File: LICENSE"
+      ],
+      "name": "pycparser",
+      "sha256": "e5c6e8d3fbad53479cab09ac03729e0a9faf2bee3db8208a550daf5af81a5934",
+      "size": 118140,
+      "url": "https://files.pythonhosted.org/packages/a0/e3/59cd50310fc9b59512193629e1984c1f95e5c8ae6e5d8c69532ccc65a7fe/pycparser-2.23-py3-none-any.whl",
+      "verified_bytes": 118140,
+      "version": "2.23"
+    }
+  ],
+  "schema": "hmoe-postwarmup012-public-wheel-provenance-v1",
+  "source": "official public PyPI/files.pythonhosted.org",
+  "target": "te4 CPython3.12 Linux x86_64"
+}
