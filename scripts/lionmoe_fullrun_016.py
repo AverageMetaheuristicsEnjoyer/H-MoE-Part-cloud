@@ -366,7 +366,12 @@ def launch_segment(segment_tag, save_interval, exit_interval, timeout, verify_ma
     unique = f"hmoe-lionmoe-20261123-fullrun-016-v{VERSION}-{ARM}-{segment_tag}"
     env, removed = base_arm_env(unique)
     env["STAGE3_MOE_SAVE_INTERVAL"] = str(save_interval)
-    env["STAGE3_MOE_SAVE_RETAIN_INTERVAL"] = "1"
+    # MCore validate_args requires save_retain_interval % save_interval == 0 (arguments.py:1311),
+    # and deletes a previous save when prev_iteration % save_retain_interval != 0 (checkpointing.py:816).
+    # retain=1 (the original trick) FAILS the assert for save_interval>1. Setting retain=save_interval
+    # keeps EVERY save (each saved iteration is a multiple of save_interval == retain → never deleted)
+    # and passes validation; the runner rotates local copies only after a hash-verified HF successor.
+    env["STAGE3_MOE_SAVE_RETAIN_INTERVAL"] = str(save_interval)
     if exit_interval:
         env["STAGE3_MOE_EXIT_INTERVAL"] = str(exit_interval)
     else:
