@@ -477,6 +477,14 @@ def analyze_evaluation(wrapper_stdout, unique, capture_path, aggregate_from_reco
         raise RuntimeError(f"Eval launcher exits invalid: TRAIN_EXIT={train_exits} logs={len(train_logs)}")
     train_log = train_logs[0]
     log_text = Path(train_log).read_text(errors="replace")
+    # Strict-load gate (skeptic v030 review, major): MCore load_model_state_dict silently
+    # falls back to strict=False on any key mismatch and prints "load_return:"; the
+    # "successfully loaded checkpoint" line is printed in BOTH cases. Refuse the baseline
+    # number unless the load was strict (no fallback marker, success marker present).
+    if "load_return:" in log_text:
+        raise RuntimeError("MCore strict=False fallback detected (load_return: marker); baseline number refused")
+    if "successfully loaded checkpoint" not in log_text or "at iteration 17242" not in log_text:
+        raise RuntimeError("Missing strict checkpoint-load success marker at iteration 17242")
     aggregates = re.findall(r"validation loss at iteration 17242 on validation set \| lm loss value: ([0-9.eE+-]+)", log_text)
     if len(aggregates) != 1:
         raise RuntimeError(f"Expected exactly one full-development aggregate, got {len(aggregates)}")
