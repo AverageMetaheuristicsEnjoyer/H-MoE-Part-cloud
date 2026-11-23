@@ -18,6 +18,7 @@
   overnight013       checkpoint-free600-step development-validation stages; no test
   fullrun014         storage/telemetry/data admission audit; no training/checkpoint save
   screenb015         fresh audit + matched600-step development screen B (lm5r50 vs lmlinrevr50); no test/checkpoints
+  baselineeval030    HF fetch + eval-only full-development re-evaluation of the October lm5r50 endpoint; dev only
 """
 import datetime
 import json
@@ -239,6 +240,12 @@ def screenb015():
     # Hard payload cap is configurable; the leader sets ~16200s (2 arms x ~6500s + audit + reserve).
     cap = int(os.environ.get('HMOE_SCREENB_PAYLOAD_CAP_SECONDS', '16200'))
     return bounded_payload('lionmoe_screenb_015.py', 'HMOE_CONTRACT_ROOT', 'SCREENB015', cap)
+
+
+def baselineeval030():
+    # Short dev-only job: HF preflight + 2GB download + full-development evaluation; cap configurable.
+    cap = int(os.environ.get('HMOE_BASELINE_EVAL_CAP_SECONDS', '3600'))
+    return bounded_payload('lionmoe_baseline_eval_030.py', 'HMOE_CONTRACT_ROOT', 'BASELINE_EVAL_V030', cap)
 
 
 STEP_RE = re.compile(r"iteration\s+(\d+)/\s*\d+ \|.*?elapsed time per iteration \(ms\): ([0-9.]+).*?lm loss: ([0-9.eE+-]+).*?grad norm: ([0-9.eE+-]+)"
@@ -1091,6 +1098,8 @@ def main():
         return fullrun014()
     if mode == 'screenb015':
         return screenb015()
+    if mode == 'baselineeval030':
+        return baselineeval030()
     if mode == 'disk':
         # Free space on every persistent volume and what the series keeps there.
         subprocess.run(['df', '-h', '/home/jovyan', '/workspace-SR006.nfs2', '/workspace-SR006.nfs3', '/tmp'], check=False)

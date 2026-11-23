@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 3 MoE matched pretraining, WSD trunk-and-branch.
 #
-#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|lr-sweep|smoke|resume-gate|stability|lr-screen|routing-calibration|routing-calibration-2254|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|corrected-time-match|time-match-stretched-decay|schedule-tail|schedule-tail-smoke|eval-lm-fixed|eval-routing-fixed|eval-downstream
+#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|lr-sweep|smoke|resume-gate|stability|lr-screen|routing-calibration|routing-calibration-2254|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|corrected-time-match|time-match-stretched-decay|schedule-tail|schedule-tail-smoke|eval-lm-fixed|eval-full-dev|eval-routing-fixed|eval-downstream
 #
 # smoke exercises save and resume; bench measures throughput and peak memory with no
 # checkpoint traffic; resume-bench does the same from the trunk branch point, so the
@@ -521,6 +521,24 @@ case "$mode" in
                --override-opt_param-scheduler)
     probe_warmup=0
     probe_measure=1
+    ;;
+  eval-full-dev)
+    # baseline-eval-030 / fullrun-016 endpoint evaluation: the ENTIRE development partition,
+    # single epoch, dev-only (the test call is skipped by the no-test guard). The
+    # --full-validation sampler yields one sample per batch, so eval batch sizes are 1/1.
+    # No --skip-train: it returns optimizer=None and the result writer needs a real object
+    # (see eval-downstream). train_iters equals the endpoint iteration, so zero updates run;
+    # --no-load-optim/--no-load-rng make this an eval-only, non-resumable model load.
+    train_iters=$full_iters
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    eval_load=${STAGE3_MOE_EVAL_LOAD:?set STAGE3_MOE_EVAL_LOAD to the checkpoint directory}
+    save_args=()
+    load_args=(--load "$eval_load" --no-load-optim --no-load-rng
+               --override-opt_param-scheduler)
+    probe_warmup=0
+    probe_measure=1
+    eval_args=(--full-validation --eval-micro-batch-size 1 --eval-global-batch-size 1)
     ;;
   eval-routing-fixed)
     train_iters=1

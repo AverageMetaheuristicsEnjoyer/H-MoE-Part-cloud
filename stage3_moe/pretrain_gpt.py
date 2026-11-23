@@ -395,6 +395,13 @@ def main():
         from stage3_moe.routing_audit import install as install_routing_audit
 
         install_routing_audit(stage3_args.stage3_routing_audit_path)
+    if os.environ.get("STAGE3_MOE_FULL_DEV_EVAL") == "1":
+        # Eval-only full-development re-evaluation (baseline-eval-030): mark the record as an
+        # evaluation record and passively capture the evaluator's exact token denominator and
+        # per-iteration losses, which the stock print path does not expose. No math change.
+        probe.protocol_kind = "evaluation"
+        from stage3_moe.full_dev_capture import install as install_full_dev_capture
+        install_full_dev_capture(os.environ["STAGE3_MOE_FULL_DEV_CAPTURE_PATH"])
     if stage3_args.stage3_eval_downstream:
         install_downstream_eval(
             probe,
