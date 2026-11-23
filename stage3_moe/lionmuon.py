@@ -100,6 +100,20 @@ from emerging_optimizers import utils
 from emerging_optimizers.orthogonalized_optimizers.muon import get_muon_scale_factor
 
 
+def _telemetry_rank0():
+    """True on the rank that owns the shared train log (rank 0).
+
+    Data-parallel runs would otherwise print every LIONMUON_STEP line once per rank and the
+    realized-schedule checker (lionmoe_fullrun_016.check_realized_schedule) rejects duplicates.
+    """
+    try:
+        if not (torch.distributed.is_available() and torch.distributed.is_initialized()):
+            return True
+        return torch.distributed.get_rank() == 0
+    except Exception:
+        return True
+
+
 def _env_float(name, default):
     return float(os.environ.get(name, default))
 
@@ -269,7 +283,7 @@ class LionMuonMixin:
         loss = closure() if closure is not None else None
         default_muon, t, value, power = self._lionmuon_choice()
         self._lionmuon_muon = getattr(self, "_lionmuon_muon", 0) + int(default_muon)
-        if self.lion_step_telemetry:
+        if self.lion_step_telemetry and _telemetry_rank0():
             print(f"LIONMUON_STEP t={t} muon={int(default_muon)} muon_steps={self._lionmuon_muon} "
                   f"optimizer_steps={self._lionmuon_steps} rule={'prob' if self.lion_prob is not None else 'period'} "
                   f"value={value:.6g} power={power:.4g}", flush=True)
