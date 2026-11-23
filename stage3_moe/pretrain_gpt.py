@@ -402,6 +402,12 @@ def main():
         probe.protocol_kind = "evaluation"
         from stage3_moe.full_dev_capture import install as install_full_dev_capture
         install_full_dev_capture(os.environ["STAGE3_MOE_FULL_DEV_CAPTURE_PATH"])
+    if (os.environ.get("STAGE3_MOE_FULLRUN_STATE_DUMP") == "1"
+            or os.environ.get("STAGE3_MOE_FULLRUN_VERIFY_MANIFEST")
+            or os.environ.get("STAGE3_MOE_FULLRUN_LOADED_MANIFEST_PATH")):
+        # fullrun-016 full-state save/load verification (passive tensor hashing; no math change).
+        from stage3_moe.fullrun_state_verify import install as install_fullrun_state_verify
+        install_fullrun_state_verify()
     if stage3_args.stage3_eval_downstream:
         install_downstream_eval(
             probe,

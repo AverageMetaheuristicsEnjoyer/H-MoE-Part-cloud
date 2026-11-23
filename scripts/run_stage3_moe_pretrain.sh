@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 3 MoE matched pretraining, WSD trunk-and-branch.
 #
-#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|lr-sweep|smoke|resume-gate|stability|lr-screen|routing-calibration|routing-calibration-2254|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|corrected-time-match|time-match-stretched-decay|schedule-tail|schedule-tail-smoke|eval-lm-fixed|eval-full-dev|eval-routing-fixed|eval-downstream
+#   run_stage3_moe_pretrain.sh ARM trunk|decay-1p2b|lr-sweep|smoke|resume-gate|stability|lr-screen|routing-calibration|routing-calibration-2254|bench|resume-bench|resume-replay|time-match|time-match-smoke|extension-decay-control|original-data-plateau-control|corrected-time-match|time-match-stretched-decay|schedule-tail|schedule-tail-smoke|full-lean|eval-lm-fixed|eval-full-dev|eval-routing-fixed|eval-downstream
 #
 # smoke exercises save and resume; bench measures throughput and peak memory with no
 # checkpoint traffic; resume-bench does the same from the trunk branch point, so the
@@ -144,6 +144,22 @@ case "$mode" in
     # dropped as soon as its successor is on disk and the tracker points at it.
     save_args=(--save "$full_dir" --save-interval 363 --save-retain-interval 13794)
     load_args=(--load "$full_dir" --override-opt_param-scheduler)
+    ;;
+  full-lean)
+    # fullrun-016 lean-retention full run: IDENTICAL schedule/data horizon to 'full' (train_iters is
+    # never shortened; segment stops use --exit-interval exit control). Save/retain intervals are
+    # runner-controlled. --save-retain-interval 1 makes every iteration % retain == 0, disabling
+    # MCore's automatic previous-save deletion so the runner rotates local copies ONLY after a
+    # hash-verified durable HF successor. Full optimizer/scheduler/RNG load (no --no-load-optim).
+    train_iters=$full_iters
+    target_iters=$full_iters
+    decay_iters=$full_decay_iters
+    mkdir -p "$full_dir"
+    save_args=(--save "$full_dir" --save-interval "${STAGE3_MOE_SAVE_INTERVAL:-726}" --save-retain-interval "${STAGE3_MOE_SAVE_RETAIN_INTERVAL:-1}")
+    load_args=(--load "$full_dir" --override-opt_param-scheduler)
+    if [[ -n ${STAGE3_MOE_EXIT_INTERVAL:-} ]]; then
+      exit_args=(--exit-interval "$STAGE3_MOE_EXIT_INTERVAL")
+    fi
     ;;
   trunk)
     # Stable phase only: stop at the branch point, never reaching decay.
