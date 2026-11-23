@@ -68,7 +68,11 @@ def preflight(api, repo):
 
 
 def remote_entries(api, repo, prefix):
-    return {entry.path: entry for entry in api.list_repo_tree(repo, path_in_repo=prefix, expand=True)}
+    # recursive=True: checkpoint files live in nested subdirs (e.g. iter_XXXXXXX/mp_rank_00/
+    # model_optim_rng.pt); a non-recursive listing only shows immediate children and would
+    # miss the nested weights file, falsely reporting "HF missing uploaded file" after a
+    # successful upload (gate-save attempt3). expand=True carries LFS sha256/size for verify.
+    return {entry.path: entry for entry in api.list_repo_tree(repo, path_in_repo=prefix, recursive=True, expand=True)}
 
 
 def build_manifest(local_dir, iteration, arm, kind):
