@@ -6,7 +6,7 @@ export PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-opti
 if [ "${1:-}" = probe ]; then
   D=${HMOE_PROBE_DIR:?probe dir}
   echo "== ls $D"; ls -la "$D" 2>&1 | head -30
-  for f in eval-wrapper.stderr.log eval-wrapper.stdout.log progress.json result.json; do
+  for f in partial-error.json eval-wrapper.stderr.log eval-wrapper.stdout.log progress.json result.json; do
     echo "== $f"; tail -40 "$D/$f" 2>&1
   done
   exit 0
