@@ -333,11 +333,20 @@ def inspect_and_stage(local):
         raise RuntimeError(f"Checkpoint iteration {state.get('iteration')} != {ENDPOINT_ITERATION}")
     model_sd = state["model"]
     tensor_numel = sum(value.numel() for value in model_sd.values() if torch.is_tensor(value))
+    # FP8-GEMM / fused-expert exports carry legitimate non-parameter tensors (TE _extra_state,
+    # expert_bias, FP8 weight copies / scales / amax history). Gate the PARAMETER numel only;
+    # strict-load key/shape identity and the live param-count check remain the real guards.
+    def _is_buffer(key):
+        return (key.endswith("_extra_state") or key.endswith("expert_bias")
+                or "fp8" in key or "amax" in key or "scale" in key)
+    buffer_numel = sum(v.numel() for k, v in model_sd.items() if torch.is_tensor(v) and _is_buffer(k))
+    param_numel = tensor_numel - buffer_numel
     nontensor_keys = [key for key, value in model_sd.items() if not torch.is_tensor(value)]
     ckpt_args = state.get("args")
     inspection = {"top_level_keys": keys, "checkpoint_version": state.get("checkpoint_version"),
                   "iteration": state.get("iteration"),
-                  "model_tensor_numel": tensor_numel, "model_nontensor_keys": nontensor_keys,
+                  "model_tensor_numel": tensor_numel, "model_buffer_numel": buffer_numel,
+                  "model_param_numel": param_numel, "model_nontensor_keys": nontensor_keys,
                   "model_state_entries": len(model_sd),
                   "optimizer_state_present": False,
                   "opt_param_scheduler_present": "opt_param_scheduler" in state,
@@ -345,8 +354,8 @@ def inspect_and_stage(local):
                   "rerun_state_machine_present": "rerun_state_machine" in state,
                   "consumed_train_samples_from_args": getattr(ckpt_args, "consumed_train_samples", None),
                   "format": "MCore torch checkpoint minus optimizer (October final-model export); eval-only, NOT resumable"}
-    if tensor_numel != 1_028_926_976:
-        raise RuntimeError(f"Model tensor numel {tensor_numel} != 1028926976")
+    if param_numel != 1_028_926_976:
+        raise RuntimeError(f"Model parameter numel {param_numel} != 1028926976 (total {tensor_numel}, buffer {buffer_numel})")
     del state, model_sd
     gc.collect()
     eval_load = TMP / "eval-load"
