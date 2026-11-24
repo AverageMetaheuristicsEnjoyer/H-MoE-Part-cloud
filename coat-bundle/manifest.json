@@ -1,6 +1,6 @@
 {
-  "bundle_id": "hmoe-lionmoe-20261123-v081",
-  "payload_sha256": "f0e62f8c4cca885213304070e69dbd8f3cd81db212d43e29c1eaa13841acaa89",
+  "bundle_id": "hmoe-lionmoe-20261123-v090",
+  "payload_sha256": "869c9dbbe86b03eef65e9934c09fd46abb8ef5065b3d3f17a778615ac9284ae9",
   "ready": [
     "test"
   ]
