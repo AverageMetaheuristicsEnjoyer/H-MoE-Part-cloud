@@ -54,9 +54,11 @@ EXPECTED_BUNDLE = f"hmoe-lionmoe-20261123-v{VERSION}"
 SEED = 1234
 ENDPOINT_ITERATION = 17242
 HF_REPO = "AverageMetaheuristicsEnjoyer/hmoe-stage3-checkpoints"
-HF_FILE = "stage4/muon-ctrl-lm5r50-iter0017242-model.pt"
-EXPECTED_BYTES = 2_058_827_231
-EXPECTED_SHA256 = "a90d286c10aac5ce91769f789b6c48c6a9f1d284356ddb4fd340844714fa6ab0"
+# Reviewer MoE CI: allow re-evaluating any archived endpoint (default = October plain R50, unchanged).
+HF_FILE = os.environ.get("HMOE_BASELINE_EVAL_HF_FILE", "stage4/muon-ctrl-lm5r50-iter0017242-model.pt")
+EXPECTED_BYTES = int(os.environ.get("HMOE_BASELINE_EVAL_BYTES", "2058827231"))
+EXPECTED_SHA256 = os.environ.get("HMOE_BASELINE_EVAL_SHA256", "a90d286c10aac5ce91769f789b6c48c6a9f1d284356ddb4fd340844714fa6ab0")
+EVAL_LABEL = os.environ.get("HMOE_BASELINE_EVAL_LABEL", "October from-scratch plain R50 control (muon-ctrl-lm5r50, 17242, with legitimate own-checkpoint restarts); endpoint re-evaluated under the current full-development protocol")
 CORPUS_MANIFEST_SHA = "7a7cf91633081dd080f3cff96407bd61d4c237d88a5e926cffe36fc5b8cbfcc8"
 CAP_SECONDS = int(os.environ.get("HMOE_BASELINE_EVAL_CAP_SECONDS", "3600"))
 SEAL_RESERVE_SECONDS = 180
@@ -616,7 +618,7 @@ def main_checked():
     record = evaluation["record"]
     result = {"schema": "hmoe-lionmoe-baseline-eval-030-result-v1", "job_note": os.environ["HMOE_JOB_NOTE"],
               "version": VERSION, "seed": SEED,
-              "protocol_label": "October from-scratch plain R50 control (muon-ctrl-lm5r50, 17242, with legitimate own-checkpoint restarts); endpoint re-evaluated under the current full-development protocol",
+              "protocol_label": EVAL_LABEL,
               "endpoint": {"repo": HF_REPO, "file": HF_FILE, "iteration": ENDPOINT_ITERATION,
                            "bytes": EXPECTED_BYTES, "sha256": EXPECTED_SHA256,
                            "download_receipt": download_receipt, "inspection": inspection},
