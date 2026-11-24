@@ -27,6 +27,18 @@ import numpy as np
 import torch
 
 
+def _rank0():
+    """The persistent save-dump is a single shared file: with data parallelism every rank
+    would write the same state-manifest.tmp and all but one os.replace would fail (observed
+    2026-11-24, dp2 arm lmlinrevr50 at iter 2178). Only rank 0 dumps it."""
+    try:
+        if not (torch.distributed.is_available() and torch.distributed.is_initialized()):
+            return True
+        return torch.distributed.get_rank() == 0
+    except Exception:
+        return True
+
+
 def _tensor_record(name, tensor):
     detached = tensor.detach().cpu().contiguous().reshape(-1).view(torch.uint8).numpy().tobytes()
     return {"name": name, "shape": list(tensor.shape), "dtype": str(tensor.dtype),
@@ -153,7 +165,7 @@ def install():
     dump_dir = os.environ.get("STAGE3_MOE_FULLRUN_DUMP_DIR")
     loaded_path = os.environ.get("STAGE3_MOE_FULLRUN_LOADED_MANIFEST_PATH")
 
-    if dump_enabled and dump_dir:
+    if dump_enabled and dump_dir and _rank0():
         original_save = training.save_checkpoint_and_time
 
         def saving_with_dump(iteration, model, optimizer, scheduler, *args, **kwargs):
