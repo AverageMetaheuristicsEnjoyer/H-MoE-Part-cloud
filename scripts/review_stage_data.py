@@ -1,18 +1,15 @@
-"""Stage the pinned FineWeb-Edu GPT-2 Megatron corpus for reviewer runs (public HF dataset)."""
+"""Stage the pinned corpus into the SHARED path the CI-eval runner reads (/home/jovyan/data).
+
+Idempotent like cloud_fetch_data.sh; the runner additionally gates exact sizes + full manifest sha.
+No pip fallback: huggingface_hub ships in the job image; absence is a fail-closed DATA_FAIL.
+"""
 import hashlib
-import subprocess
-import sys
 from pathlib import Path
 
-try:
-    from huggingface_hub import snapshot_download
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "huggingface_hub"])
-    from huggingface_hub import snapshot_download
+from huggingface_hub import snapshot_download
 
 REVISION = "a2b8660e317ea2449c6ef57d9710a6e66c914751"
-root = Path(__file__).resolve().parents[1]
-dest = root / "data" / "fineweb-edu-gpt2-megatron"
+dest = Path("/home/jovyan/data/fineweb-edu-gpt2-megatron")
 if not (dest / "data" / "train.idx").exists():
     snapshot_download(repo_id="AverageMetaheuristicsEnjoyer/fineweb-edu-gpt2-megatron",
                       repo_type="dataset", revision=REVISION, local_dir=str(dest))
