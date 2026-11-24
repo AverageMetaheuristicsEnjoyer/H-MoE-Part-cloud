@@ -3,4 +3,5 @@
 set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
 export PYTHONPATH="$root/third_party/Megatron-LM:$root/third_party/emerging-optimizers:$root/third_party/coat:$root"
+python "$root/scripts/review_stage_data.py" >/dev/null || { echo "DATA_FAIL"; exit 1; }
 exec python scripts/lionmoe_baseline_eval_030.py "$@"
