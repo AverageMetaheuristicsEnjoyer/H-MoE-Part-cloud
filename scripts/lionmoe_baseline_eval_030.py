@@ -58,7 +58,10 @@ HF_REPO = "AverageMetaheuristicsEnjoyer/hmoe-stage3-checkpoints"
 HF_FILE = os.environ.get("HMOE_BASELINE_EVAL_HF_FILE", "stage4/muon-ctrl-lm5r50-iter0017242-model.pt")
 EXPECTED_BYTES = int(os.environ.get("HMOE_BASELINE_EVAL_BYTES", "2058827231"))
 EXPECTED_SHA256 = os.environ.get("HMOE_BASELINE_EVAL_SHA256", "a90d286c10aac5ce91769f789b6c48c6a9f1d284356ddb4fd340844714fa6ab0")
-EVAL_LABEL = os.environ.get("HMOE_BASELINE_EVAL_LABEL", "October from-scratch plain R50 control (muon-ctrl-lm5r50, 17242, with legitimate own-checkpoint restarts); endpoint re-evaluated under the current full-development protocol")
+_DEFAULT_LABEL = ("October from-scratch plain R50 control (muon-ctrl-lm5r50, 17242, with legitimate own-checkpoint restarts); endpoint re-evaluated under the current full-development protocol"
+                  if HF_FILE == "stage4/muon-ctrl-lm5r50-iter0017242-model.pt"
+                  else f"Archived endpoint {HF_FILE} (iteration {ENDPOINT_ITERATION}) re-evaluated under the current full-development protocol")
+EVAL_LABEL = os.environ.get("HMOE_BASELINE_EVAL_LABEL", _DEFAULT_LABEL)
 CORPUS_MANIFEST_SHA = "7a7cf91633081dd080f3cff96407bd61d4c237d88a5e926cffe36fc5b8cbfcc8"
 CAP_SECONDS = int(os.environ.get("HMOE_BASELINE_EVAL_CAP_SECONDS", "3600"))
 SEAL_RESERVE_SECONDS = 180
@@ -276,12 +279,13 @@ def hf_preflight():
     api = HfApi(token=token)
     try:
         info = api.model_info(HF_REPO)
-        entries = {entry.path: entry for entry in api.list_repo_tree(HF_REPO, path_in_repo="stage4", expand=True)}
+        prefix = HF_FILE.rsplit("/", 1)[0] if "/" in HF_FILE else ""
+        entries = {entry.path: entry for entry in api.list_repo_tree(HF_REPO, path_in_repo=prefix, expand=True)}
     except Exception as error:
         raise BaselineBlocker(f"HF unreachable/unauthorized from Cloud: {type(error).__name__}: {redact(str(error))}")
     entry = entries.get(HF_FILE)
     if entry is None:
-        raise BaselineBlocker(f"HF repo reachable but {HF_FILE} absent from stage4/ listing")
+        raise BaselineBlocker(f"HF repo reachable but {HF_FILE} absent from {prefix or 'repo root'} listing")
     lfs = getattr(entry, "lfs", None)
     server_sha = getattr(lfs, "sha256", None) if lfs is not None else None
     server_size = getattr(entry, "size", None)
