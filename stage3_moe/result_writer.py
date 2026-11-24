@@ -575,15 +575,23 @@ def _optimizer_calibration():
 
 def _provenance(argv):
     root = Path(__file__).resolve().parents[1]
-    commit = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=root, text=True
-    ).strip()
-    status = subprocess.check_output(
-        ["git", "status", "--porcelain"], cwd=root, text=True
-    )
-    tracked_diff = subprocess.check_output(
-        ["git", "diff", "--binary", "HEAD"], cwd=root
-    )
+    # Carrier jobs run from an extracted tar (no .git); bootstrap already pins EXPECTED_SOURCE_COMMIT
+    # and per-file sha256, so git provenance here is redundant. Record an explicit marker instead of
+    # crashing before results.jsonl is written.
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+        status = subprocess.check_output(
+            ["git", "status", "--porcelain"], cwd=root, text=True
+        )
+        tracked_diff = subprocess.check_output(
+            ["git", "diff", "--binary", "HEAD"], cwd=root
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        commit = "extracted-source-no-git"
+        status = ""
+        tracked_diff = b""
     diff = tracked_diff + b"\0STATUS\0" + status.encode()
     if "--mock-data" in argv:
         data_manifest_sha256 = hashlib.sha256("mcore-mock-data".encode()).hexdigest()
