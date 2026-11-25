@@ -631,7 +631,9 @@ def eval_endpoint(weights_base, tag):
     eval_load = TMP / f"eval-load-{tag}"
     target = eval_load / f"iter_{FULL_ITERS:07d}" / "mp_rank_00" / "model_optim_rng.pt"
     target.parent.mkdir(parents=True, exist_ok=True)
-    src = weights_base / f"iter_{FULL_ITERS:07d}" / "mp_rank_00" / "model_optim_rng.pt"
+    # weights_base already is .../final-weights/iter_17242; the previous extra iter level
+    # produced .../iter_17242/iter_17242/... and broke the endpoint eval (2026-11-25).
+    src = weights_base / "mp_rank_00" / "model_optim_rng.pt"
     if target.exists():
         target.unlink()
     os.link(src, target)
