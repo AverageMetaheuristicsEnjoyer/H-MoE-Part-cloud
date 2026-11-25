@@ -217,10 +217,12 @@ def lionmuon_block_draw(seed, t, block, probability):
     return random.Random(f"lionmuon-{seed}-{t}-block-{block}").random() < probability
 
 
-def lionmuon_block_telemetry(block, t, muon, probability, factor, num_layers):
+def lionmuon_block_telemetry(block, t, muon, probability, factor, num_layers,
+                             muon_steps, optimizer_steps, power=0.0):
     layers = lionmuon_block_layers_label(block, num_layers)
-    return (f"LIONMUON_STEP_BLOCK b={block} t={t} muon={int(muon)} p={probability:.6g} "
-            f"rule=prob factor={factor:.6g} layers={layers}")
+    return (f"LIONMUON_STEP_BLOCK b={block} t={t} muon={int(muon)} muon_steps={muon_steps} "
+            f"optimizer_steps={optimizer_steps} p={probability:.6g} rule=prob factor={factor:.6g} "
+            f"layers={layers} power={power:.4g}")
 
 
 def megatron_iteration():
@@ -370,6 +372,11 @@ class LionMuonMixin:
             self._lionmuon_muon = getattr(self, "_lionmuon_muon", 0) + int(default_muon)
         else:
             self._lionmuon_muon = getattr(self, "_lionmuon_muon", 0) + sum(choice[0] for choice in block_choices)
+            block_muon_steps = getattr(self, "_lionmuon_block_muon", None)
+            if block_muon_steps is None:
+                block_muon_steps = self._lionmuon_block_muon = [0] * len(block_choices)
+            for block, choice in enumerate(block_choices):
+                block_muon_steps[block] += int(choice[0])
         if self.lion_step_telemetry and _telemetry_rank0():
             if block_choices is None:
                 print(f"LIONMUON_STEP t={t} muon={int(default_muon)} muon_steps={self._lionmuon_muon} "
@@ -377,7 +384,8 @@ class LionMuonMixin:
                       f"value={value:.6g} power={power:.4g}", flush=True)
             else:
                 for block, (is_muon, block_p, factor) in enumerate(block_choices):
-                    print(lionmuon_block_telemetry(block, t, is_muon, block_p, factor, self.lion_num_layers), flush=True)
+                    print(lionmuon_block_telemetry(block, t, is_muon, block_p, factor, self.lion_num_layers,
+                                                   block_muon_steps[block], self._lionmuon_steps, power), flush=True)
         if self.lion_energycal_diagnostics:
             self._lion_energycal_last = []
         measurement_observer = getattr(self, "_lionmuon_measurement_observer", None)
@@ -408,15 +416,19 @@ class LionMuonMixin:
                 self._lion_observe(p, split_fc1)
                 update = momentum * self.lion_beta1 + grad * (1 - self.lion_beta1)
                 if is_muon_step and power > 0:
+                    self._lionmuon_spectral_updates = getattr(self, "_lionmuon_spectral_updates", 0) + 1
                     update = self._power_orthogonalize(p, update, power, group_kwargs)
                 elif is_muon_step:
+                    self._lionmuon_spectral_updates = getattr(self, "_lionmuon_spectral_updates", 0) + 1
                     update = self._lion_spectral(p, update, split_fc1)
                     with utils.fp32_matmul_precision(self.fp32_matmul_prec):
                         update = self.orthogonalize(p, update, **group_kwargs)
                 elif power > 0:
+                    self._lionmuon_lion_updates = getattr(self, "_lionmuon_lion_updates", 0) + 1
                     update = update.sign() * update.abs().pow(power)
                     update.mul_(math.sqrt(update.numel()) / update.norm().clamp_min(1e-30))
                 else:
+                    self._lionmuon_lion_updates = getattr(self, "_lionmuon_lion_updates", 0) + 1
                     update = update.sign_()
                 if measure and is_muon_step:
                     measurement_observer.before_calibration(self, p, update, group_kwargs, t)

@@ -36,6 +36,7 @@ import json
 import math
 import os
 from pathlib import Path
+import random
 import re
 import shutil
 import signal
@@ -339,55 +340,110 @@ def parse_train_log(path):
             "skipped_test_markers": len(re.findall(r"STAGE3_TEST_EVALUATION_SKIPPED", text))}
 
 
-def _check_lm3block_schedule(log_text):
+def _oracle_prob(t):
+    """Independent fullrun oracle; deliberately does not import production schedule code."""
+    return 0.35 - 0.30 * t / FULL_ITERS
+
+
+def _oracle_block_prob(t, block):
+    factor = (1.5, 0.75, 0.75)[block]
+    return min(1.0, max(0.0, factor * _oracle_prob(t)))
+
+
+def _oracle_draw(t, probability, block=None):
+    suffix = "" if block is None else f"-block-{block}"
+    return int(random.Random(f"lionmuon-{SEED}-{t}{suffix}").random() < probability)
+
+
+def _oracle_block_layers(block):
+    start = (block * MODEL_LAYERS + 2) // 3
+    end = ((block + 1) * MODEL_LAYERS + 2) // 3
+    return f"{start}-{end - 1}" if start < end else "empty"
+
+
+# Filled with fixed CPU-oracle values, including gate/resume boundaries. These constants are
+# intentionally independent of stage3_moe.lionmuon so a shared implementation drift cannot pass.
+_SCHEDULE_GOLDENS = {}
+
+
+def _validate_schedule_goldens(arm):
+    for t, golden in _SCHEDULE_GOLDENS.items():
+        probability = _oracle_prob(t)
+        if not math.isclose(probability, golden["p"], rel_tol=0.0, abs_tol=1e-15):
+            raise RuntimeError(f"Independent probability oracle differs from golden at t={t}")
+        if arm == "lmlinrevr50" and _oracle_draw(t, probability) != golden["global_muon"]:
+            raise RuntimeError(f"Independent global draw oracle differs from golden at t={t}")
+        if arm == "lm3block":
+            for block, (expected_p, expected_muon) in enumerate(golden["blocks"]):
+                block_p = _oracle_block_prob(t, block)
+                if not math.isclose(block_p, expected_p, rel_tol=0.0, abs_tol=1e-15):
+                    raise RuntimeError(f"Independent block probability oracle differs from golden at t={t} b={block}")
+                if _oracle_draw(t, block_p, block) != expected_muon:
+                    raise RuntimeError(f"Independent block draw oracle differs from golden at t={t} b={block}")
+
+
+def _expected_range(start, end):
+    if type(start) is not int or type(end) is not int or not 1 <= start <= end <= FULL_ITERS:
+        raise RuntimeError(f"Invalid expected global optimizer-step range: {start}..{end}")
+    return end - start + 1
+
+
+def _check_lm3block_schedule(log_text, start, end):
     """Validate three independent block decisions per global step and their depth assignment."""
-    rows = re.findall(r"^LIONMUON_STEP_BLOCK b=(\d+) t=(\d+) muon=(\d+) p=([0-9.eE+-]+) "
-                      r"rule=(\w+) factor=([0-9.eE+-]+) layers=(empty|\d+-\d+)$", log_text, re.MULTILINE)
+    expected_count = _expected_range(start, end)
+    rows = re.findall(r"^LIONMUON_STEP_BLOCK b=(\d+) t=(\d+) muon=(\d+) muon_steps=(\d+) "
+                      r"optimizer_steps=(\d+) p=([0-9.eE+-]+) rule=(\w+) factor=([0-9.eE+-]+) "
+                      r"layers=(empty|\d+-\d+) power=([0-9.eE+-]+)$", log_text, re.MULTILINE)
     if not rows:
         raise RuntimeError("No LIONMUON_STEP_BLOCK telemetry lines; realized lm3block schedule unverifiable")
-    sys.path.insert(0, str(ROOT))
-    sys.path.insert(0, str(ROOT / "third_party" / "emerging-optimizers"))
-    from stage3_moe.lionmuon import (
-        LIONMUON_BLOCK_FACTORS,
-        lionmuon_block_draw,
-        lionmuon_block_layers_label,
-        lionmuon_block_probability,
-        parse_schedule,
-        piecewise_linear,
-    )
-    points = parse_schedule("0:0.35,1:0.05", float)
-    blocks_by_step = {}
-    muon_total = 0
-    for block_s, t_s, muon_s, p_s, rule, factor_s, layers in rows:
+    by_block = {0: [], 1: [], 2: []}
+    seen = set()
+    for (block_s, t_s, muon_s, msteps_s, osteps_s, p_s, rule, factor_s,
+         layers, power_s) in rows:
         block, t, muon = int(block_s), int(t_s), int(muon_s)
-        if not 1 <= t <= FULL_ITERS or block not in range(3):
+        if block not in by_block or not 1 <= t <= FULL_ITERS:
             raise RuntimeError(f"Invalid lm3block telemetry coordinates b={block} t={t}")
-        if t in blocks_by_step and block in blocks_by_step[t]:
+        if (t, block) in seen:
             raise RuntimeError(f"Duplicate lm3block schedule telemetry at t={t} b={block}")
-        blocks_by_step.setdefault(t, set()).add(block)
-        factor = LIONMUON_BLOCK_FACTORS[block]
-        base_p = piecewise_linear(points, t / FULL_ITERS)
-        expected_p = lionmuon_block_probability(base_p, factor)
-        expected_muon = int(lionmuon_block_draw(SEED, t, block, expected_p))
-        expected_layers = lionmuon_block_layers_label(block, MODEL_LAYERS)
+        seen.add((t, block))
+        factor = (1.5, 0.75, 0.75)[block]
+        expected_p = _oracle_block_prob(t, block)
+        expected_muon = _oracle_draw(t, expected_p, block)
         if rule != "prob" or float(factor_s) != factor:
             raise RuntimeError(f"lm3block wrong rule/block factor at t={t} b={block}")
         if not math.isclose(float(p_s), expected_p, rel_tol=1e-5, abs_tol=1e-8):
             raise RuntimeError(f"lm3block probability deviates at t={t} b={block}: {p_s} != {expected_p}")
         if muon != expected_muon:
             raise RuntimeError(f"lm3block deterministic draw deviates at t={t} b={block}")
-        if layers != expected_layers:
-            raise RuntimeError(f"lm3block layer split deviates at b={block}: {layers} != {expected_layers}")
-        muon_total += muon
-    steps = sorted(blocks_by_step)
-    if steps != list(range(steps[0], steps[-1] + 1)):
-        raise RuntimeError("lm3block telemetry t-coverage incomplete")
-    if any(blocks_by_step[t] != {0, 1, 2} for t in steps) or len(rows) != 3 * len(steps):
-        raise RuntimeError("lm3block requires exactly one line for every block at every t")
+        if layers != _oracle_block_layers(block):
+            raise RuntimeError(f"lm3block layer split deviates at b={block}: {layers} != {_oracle_block_layers(block)}")
+        if float(power_s) != 0.0:
+            raise RuntimeError(f"lm3block nonzero POWER at t={t} b={block}")
+        by_block[block].append((t, muon, int(msteps_s), int(osteps_s)))
+    expected_seen = {(t, block) for t in range(start, end + 1) for block in range(3)}
+    if seen != expected_seen or len(rows) != 3 * expected_count:
+        raise RuntimeError(f"lm3block telemetry must cover exactly t={start}..{end}, three blocks per step")
+
+    muon_total = 0
+    for block, block_rows in by_block.items():
+        if len(block_rows) != expected_count:
+            raise RuntimeError(f"lm3block b={block} row count != expected {expected_count}")
+        previous_msteps = 0
+        block_muon_total = 0
+        for index, (t, muon, msteps, osteps) in enumerate(block_rows, 1):
+            if osteps != index or t != start + osteps - 1:
+                raise RuntimeError(f"lm3block b={block} optimizer_steps/global-t mismatch at row {index}")
+            if msteps - previous_msteps != muon:
+                raise RuntimeError(f"lm3block b={block} muon_steps increment mismatch at t={t}")
+            previous_msteps = msteps
+            block_muon_total += muon
+        if previous_msteps != block_muon_total:
+            raise RuntimeError(f"lm3block b={block} final muon_steps != sum(muon)")
+        muon_total += block_muon_total
 
     realized_rate = muon_total / len(rows)
-    full_coverage = steps[0] == 1 and steps[-1] == FULL_ITERS and len(steps) == FULL_ITERS
-    expected_segment_rate = sum(piecewise_linear(points, t / FULL_ITERS) for t in steps) / len(steps)
+    full_coverage = start == 1 and end == FULL_ITERS
+    expected_segment_rate = sum(_oracle_prob(t) for t in range(start, end + 1)) / expected_count
     if full_coverage:
         rate_target = LM3BLOCK_RATE_TARGET
         rate_tolerance = LM3BLOCK_RATE_TOLERANCE
@@ -400,67 +456,68 @@ def _check_lm3block_schedule(log_text):
     if abs(realized_rate - rate_target) > rate_tolerance:
         raise RuntimeError(f"lm3block realized overall Muon rate {realized_rate:.6f} outside "
                            f"target {rate_target:.6f} +/- {rate_tolerance:.6f}")
-    return {"telemetry_steps": len(steps), "telemetry_lines": len(rows), "t_range": [steps[0], steps[-1]],
+    return {"telemetry_steps": expected_count, "telemetry_lines": len(rows), "t_range": [start, end],
             "realized_muon_block_decisions": muon_total, "realized_overall_muon_rate": realized_rate,
             "rate_target": rate_target, "rate_tolerance": rate_tolerance,
             "full_schedule_rate_gate": full_coverage, "declared_full_rate_target": LM3BLOCK_RATE_TARGET,
             "declared_full_rate_tolerance": LM3BLOCK_RATE_TOLERANCE,
-            "block_layers": [lionmuon_block_layers_label(block, MODEL_LAYERS) for block in range(3)],
+            "block_layers": [_oracle_block_layers(block) for block in range(3)],
             "rule": "prob_0.35_to_0.05_blocks_1.5_0.75_0.75", "per_step_cross_check": "passed"}
 
 
-def check_realized_schedule(log_text, arm):
-    """Per-step gate: the realized optimizer schedule must match the declared arm semantics.
-
-    Catches wrong-schedule runs that would otherwise pass every other gate silently
-    (skeptic v031 blocker B1). Uses the production schedule/draw functions; t is the global
-    iteration (continues across resume segments), optimizer_steps/muon_steps are per-process
-    counters (restart at 0 on resume), so coverage is checked as a contiguous t-range.
-    """
+def check_realized_schedule(log_text, arm, start, end):
+    """Independent per-step gate over an externally declared global optimizer-step range."""
+    expected_count = _expected_range(start, end)
     if arm == "lm3block":
-        return _check_lm3block_schedule(log_text)
-    import random
+        _validate_schedule_goldens(arm)
+        return _check_lm3block_schedule(log_text, start, end)
+    if arm not in ("lm5r50ec", "lmlinrevr50"):
+        raise RuntimeError(f"Unknown arm for schedule gate: {arm}")
+    _validate_schedule_goldens(arm)
     rows = re.findall(r"^LIONMUON_STEP t=(\d+) muon=(\d+) muon_steps=(\d+) optimizer_steps=(\d+) "
                       r"rule=(\w+) value=([0-9.eE+-]+) power=([0-9.eE+-]+)$", log_text, re.MULTILINE)
     if not rows:
         raise RuntimeError("No LIONMUON_STEP telemetry lines; realized schedule unverifiable")
-    sys.path.insert(0, str(ROOT))
-    sys.path.insert(0, str(ROOT / "third_party" / "emerging-optimizers"))
-    from stage3_moe.lionmuon import parse_schedule, piecewise_linear
-    points = parse_schedule("0:0.35,1:0.05", float)
+    if len(rows) != expected_count:
+        raise RuntimeError(f"Schedule telemetry row count {len(rows)} != expected {expected_count}")
     seen = set()
-    local_steps = []
-    muon_total = 0
-    for t_s, muon_s, msteps_s, osteps_s, rule, value_s, _power_s in rows:
-        t = int(t_s)
-        muon = int(muon_s)
+    previous_msteps = 0
+    muon_sum = 0
+    for t_s, muon_s, msteps_s, osteps_s, rule, value_s, power_s in rows:
+        t, muon, msteps, osteps = int(t_s), int(muon_s), int(msteps_s), int(osteps_s)
+        index = len(seen) + 1
         if t in seen:
             raise RuntimeError(f"Duplicate schedule telemetry at t={t}")
+        if osteps != index or t != start + osteps - 1:
+            raise RuntimeError(f"optimizer_steps/global-t mismatch at row {index}: t={t} optimizer_steps={osteps}")
+        if msteps - previous_msteps != muon:
+            raise RuntimeError(f"muon_steps increment mismatch at t={t}")
+        if float(power_s) != 0.0:
+            raise RuntimeError(f"Nonzero LionMuon POWER at t={t}")
         seen.add(t)
-        local_steps.append(int(osteps_s))
         value = float(value_s)
         if arm == "lm5r50ec":
             if rule != "period" or value != 5.0 or muon != int((t - 1) % 5 == 0):
                 raise RuntimeError(f"EnergyCal arm realized schedule deviates from P5 at t={t}")
-        elif arm == "lmlinrevr50":
-            p = piecewise_linear(points, t / FULL_ITERS)
-            expected = int(random.Random(f"lionmuon-{SEED}-{t}").random() < p)
-            if rule != "prob" or not math.isclose(value, p, rel_tol=1e-5, abs_tol=1e-6) or muon != expected:
-                raise RuntimeError(f"lmlinrev arm realized schedule deviates from PROB semantics at t={t}")
         else:
-            raise RuntimeError(f"Unknown arm for schedule gate: {arm}")
-        muon_total = int(msteps_s)
-    if sorted(seen) != list(range(min(seen), max(seen) + 1)):
-        raise RuntimeError("Schedule telemetry t-coverage incomplete")
-    if local_steps != list(range(1, len(local_steps) + 1)):
-        raise RuntimeError("Per-process optimizer_steps coverage incomplete")
-    return {"telemetry_steps": len(seen), "t_range": [min(seen), max(seen)],
-            "realized_muon_steps_this_segment": muon_total,
+            probability = _oracle_prob(t)
+            expected = _oracle_draw(t, probability)
+            if rule != "prob" or not math.isclose(value, probability, rel_tol=1e-5, abs_tol=1e-6) or muon != expected:
+                raise RuntimeError(f"lmlinrev arm realized schedule deviates from PROB semantics at t={t}")
+        previous_msteps = msteps
+        muon_sum += muon
+    if seen != set(range(start, end + 1)):
+        raise RuntimeError(f"Schedule telemetry must cover exactly t={start}..{end}")
+    if previous_msteps != muon_sum:
+        raise RuntimeError("Final muon_steps != sum(muon)")
+    return {"telemetry_steps": len(seen), "t_range": [start, end],
+            "realized_muon_steps_this_segment": previous_msteps,
             "rule": "period5" if arm == "lm5r50ec" else "prob_0.35_to_0.05",
             "per_step_cross_check": "passed"}
 
 
-def launch_segment(segment_tag, save_interval, exit_interval, timeout, verify_manifest=None, loaded_manifest=None):
+def launch_segment(segment_tag, save_interval, exit_interval, timeout, expected_start, expected_end,
+                   verify_manifest=None, loaded_manifest=None):
     unique = f"hmoe-lionmoe-20261123-fullrun-016-v{VERSION}-{ARM}-{segment_tag}"
     env, removed = base_arm_env(unique)
     env["STAGE3_MOE_SAVE_INTERVAL"] = str(save_interval)
@@ -506,7 +563,8 @@ def launch_segment(segment_tag, save_interval, exit_interval, timeout, verify_ma
     seg_stderr_tail = redact(stderr.read_text(errors="replace")[-8000:]) if stderr.is_file() else ""
     (OUTPUT / f"segment-{segment_tag}.stdout.tail").write_text(seg_stdout_tail)
     (OUTPUT / f"segment-{segment_tag}.stderr.tail").write_text(seg_stderr_tail)
-    schedule_check = check_realized_schedule(log_text, ARM) if (train_log and training_ok) else None
+    schedule_check = (check_realized_schedule(log_text, ARM, expected_start, expected_end)
+                      if (train_log and training_ok) else None)
     return {"segment": segment_tag, "wrapper_exit": code, "train_exit": train_exits,
             "train_log": train_log, "duration_seconds": round(duration, 3),
             "removed_inherited_keys": removed, "parsed": parsed, "stdout": str(stdout),
@@ -653,7 +711,8 @@ def run_to_endpoint(api, start_iteration):
         timeout = max(600, int((target - current) * SEC_PER_STEP * 1.6) + 900)
         timeout = min(timeout, int(remaining()) - 120)
         loaded_manifest = ARM_NFS / f"loaded-state-iter{current:07d}.json"
-        result = launch_segment(seg_tag, SAVE_INTERVAL, exit_interval, timeout, loaded_manifest=loaded_manifest)
+        result = launch_segment(seg_tag, SAVE_INTERVAL, exit_interval, timeout, current + 1, target,
+                                loaded_manifest=loaded_manifest)
         assert_strict_load(result, current)  # resume segment must strictly load iteration 'current'
         if result["wrapper_exit"] != 0 or result["train_exit"] != ["0"]:
             raise RuntimeError(f"segment {seg_tag} failed: wrapper={result['wrapper_exit']} train={result['train_exit']}")
@@ -771,7 +830,7 @@ def eval_endpoint(weights_base, tag):
 def gate_save(api):
     if read_tracker() != 0 or iter_dirs():
         raise RuntimeError("gate-save requires a fresh arm root (no existing checkpoint)")
-    result = launch_segment("gate50", 50, 50, max(900, int(remaining()) - 120))
+    result = launch_segment("gate50", 50, 50, max(900, int(remaining()) - 120), 1, 50)
     assert_strict_load(result, None)  # from scratch: no checkpoint load expected
     if result["wrapper_exit"] != 0 or result["train_exit"] != ["0"] or result["parsed"]["reached"] != 50:
         raise RuntimeError(f"gate-save training invalid: {result['train_exit']} reached={result['parsed']['reached']}")
@@ -800,7 +859,7 @@ def gate_restore(api):
     if not state_manifest_path.is_file():
         raise RuntimeError("fetched gate-save checkpoint lacks state-manifest.json")
     loaded = ARM_NFS / "gate-restore-loaded-manifest.json"
-    result = launch_segment("restore60", 50, 60, max(900, int(remaining()) - 120),
+    result = launch_segment("restore60", 50, 60, max(900, int(remaining()) - 120), 51, 60,
                             verify_manifest=state_manifest_path, loaded_manifest=loaded)
     assert_strict_load(result, 50)  # full-state restore must be strict, success marker at iteration 50
     verification = json.loads((state_manifest_path.parent / "gate-restore-verification.json").read_text())
@@ -843,7 +902,7 @@ def continue_arm(api, from_scratch):
     if from_scratch:
         if read_tracker() != 0:
             raise RuntimeError(f"{MODE} expects fresh root")
-        anchor = launch_segment("anchor50", 50, 50, max(900, int(remaining()) - 120))
+        anchor = launch_segment("anchor50", 50, 50, max(900, int(remaining()) - 120), 1, 50)
         assert_strict_load(anchor, None)
         if anchor["wrapper_exit"] != 0 or anchor["train_exit"] != ["0"] or anchor["parsed"]["reached"] != 50:
             raise RuntimeError("arm anchor segment failed")
