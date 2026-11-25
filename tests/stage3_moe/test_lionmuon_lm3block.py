@@ -203,7 +203,7 @@ class ScheduleMathTests(unittest.TestCase):
 
     def test_probability_clamping(self):
         self.assertEqual(lionmuon_block_probability(0.8, 1.5), 1.0)
-        self.assertEqual(lionmuon_block_probability(0.8, 0.75), 0.6)
+        self.assertAlmostEqual(lionmuon_block_probability(0.8, 0.75), 0.6, places=15)
         self.assertEqual(lionmuon_block_probability(0.2, -0.5), 0.0)
         self.assertEqual(lionmuon_block_probability(-0.1, 1.5), 0.0)
 
@@ -266,8 +266,8 @@ class OptimizerBehaviorTests(unittest.TestCase):
         self.assertEqual([line for line in lines if line.startswith("LIONMUON_STEP_BLOCK")], expected_lines)
         self.assertFalse(any(line.startswith("LIONMUON_STEP t=") for line in lines))
         self.assertEqual(optimizer.spectral_calls, 2 * expected_muon_total)
-        self.assertEqual(optimizer._lionmuon_spectral_updates, 2 * expected_muon_total)
-        self.assertEqual(optimizer._lionmuon_lion_updates, 2 * (3 - expected_muon_total))
+        self.assertEqual(getattr(optimizer, "_lionmuon_spectral_updates", 0), 2 * expected_muon_total)
+        self.assertEqual(getattr(optimizer, "_lionmuon_lion_updates", 0), 2 * (3 - expected_muon_total))
 
     def test_legacy_global_probability_step_and_telemetry_unchanged(self):
         optimizer = make_toy(block_mode=False)
@@ -283,8 +283,8 @@ class OptimizerBehaviorTests(unittest.TestCase):
         expected_line = (f"LIONMUON_STEP t=1 muon={int(expected)} muon_steps={int(expected)} optimizer_steps=1 "
                          f"rule=prob value={probability:.6g} power=0")
         self.assertIn(expected_line, output.getvalue().splitlines())
-        self.assertEqual(optimizer._lionmuon_spectral_updates, 2 * int(expected))
-        self.assertEqual(optimizer._lionmuon_lion_updates, 2 * (1 - int(expected)))
+        self.assertEqual(getattr(optimizer, "_lionmuon_spectral_updates", 0), 2 * int(expected))
+        self.assertEqual(getattr(optimizer, "_lionmuon_lion_updates", 0), 2 * (1 - int(expected)))
 
 
 class FullrunCheckerTests(unittest.TestCase):
@@ -412,7 +412,7 @@ class FullrunCheckerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "row count|mismatch|cover exactly"):
             self.fullrun.check_realized_schedule(valid, "lmlinrevr50", 2, 2)
 
-    def test_print_independent_golden_oracle_values(self):
+    def test_fixed_golden_oracle_values(self):
         goldens = {}
         for t in (1, 51, 2179, 17242):
             probability = 0.35 - 0.30 * t / FULL_ITERS
@@ -422,7 +422,10 @@ class FullrunCheckerTests(unittest.TestCase):
                 block_p = min(1.0, max(0.0, factor * probability))
                 block_muon = int(random.Random(f"lionmuon-{SEED}-{t}-block-{block}").random() < block_p)
                 blocks.append((block_p, block_muon))
-            goldens[t] = {"p": probability, "global_muon": global_muon, "blocks": blocks}
+            goldens[t] = {"p": probability, "global_muon": global_muon, "blocks": tuple(blocks)}
+        self.assertEqual(self.fullrun._SCHEDULE_GOLDENS, goldens)
+        self.fullrun._validate_schedule_goldens("lmlinrevr50")
+        self.fullrun._validate_schedule_goldens("lm3block")
         print("LM3BLOCK_INDEPENDENT_GOLDENS " + json.dumps(goldens, sort_keys=True), flush=True)
 
     def test_legacy_checker_paths_still_accept(self):

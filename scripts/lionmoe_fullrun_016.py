@@ -363,7 +363,16 @@ def _oracle_block_layers(block):
 
 # Filled with fixed CPU-oracle values, including gate/resume boundaries. These constants are
 # intentionally independent of stage3_moe.lionmuon so a shared implementation drift cannot pass.
-_SCHEDULE_GOLDENS = {}
+_SCHEDULE_GOLDENS = {
+    1: {"p": 0.3499826006263774, "global_muon": 0,
+        "blocks": ((0.5249739009395662, 0), (0.2624869504697831, 1), (0.2624869504697831, 0))},
+    51: {"p": 0.34911263194524994, "global_muon": 0,
+         "blocks": ((0.5236689479178749, 1), (0.26183447395893744, 0), (0.26183447395893744, 0))},
+    2179: {"p": 0.3120867648764644, "global_muon": 0,
+           "blocks": ((0.4681301473146966, 1), (0.2340650736573483, 1), (0.2340650736573483, 0))},
+    17242: {"p": 0.04999999999999999, "global_muon": 0,
+            "blocks": ((0.07499999999999998, 0), (0.03749999999999999, 0), (0.03749999999999999, 0))},
+}
 
 
 def _validate_schedule_goldens(arm):
