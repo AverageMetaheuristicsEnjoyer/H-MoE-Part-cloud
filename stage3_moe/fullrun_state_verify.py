@@ -87,14 +87,17 @@ def collect_state(model, optimizer, scheduler, iteration_override=None, flops_ov
                     if torch.is_tensor(value):
                         state_records.append(_tensor_record(f"optstate.g{group_index}.p{param_index}.{key}", value))
         for group_index, group in enumerate(getattr(raw, "param_groups", []) or []):
-            group_structure.append({"group": group_index, "num_params": len(group.get("params", [])),
-                                    "lr": group.get("lr"), "weight_decay": group.get("weight_decay"),
-                                    "wd_mult": group.get("wd_mult"), "lr_mult": group.get("lr_mult"),
-                                    "is_expert_parallel": group.get("is_expert_parallel"),
-                                    "is_decoupled_lr": group.get("is_decoupled_lr"),
-                                    "stage3_routed_expert": group.get("stage3_routed_expert"),
-                                    "stage3_split_swiglu_fc1": group.get("stage3_split_swiglu_fc1"),
-                                    "lionmuon_energycal": group.get("lionmuon_energycal")})
+            structure = {"group": group_index, "num_params": len(group.get("params", [])),
+                         "lr": group.get("lr"), "weight_decay": group.get("weight_decay"),
+                         "wd_mult": group.get("wd_mult"), "lr_mult": group.get("lr_mult"),
+                         "is_expert_parallel": group.get("is_expert_parallel"),
+                         "is_decoupled_lr": group.get("is_decoupled_lr"),
+                         "stage3_routed_expert": group.get("stage3_routed_expert"),
+                         "stage3_split_swiglu_fc1": group.get("stage3_split_swiglu_fc1"),
+                         "lionmuon_energycal": group.get("lionmuon_energycal")}
+            if "stage3_lionmuon_block" in group:
+                structure["stage3_lionmuon_block"] = group["stage3_lionmuon_block"]
+            group_structure.append(structure)
     scheduler_state = scheduler.state_dict() if scheduler is not None else None
     rng = {"torch_rng_state_sha256": hashlib.sha256(torch.get_rng_state().numpy().tobytes()).hexdigest(),
            "numpy_rng_state_sha256": hashlib.sha256(json.dumps(np.random.get_state(), default=str).encode()).hexdigest(),
@@ -119,10 +122,24 @@ def collect_state(model, optimizer, scheduler, iteration_override=None, flops_ov
     phase = {"next_t": next_t}
     if lion is not None:
         if getattr(lion, "lion_prob", None) is not None:
-            from stage3_moe.lionmuon import piecewise_linear
+            from stage3_moe.lionmuon import (
+                lionmuon_block_draw,
+                lionmuon_block_layers_label,
+                lionmuon_block_probability,
+                piecewise_linear,
+            )
             p = piecewise_linear(lion.lion_prob, next_t / lion.lion_total)
-            phase.update({"rule": "prob", "p": p,
-                          "expected_muon": random.Random(f"lionmuon-{lion.lion_seed}-{next_t}").random() < p})
+            if getattr(lion, "lion_block_factors", None) is not None:
+                blocks = []
+                for block, factor in enumerate(lion.lion_block_factors):
+                    block_p = lionmuon_block_probability(p, factor)
+                    blocks.append({"block": block, "factor": factor, "p": block_p,
+                                   "layers": lionmuon_block_layers_label(block, lion.lion_num_layers),
+                                   "expected_muon": lionmuon_block_draw(lion.lion_seed, next_t, block, block_p)})
+                phase.update({"rule": "prob_block", "p": p, "blocks": blocks})
+            else:
+                phase.update({"rule": "prob", "p": p,
+                              "expected_muon": random.Random(f"lionmuon-{lion.lion_seed}-{next_t}").random() < p})
         else:
             from stage3_moe.lionmuon import piecewise_constant
             period = piecewise_constant(lion.lion_period, next_t / lion.lion_total)

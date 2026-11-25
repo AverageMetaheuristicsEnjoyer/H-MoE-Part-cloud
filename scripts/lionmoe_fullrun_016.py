@@ -14,6 +14,7 @@ by baseline-eval-030). Modes (HMOE_FULLRUN016_MODE):
                 pre-decay 13794 full-state retained+uploaded, final 17242 WEIGHTS-ONLY export+upload,
                 then the identical eval-full-dev endpoint evaluation (v030 contract).
   arm-lmlinrev  the same protocol from scratch with preset lmlinrevr50 (PROB 0:0.35,1:0.05, R50).
+  arm-lm3block  the same protocol from scratch with three depth-block PROB factors 1.5/0.75/0.75.
 
 Lean retention: rolling latest full-state; pre-decay 13794 full-state; final weights-only. Previous-good
 NOT kept. Local deletion ONLY after a hash-verified durable HF successor. Runtime free-space guard before
@@ -53,16 +54,25 @@ MONO_START = time.monotonic()
 STAGES = []
 VERSION = os.environ.get("HMOE_FULLRUN016_VERSION", "031")
 MODE = os.environ.get("HMOE_FULLRUN016_MODE", "")
-if MODE not in ("gate-save", "gate-restore", "continue", "arm-lmlinrev", "gate-diagnose"):
-    raise RuntimeError("HMOE_FULLRUN016_MODE must be gate-save|gate-restore|continue|arm-lmlinrev|gate-diagnose")
-ARM = "lmlinrevr50" if MODE == "arm-lmlinrev" else os.environ.get("HMOE_FULLRUN016_ARM", "lm5r50ec")
-if ARM not in ("lm5r50ec", "lmlinrevr50"):
+if MODE not in ("gate-save", "gate-restore", "continue", "arm-lmlinrev", "arm-lm3block", "gate-diagnose"):
+    raise RuntimeError("HMOE_FULLRUN016_MODE must be gate-save|gate-restore|continue|arm-lmlinrev|arm-lm3block|gate-diagnose")
+if MODE == "arm-lmlinrev":
+    ARM = "lmlinrevr50"
+elif MODE == "arm-lm3block":
+    ARM = "lm3block"
+else:
+    ARM = os.environ.get("HMOE_FULLRUN016_ARM", "lm5r50ec")
+if ARM not in ("lm5r50ec", "lmlinrevr50", "lm3block"):
     raise RuntimeError("Unsupported fullrun016 arm")
 EXPECTED_NOTE = f"hmoe-lionmoe-20261123-fullrun-016-v{VERSION}"
 EXPECTED_ROOT = f"/workspace-SR006.nfs3/hmoe-lionmoe-20261123/fullrun-016-v{VERSION}"
 EXPECTED_BUNDLE = f"hmoe-lionmoe-20261123-v{VERSION}"
 SEED = 1234
 FULL_ITERS = 17242
+MODEL_LAYERS = 18
+LM3BLOCK_RATE_TARGET = 0.2
+LM3BLOCK_RATE_TOLERANCE = 0.02
+LM3BLOCK_SEGMENT_RATE_SIGMAS = 4.0
 PRE_DECAY = 13794
 SAVE_INTERVAL = int(os.environ.get("HMOE_FULLRUN016_SAVE_INTERVAL", "726"))
 SEGMENT_STEPS = int(os.environ.get("HMOE_FULLRUN016_SEGMENT_STEPS", "2178"))
@@ -213,7 +223,8 @@ CLEANUP_KEYS = ("STAGE3_MOE_LR_SCALE", "STAGE3_MOE_LR_CONSTANT", "STAGE3_MOE_COL
                 "STAGE3_MOE_HESSIAN_PATH", "STAGE3_MOE_DIAGNOSTIC_PATH", "STAGE3_MOE_REPLAY_PATH",
                 "STAGE3_MOE_M2_TRACE_PATH", "STAGE3_MOE_ACTIVATION_STATS_PATH", "STAGE3_MOE_COLDSTART_RECEIPT",
                 "STAGE3_MOE_FULL_DEV_EVAL", "STAGE3_MOE_FULL_DEV_CAPTURE_PATH",
-                "STAGE3_MOE_LIONMUON_ENERGYCAL_DIAGNOSTICS", "STAGE3_MOE_LIONMUON_PERIOD")
+                "STAGE3_MOE_LIONMUON_ENERGYCAL_DIAGNOSTICS", "STAGE3_MOE_LIONMUON_PERIOD",
+                 "STAGE3_MOE_LIONMUON_BLOCK_FACTORS", "STAGE3_MOE_LIONMUON_NUM_LAYERS")
 
 
 def base_arm_env(unique):
@@ -254,6 +265,11 @@ def base_arm_env(unique):
         # (this is not an mlsub --env value).
         env.update({"STAGE3_MOE_LIONMUON_ENERGYCAL": "0",
                     "STAGE3_MOE_LIONMUON_PROB": "0:0.35,1:0.05"})
+    elif ARM == "lm3block":
+        env.update({"STAGE3_MOE_LIONMUON_PROB": "0:0.35,1:0.05",
+                    "STAGE3_MOE_LIONMUON_BLOCK_FACTORS": "1.5,0.75,0.75",
+                    "STAGE3_MOE_LIONMUON_NUM_LAYERS": str(MODEL_LAYERS)})
+        env.pop("STAGE3_MOE_LIONMUON_ENERGYCAL", None)
     else:
         raise RuntimeError(f"Unknown fullrun arm: {ARM}")
     return env, removed
@@ -323,6 +339,76 @@ def parse_train_log(path):
             "skipped_test_markers": len(re.findall(r"STAGE3_TEST_EVALUATION_SKIPPED", text))}
 
 
+def _check_lm3block_schedule(log_text):
+    """Validate three independent block decisions per global step and their depth assignment."""
+    rows = re.findall(r"^LIONMUON_STEP_BLOCK b=(\d+) t=(\d+) muon=(\d+) p=([0-9.eE+-]+) "
+                      r"rule=(\w+) factor=([0-9.eE+-]+) layers=(empty|\d+-\d+)$", log_text, re.MULTILINE)
+    if not rows:
+        raise RuntimeError("No LIONMUON_STEP_BLOCK telemetry lines; realized lm3block schedule unverifiable")
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(ROOT / "third_party" / "emerging-optimizers"))
+    from stage3_moe.lionmuon import (
+        LIONMUON_BLOCK_FACTORS,
+        lionmuon_block_draw,
+        lionmuon_block_layers_label,
+        lionmuon_block_probability,
+        parse_schedule,
+        piecewise_linear,
+    )
+    points = parse_schedule("0:0.35,1:0.05", float)
+    blocks_by_step = {}
+    muon_total = 0
+    for block_s, t_s, muon_s, p_s, rule, factor_s, layers in rows:
+        block, t, muon = int(block_s), int(t_s), int(muon_s)
+        if not 1 <= t <= FULL_ITERS or block not in range(3):
+            raise RuntimeError(f"Invalid lm3block telemetry coordinates b={block} t={t}")
+        if t in blocks_by_step and block in blocks_by_step[t]:
+            raise RuntimeError(f"Duplicate lm3block schedule telemetry at t={t} b={block}")
+        blocks_by_step.setdefault(t, set()).add(block)
+        factor = LIONMUON_BLOCK_FACTORS[block]
+        base_p = piecewise_linear(points, t / FULL_ITERS)
+        expected_p = lionmuon_block_probability(base_p, factor)
+        expected_muon = int(lionmuon_block_draw(SEED, t, block, expected_p))
+        expected_layers = lionmuon_block_layers_label(block, MODEL_LAYERS)
+        if rule != "prob" or float(factor_s) != factor:
+            raise RuntimeError(f"lm3block wrong rule/block factor at t={t} b={block}")
+        if not math.isclose(float(p_s), expected_p, rel_tol=1e-5, abs_tol=1e-8):
+            raise RuntimeError(f"lm3block probability deviates at t={t} b={block}: {p_s} != {expected_p}")
+        if muon != expected_muon:
+            raise RuntimeError(f"lm3block deterministic draw deviates at t={t} b={block}")
+        if layers != expected_layers:
+            raise RuntimeError(f"lm3block layer split deviates at b={block}: {layers} != {expected_layers}")
+        muon_total += muon
+    steps = sorted(blocks_by_step)
+    if steps != list(range(steps[0], steps[-1] + 1)):
+        raise RuntimeError("lm3block telemetry t-coverage incomplete")
+    if any(blocks_by_step[t] != {0, 1, 2} for t in steps) or len(rows) != 3 * len(steps):
+        raise RuntimeError("lm3block requires exactly one line for every block at every t")
+
+    realized_rate = muon_total / len(rows)
+    full_coverage = steps[0] == 1 and steps[-1] == FULL_ITERS and len(steps) == FULL_ITERS
+    expected_segment_rate = sum(piecewise_linear(points, t / FULL_ITERS) for t in steps) / len(steps)
+    if full_coverage:
+        rate_target = LM3BLOCK_RATE_TARGET
+        rate_tolerance = LM3BLOCK_RATE_TOLERANCE
+    else:
+        # An early gate segment has mean p near 0.35, so comparing it with the full-run 0.20
+        # target would be a category error. Per-draw checks are exact; this is a finite-sample gate.
+        rate_target = expected_segment_rate
+        standard_error = math.sqrt(max(rate_target * (1 - rate_target), 1e-12) / len(rows))
+        rate_tolerance = max(LM3BLOCK_RATE_TOLERANCE, LM3BLOCK_SEGMENT_RATE_SIGMAS * standard_error)
+    if abs(realized_rate - rate_target) > rate_tolerance:
+        raise RuntimeError(f"lm3block realized overall Muon rate {realized_rate:.6f} outside "
+                           f"target {rate_target:.6f} +/- {rate_tolerance:.6f}")
+    return {"telemetry_steps": len(steps), "telemetry_lines": len(rows), "t_range": [steps[0], steps[-1]],
+            "realized_muon_block_decisions": muon_total, "realized_overall_muon_rate": realized_rate,
+            "rate_target": rate_target, "rate_tolerance": rate_tolerance,
+            "full_schedule_rate_gate": full_coverage, "declared_full_rate_target": LM3BLOCK_RATE_TARGET,
+            "declared_full_rate_tolerance": LM3BLOCK_RATE_TOLERANCE,
+            "block_layers": [lionmuon_block_layers_label(block, MODEL_LAYERS) for block in range(3)],
+            "rule": "prob_0.35_to_0.05_blocks_1.5_0.75_0.75", "per_step_cross_check": "passed"}
+
+
 def check_realized_schedule(log_text, arm):
     """Per-step gate: the realized optimizer schedule must match the declared arm semantics.
 
@@ -331,6 +417,8 @@ def check_realized_schedule(log_text, arm):
     iteration (continues across resume segments), optimizer_steps/muon_steps are per-process
     counters (restart at 0 on resume), so coverage is checked as a contiguous t-range.
     """
+    if arm == "lm3block":
+        return _check_lm3block_schedule(log_text)
     import random
     rows = re.findall(r"^LIONMUON_STEP t=(\d+) muon=(\d+) muon_steps=(\d+) optimizer_steps=(\d+) "
                       r"rule=(\w+) value=([0-9.eE+-]+) power=([0-9.eE+-]+)$", log_text, re.MULTILINE)
@@ -739,6 +827,8 @@ def gate_restore(api):
                "model_params_changed": changed, "hf_upload_iter60": receipt["prefix"],
                "data_position_consumed": loaded_manifest["consumed_train_samples"],
                "p5_phase_at_load": loaded_manifest["next_step_phase"], "passed": True}
+    if ARM == "lm3block":
+        summary["lm3block_phase_at_load"] = summary.pop("p5_phase_at_load")
     write_json(OUTPUT / "gate-restore-summary.json", summary)
     mark_stage("gate_restore_verified")
     seal_envelope("small-artifacts.json", "hmoe-fullrun016-gate-restore-v1",
@@ -752,7 +842,7 @@ def gate_restore(api):
 def continue_arm(api, from_scratch):
     if from_scratch:
         if read_tracker() != 0:
-            raise RuntimeError("arm-lmlinrev expects fresh root")
+            raise RuntimeError(f"{MODE} expects fresh root")
         anchor = launch_segment("anchor50", 50, 50, max(900, int(remaining()) - 120))
         assert_strict_load(anchor, None)
         if anchor["wrapper_exit"] != 0 or anchor["train_exit"] != ["0"] or anchor["parsed"]["reached"] != 50:
