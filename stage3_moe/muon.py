@@ -101,6 +101,30 @@ def install_muon_contract(*, fp8_states: bool) -> None:
                 )
             )
         ] = {ROUTED_EXPERT: True}
+    if os.environ.get("STAGE3_MOE_LIONMUON_BLOCK_FACTORS"):
+        if variant_name() not in ("lionmuon", "lionmuon2f"):
+            raise ValueError("LionMuon block factors require a LionMuon variant")
+        from stage3_moe.lionmuon import (
+            LIONMUON_BLOCK_KEY,
+            lionmuon_block_for_name,
+            parse_lionmuon_block_factors,
+        )
+        factors = parse_lionmuon_block_factors(os.environ["STAGE3_MOE_LIONMUON_BLOCK_FACTORS"])
+        num_layers = int(os.environ.get("STAGE3_MOE_LIONMUON_NUM_LAYERS", "0"))
+        if num_layers < 1:
+            raise ValueError("STAGE3_MOE_LIONMUON_NUM_LAYERS must be positive for block probability")
+        for block in range(3):
+            def in_block(param, name, expected=block):
+                return (len(param.shape) == 2 and not is_router_weight(param, name)
+                        and lionmuon_block_for_name(name, num_layers) == expected)
+            overrides[
+                ParamKey(
+                    with_name_predicate=ParamWithNamePredicate(
+                        name=f"stage3_lionmuon_block{block}", fn=in_block
+                    )
+                )
+            ] = {LIONMUON_BLOCK_KEY: block}
+        print(f"stage3 lionmuon block probability: layers={num_layers} factors={factors}", flush=True)
     entry.default_param_overrides = overrides
     if variant_name() == "muon":
         entry.optimizer_cls = (

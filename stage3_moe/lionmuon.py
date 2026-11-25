@@ -44,6 +44,13 @@ megatron.core.optimizer.emerging_optimizers.TensorParallelMuon), selected with S
   (default STAGE3_MOE_SEED, 1234).  scripts/muon_presets.sh names the schedules, e.g. a dense colleague's five of
   2026-10-19 (mean p = 0.2 each).
 
+* Three-block probability (``lm3block``): STAGE3_MOE_LIONMUON_BLOCK_FACTORS=1.5,0.75,0.75 multiplies the
+  base p(x) for the earliest / middle / latest depth thirds (clamped to [0, 1]); STAGE3_MOE_LIONMUON_NUM_LAYERS
+  defines the split, with boundaries ceil(b*n/3). Each block draws independently once per global t from
+  ``random.Random("lionmuon-<seed>-<t>-block-<b>")`` and every Muon matrix in that depth block follows the draw.
+  Named Megatron overrides attach ``stage3_lionmuon_block`` only in this mode. The unweighted factor mean is one;
+  equal-size blocks (18 layers -> 6/6/6) therefore preserve the base overall mean probability.
+
 * Per-group period (2026-10-22): STAGE3_MOE_LIONMUON_PERIOD_EXPERTS, a schedule like STAGE3_MOE_LIONMUON_PERIOD, sets
   the period of the routed-expert matrices (marked by name in stage3_moe/muon.py); the rest keeps
   STAGE3_MOE_LIONMUON_PERIOD.  Experts carry most of the Newton-Schulz cost.
@@ -85,7 +92,9 @@ STAGE3_MOE_MUON_NS_STEPS overrides --muon-num-ns-steps for every variant, plain 
 
 STAGE3_MOE_LIONMUON_STEP_TELEMETRY=1 (screenb-015, default off) prints one passive ``LIONMUON_STEP`` line per
 optimizer step with the realized choice and the running ``_lionmuon_muon``/``_lionmuon_steps`` counters, so a
-PROB arm's realized Muon-step count is exact in the train log. Print only: no math, dtype, RNG or return change.
+PROB arm's realized Muon-step count is exact in the train log. In three-block mode it instead prints one
+``LIONMUON_STEP_BLOCK`` line per block per step, including p, factor and inclusive layer range. Print only: no math,
+dtype, RNG or return change.
 
 All keep the series' Muon contract otherwise (param groups, split fc1, Adam fallback, optional COAT FP8
 momentum through FP8StateOptimizerMixin, whose ``_step_over`` calls ``super().step()`` -> the variant's step).
@@ -93,6 +102,7 @@ momentum through FP8StateOptimizerMixin, whose ``_step_over`` calls ``super().st
 import math
 import os
 import random
+import re
 
 import torch
 
@@ -152,6 +162,67 @@ def piecewise_linear(points, x):
     return v0 + (v1 - v0) * (x - x0) / (x1 - x0)
 
 
+LIONMUON_BLOCK_FACTORS = (1.5, 0.75, 0.75)
+LIONMUON_BLOCK_KEY = "stage3_lionmuon_block"
+_LAYER_NAME_RE = re.compile(r"(?:^|\.)decoder\.layers\.(\d+)(?:\.|$)")
+
+
+def parse_lionmuon_block_factors(text):
+    """Three non-negative depth factors with exact unweighted mean one; ``_`` is an mlsub-safe comma."""
+    factors = tuple(float(value) for value in text.replace("_", ",").split(","))
+    if len(factors) != 3 or any(not math.isfinite(value) or value < 0 for value in factors):
+        raise ValueError("STAGE3_MOE_LIONMUON_BLOCK_FACTORS must contain three finite non-negative values")
+    if not math.isclose(sum(factors) / 3, 1.0, rel_tol=0.0, abs_tol=1e-12):
+        raise ValueError("LionMuon block factors must have unweighted mean one")
+    return factors
+
+
+def lionmuon_block_boundaries(num_layers):
+    """Half-open ranges [ceil(b*n/3), ceil((b+1)*n/3)); earlier blocks receive remainder layers.
+
+    For n<3, the earliest blocks own the available layers and later blocks may be empty.
+    """
+    if not isinstance(num_layers, int) or num_layers < 1:
+        raise ValueError("num_layers must be a positive integer")
+    return tuple(((block * num_layers + 2) // 3, ((block + 1) * num_layers + 2) // 3)
+                 for block in range(3))
+
+
+def lionmuon_block_for_layer(layer_index, num_layers):
+    if not 0 <= layer_index < num_layers:
+        raise ValueError(f"transformer layer index {layer_index} outside [0, {num_layers})")
+    for block, (start, end) in enumerate(lionmuon_block_boundaries(num_layers)):
+        if start <= layer_index < end:
+            return block
+    raise AssertionError("ceil block boundaries did not cover a valid layer")
+
+
+def lionmuon_block_for_name(name, num_layers):
+    """Block for a stable Megatron parameter name, or None outside decoder transformer layers."""
+    match = _LAYER_NAME_RE.search(name)
+    return lionmuon_block_for_layer(int(match.group(1)), num_layers) if match else None
+
+
+def lionmuon_block_layers_label(block, num_layers):
+    start, end = lionmuon_block_boundaries(num_layers)[block]
+    return f"{start}-{end - 1}" if start < end else "empty"
+
+
+def lionmuon_block_probability(base_probability, factor):
+    return min(1.0, max(0.0, factor * base_probability))
+
+
+def lionmuon_block_draw(seed, t, block, probability):
+    """Independent restart-safe Bernoulli draw; no process-global or torch RNG state is consumed."""
+    return random.Random(f"lionmuon-{seed}-{t}-block-{block}").random() < probability
+
+
+def lionmuon_block_telemetry(block, t, muon, probability, factor, num_layers):
+    layers = lionmuon_block_layers_label(block, num_layers)
+    return (f"LIONMUON_STEP_BLOCK b={block} t={t} muon={int(muon)} p={probability:.6g} "
+            f"rule=prob factor={factor:.6g} layers={layers}")
+
+
 def megatron_iteration():
     """Iterations completed before the current optimizer step (MCore's args.curr_iteration); None outside training."""
     try:
@@ -166,6 +237,9 @@ class LionMuonMixin:
 
     lion_period = parse_schedule(os.environ.get("STAGE3_MOE_LIONMUON_PERIOD", "2"), int)
     lion_prob = parse_schedule(os.environ["STAGE3_MOE_LIONMUON_PROB"], float) if os.environ.get("STAGE3_MOE_LIONMUON_PROB") else None
+    lion_block_factors = (parse_lionmuon_block_factors(os.environ["STAGE3_MOE_LIONMUON_BLOCK_FACTORS"])
+                          if os.environ.get("STAGE3_MOE_LIONMUON_BLOCK_FACTORS") else None)
+    lion_num_layers = int(os.environ.get("STAGE3_MOE_LIONMUON_NUM_LAYERS", "0"))
     lion_power = parse_schedule(os.environ["STAGE3_MOE_LIONMUON_POWER"], float) if os.environ.get("STAGE3_MOE_LIONMUON_POWER") else None
     lion_total = int(os.environ.get("STAGE3_MOE_SCHEDULE_ITERS", "17242"))
     lion_seed = int(os.environ.get("STAGE3_MOE_LIONMUON_SEED", os.environ.get("STAGE3_MOE_SEED", "1234")))
@@ -258,6 +332,15 @@ class LionMuonMixin:
         power = piecewise_linear(self.lion_power, x) if self.lion_power is not None else 0.0
         if self.lion_prob is not None:
             p = piecewise_linear(self.lion_prob, x)
+            if self.lion_block_factors is not None:
+                if self.lion_num_layers < 1:
+                    raise ValueError("STAGE3_MOE_LIONMUON_NUM_LAYERS must be positive for block probability")
+                self._lionmuon_block_choices = []
+                for block, factor in enumerate(self.lion_block_factors):
+                    block_p = lionmuon_block_probability(p, factor)
+                    is_muon = lionmuon_block_draw(self.lion_seed, t, block, block_p)
+                    self._lionmuon_block_choices.append((is_muon, block_p, factor))
+                return False, t, p, power
             return random.Random(f"lionmuon-{self.lion_seed}-{t}").random() < p, t, p, power
         self._lion_count, self._lion_x = count, x
         is_muon, period = self._period_rule(self.lion_period, count, x)
@@ -282,11 +365,19 @@ class LionMuonMixin:
     def step(self, closure=None):
         loss = closure() if closure is not None else None
         default_muon, t, value, power = self._lionmuon_choice()
-        self._lionmuon_muon = getattr(self, "_lionmuon_muon", 0) + int(default_muon)
+        block_choices = getattr(self, "_lionmuon_block_choices", None) if self.lion_block_factors is not None else None
+        if block_choices is None:
+            self._lionmuon_muon = getattr(self, "_lionmuon_muon", 0) + int(default_muon)
+        else:
+            self._lionmuon_muon = getattr(self, "_lionmuon_muon", 0) + sum(choice[0] for choice in block_choices)
         if self.lion_step_telemetry and _telemetry_rank0():
-            print(f"LIONMUON_STEP t={t} muon={int(default_muon)} muon_steps={self._lionmuon_muon} "
-                  f"optimizer_steps={self._lionmuon_steps} rule={'prob' if self.lion_prob is not None else 'period'} "
-                  f"value={value:.6g} power={power:.4g}", flush=True)
+            if block_choices is None:
+                print(f"LIONMUON_STEP t={t} muon={int(default_muon)} muon_steps={self._lionmuon_muon} "
+                      f"optimizer_steps={self._lionmuon_steps} rule={'prob' if self.lion_prob is not None else 'period'} "
+                      f"value={value:.6g} power={power:.4g}", flush=True)
+            else:
+                for block, (is_muon, block_p, factor) in enumerate(block_choices):
+                    print(lionmuon_block_telemetry(block, t, is_muon, block_p, factor, self.lion_num_layers), flush=True)
         if self.lion_energycal_diagnostics:
             self._lion_energycal_last = []
         measurement_observer = getattr(self, "_lionmuon_measurement_observer", None)
@@ -299,6 +390,11 @@ class LionMuonMixin:
             group_kwargs = {k: v for k, v in group.items() if k != "params"}
             split_fc1 = group_kwargs.get("stage3_split_swiglu_fc1", False)
             is_muon_step = default_muon
+            if block_choices is not None:
+                block = group_kwargs.get(LIONMUON_BLOCK_KEY)
+                if type(block) is not int or not 0 <= block < len(block_choices):
+                    raise ValueError(f"Muon parameter group lacks a valid {LIONMUON_BLOCK_KEY} in block-probability mode")
+                is_muon_step = block_choices[block][0]
             if (self.lion_period_experts is not None and self.lion_prob is None
                     and group_kwargs.get("stage3_routed_expert", False)):
                 is_muon_step = self._period_rule(self.lion_period_experts, self._lion_count, self._lion_x)[0]
@@ -338,9 +434,15 @@ class LionMuonMixin:
         steps = self._lionmuon_steps
         if steps == 1 or steps % 500 == 0:
             rule = f"prob={value:.4g}" if self.lion_prob is not None else f"period={value}"
+            summary_muon = default_muon
+            fraction_denominator = steps
+            if block_choices is not None:
+                rule += " block_factors=" + ",".join(str(factor) for factor in self.lion_block_factors)
+                summary_muon = ",".join(str(int(choice[0])) for choice in block_choices)
+                fraction_denominator *= len(block_choices)
             experts = f" experts_period={piecewise_constant(self.lion_period_experts, self._lion_x)}" if self.lion_period_experts and self.lion_prob is None else ""
-            print(f"LIONMUON step={t} fraction={t / self.lion_total:.4f} muon_step={default_muon} {rule}{experts} power={power:.4g} "
-                  f"muon_fraction_this_process={self._lionmuon_muon / steps:.4f} "
+            print(f"LIONMUON step={t} fraction={t / self.lion_total:.4f} muon_step={summary_muon} {rule}{experts} power={power:.4g} "
+                  f"muon_fraction_this_process={self._lionmuon_muon / fraction_denominator:.4f} "
                   f"beta1={self.lion_beta1} beta2={self.lion_beta2} lr_ratio={self.lion_lr_ratio} "
                   f"energycal={int(self.lion_energycal)} energycal_scope=routed_spectral "
                   f"rho_ref={self.lion_energycal_rho_ref} exponent={self.lion_energycal_exponent} qmin={self.lion_energycal_qmin} "
