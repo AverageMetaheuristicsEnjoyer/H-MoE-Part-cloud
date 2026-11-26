@@ -1,6 +1,6 @@
 {
-  "bundle_id": "review-moe-20261124-v23",
-  "payload_sha256": "83b2c892287fd80ce5692151aa6fd119a9f71d0bb8a79bd433fb4754303af99c",
+  "bundle_id": "review-moe-20261124-v24",
+  "payload_sha256": "32564a7b5b0318454d3cf61ce47076a01f44286406f75948b3133e433ee9bd70",
   "ready": [
     "test",
     "run"
