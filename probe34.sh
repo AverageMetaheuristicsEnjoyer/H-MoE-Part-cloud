@@ -1,5 +1,7 @@
 #!/bin/bash
 set -eu
+export PYTHONUSERBASE=/home/jovyan/.local-te4
+export PATH=$PYTHONUSERBASE/bin:$PATH
 JOB=${JOB_ID:?}
 D=/home/jovyan/mlsub-logs/$JOB
 OUT=/tmp/diag-$JOB.txt
@@ -14,7 +16,7 @@ OUT=/tmp/diag-$JOB.txt
 } > "$OUT" 2>&1
 wc -c "$OUT"
 python3 - <<'EOF'
-import os
+import os, sys
 from huggingface_hub import HfApi
 job = os.environ['JOB_ID']
 api = HfApi(token=os.environ['HF_TOKEN'])
