@@ -7,16 +7,15 @@ D=/home/jovyan/mlsub-logs/$JOB
 OUT=/tmp/diag-$JOB.txt
 {
   echo "JOB=$JOB"
-  ls -la "$D" 2>&1
-  for f in "$D"/*.log; do
-    [ -f "$f" ] || continue
+  find "$D" -maxdepth 3 -type f 2>&1 | head -40
+  for f in $(find "$D" -maxdepth 3 -name '*.log' -type f 2>/dev/null | head -6); do
     echo "=== FILE $f"
-    tail -250 "$f"
+    tail -200 "$f"
   done
 } > "$OUT" 2>&1
 wc -c "$OUT"
 python3 - <<'EOF'
-import os, sys
+import os
 from huggingface_hub import HfApi
 job = os.environ['JOB_ID']
 api = HfApi(token=os.environ['HF_TOKEN'])
