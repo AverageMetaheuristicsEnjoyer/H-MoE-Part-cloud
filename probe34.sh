@@ -7,10 +7,10 @@ D=/home/jovyan/mlsub-logs/$JOB
 OUT=/tmp/diag-$JOB.txt
 {
   echo "JOB=$JOB"
-  find "$D" -maxdepth 3 -type f 2>&1 | head -40
-  for f in $(find "$D" -maxdepth 3 -name '*.log' -type f 2>/dev/null | head -6); do
+  find "$D" -maxdepth 4 -type f 2>&1 | head -20
+  for f in $(find "$D" -maxdepth 4 -type f \( -name 'stdout' -o -name 'stderr' -o -name '*.log' \) 2>/dev/null | head -6); do
     echo "=== FILE $f"
-    tail -200 "$f"
+    tail -120 "$f"
   done
 } > "$OUT" 2>&1
 wc -c "$OUT"
